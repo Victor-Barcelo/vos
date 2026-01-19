@@ -3,6 +3,17 @@
 
 #include "types.h"
 
+// Special key codes (negative values to avoid conflict with printable chars)
+#define KEY_UP      (-1)
+#define KEY_DOWN    (-2)
+#define KEY_LEFT    (-3)
+#define KEY_RIGHT   (-4)
+#define KEY_HOME    (-5)
+#define KEY_END     (-6)
+#define KEY_PGUP    (-7)
+#define KEY_PGDN    (-8)
+#define KEY_DELETE  (-9)
+
 // Initialize the keyboard
 void keyboard_init(void);
 
@@ -15,7 +26,13 @@ bool keyboard_has_key(void);
 // Get the next key from the buffer (blocking)
 char keyboard_getchar(void);
 
-// Get a line of input (blocking)
+// Get a line of input with command history (blocking)
 void keyboard_getline(char* buffer, size_t max_len);
+
+// Get a line of input with command history (explicit name)
+void keyboard_getline_history(char* buffer, size_t max_len);
+
+// Add a command to history manually
+void keyboard_history_add(const char* cmd);
 
 #endif

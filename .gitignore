@@ -1,0 +1,12 @@
+# Build artifacts
+build/
+*.o
+*.bin
+*.iso
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~

@@ -4,9 +4,10 @@
 #include "string.h"
 #include "io.h"
 #include "ubasic.h"
+#include "basic_programs.h"
 
 #define MAX_COMMAND_LENGTH 256
-#define BASIC_PROGRAM_SIZE 2048
+#define BASIC_PROGRAM_SIZE 4096
 
 // Forward declarations for commands
 static void cmd_help(void);
@@ -166,6 +167,56 @@ static void cmd_color(const char* args) {
 // BASIC interpreter command
 static char basic_program[BASIC_PROGRAM_SIZE];
 
+// Show list of demo programs
+static void basic_show_demos(void) {
+    screen_set_color(VGA_LIGHT_CYAN, VGA_BLACK);
+    screen_println("=== Available Demo Programs ===");
+    screen_set_color(VGA_WHITE, VGA_BLACK);
+
+    for (int i = 1; i <= BASIC_NUM_PROGRAMS; i++) {
+        screen_set_color(VGA_YELLOW, VGA_BLACK);
+        screen_print_dec(i);
+        screen_print(". ");
+        screen_set_color(VGA_LIGHT_GREEN, VGA_BLACK);
+        screen_print(basic_get_program_name(i));
+        screen_set_color(VGA_WHITE, VGA_BLACK);
+        screen_print(" - ");
+        screen_println(basic_get_program_description(i));
+    }
+    screen_println("");
+    screen_println("Use LOAD <number> to load a program.");
+}
+
+// Load a demo program by number
+static int basic_load_demo(int num, int* program_pos) {
+    const char* prog = basic_get_program(num);
+    if (prog == 0) {
+        screen_set_color(VGA_LIGHT_RED, VGA_BLACK);
+        screen_println("Invalid program number. Use 1-10.");
+        screen_set_color(VGA_WHITE, VGA_BLACK);
+        return 0;
+    }
+
+    // Copy program
+    memset(basic_program, 0, BASIC_PROGRAM_SIZE);
+    int len = strlen(prog);
+    if (len >= BASIC_PROGRAM_SIZE) {
+        len = BASIC_PROGRAM_SIZE - 1;
+    }
+    memcpy(basic_program, prog, len);
+    basic_program[len] = '\0';
+    *program_pos = len;
+
+    screen_set_color(VGA_LIGHT_GREEN, VGA_BLACK);
+    screen_print("Loaded: ");
+    screen_println(basic_get_program_name(num));
+    screen_set_color(VGA_WHITE, VGA_BLACK);
+    screen_print("  ");
+    screen_println(basic_get_program_description(num));
+    screen_println("Type LIST to view, RUN to execute.");
+    return 1;
+}
+
 static void cmd_basic(void) {
     char line_buffer[MAX_COMMAND_LENGTH];
     int program_pos = 0;
@@ -173,19 +224,16 @@ static void cmd_basic(void) {
     screen_set_color(VGA_LIGHT_CYAN, VGA_BLACK);
     screen_println("=== uBASIC Interpreter ===");
     screen_set_color(VGA_WHITE, VGA_BLACK);
-    screen_println("Enter your BASIC program. Commands:");
-    screen_println("  RUN   - Execute the program");
-    screen_println("  LIST  - Show current program");
-    screen_println("  NEW   - Clear program");
-    screen_println("  EXIT  - Return to shell");
+    screen_println("Commands:");
+    screen_println("  RUN        - Execute the program");
+    screen_println("  LIST       - Show current program");
+    screen_println("  NEW        - Clear program");
+    screen_println("  DEMOS      - Show example programs");
+    screen_println("  LOAD <1-10> - Load an example program");
+    screen_println("  EXIT       - Return to shell");
     screen_println("");
-    screen_println("Example program:");
     screen_set_color(VGA_YELLOW, VGA_BLACK);
-    screen_println("  10 print \"Hello World!\"");
-    screen_println("  20 for i = 1 to 5");
-    screen_println("  30 print i");
-    screen_println("  40 next i");
-    screen_println("  50 end");
+    screen_println("Tip: Type DEMOS to see 10 example programs!");
     screen_set_color(VGA_WHITE, VGA_BLACK);
     screen_println("");
 
@@ -199,13 +247,13 @@ static void cmd_basic(void) {
         screen_set_color(VGA_WHITE, VGA_BLACK);
         keyboard_getline(line_buffer, MAX_COMMAND_LENGTH);
 
-        // Check for commands
+        // Check for commands (case insensitive)
         if (strcmp(line_buffer, "EXIT") == 0 || strcmp(line_buffer, "exit") == 0) {
             screen_println("Returning to shell...");
             return;
         } else if (strcmp(line_buffer, "RUN") == 0 || strcmp(line_buffer, "run") == 0) {
             if (program_pos == 0) {
-                screen_println("No program to run.");
+                screen_println("No program to run. Use DEMOS to see examples.");
             } else {
                 screen_println("--- Running program ---");
                 screen_set_color(VGA_LIGHT_CYAN, VGA_BLACK);
@@ -218,7 +266,7 @@ static void cmd_basic(void) {
             }
         } else if (strcmp(line_buffer, "LIST") == 0 || strcmp(line_buffer, "list") == 0) {
             if (program_pos == 0) {
-                screen_println("No program loaded.");
+                screen_println("No program loaded. Use DEMOS to see examples.");
             } else {
                 screen_set_color(VGA_YELLOW, VGA_BLACK);
                 screen_println(basic_program);
@@ -228,6 +276,22 @@ static void cmd_basic(void) {
             memset(basic_program, 0, BASIC_PROGRAM_SIZE);
             program_pos = 0;
             screen_println("Program cleared.");
+        } else if (strcmp(line_buffer, "DEMOS") == 0 || strcmp(line_buffer, "demos") == 0) {
+            basic_show_demos();
+        } else if (strncmp(line_buffer, "LOAD ", 5) == 0 || strncmp(line_buffer, "load ", 5) == 0) {
+            // Parse number after LOAD
+            int num = 0;
+            const char* p = line_buffer + 5;
+            while (*p == ' ') p++;
+            while (*p >= '0' && *p <= '9') {
+                num = num * 10 + (*p - '0');
+                p++;
+            }
+            if (num >= 1 && num <= 10) {
+                basic_load_demo(num, &program_pos);
+            } else {
+                screen_println("Usage: LOAD <1-10>");
+            }
         } else if (line_buffer[0] != '\0') {
             // Add line to program
             int line_len = strlen(line_buffer);

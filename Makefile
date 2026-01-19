@@ -54,7 +54,9 @@ $(KERNEL): $(OBJECTS)
 $(ISO): $(KERNEL)
 	mkdir -p $(ISO_DIR)/boot/grub
 	cp $(KERNEL) $(ISO_DIR)/boot/kernel.bin
-	echo 'menuentry "VOS" {' > $(ISO_DIR)/boot/grub/grub.cfg
+	echo 'set timeout=0' > $(ISO_DIR)/boot/grub/grub.cfg
+	echo 'set default=0' >> $(ISO_DIR)/boot/grub/grub.cfg
+	echo 'menuentry "VOS" {' >> $(ISO_DIR)/boot/grub/grub.cfg
 	echo '    multiboot /boot/kernel.bin' >> $(ISO_DIR)/boot/grub/grub.cfg
 	echo '}' >> $(ISO_DIR)/boot/grub/grub.cfg
 	grub-mkrescue -o $(ISO) $(ISO_DIR)

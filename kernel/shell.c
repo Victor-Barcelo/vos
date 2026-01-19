@@ -3,8 +3,10 @@
 #include "keyboard.h"
 #include "string.h"
 #include "io.h"
+#include "ubasic.h"
 
 #define MAX_COMMAND_LENGTH 256
+#define BASIC_PROGRAM_SIZE 2048
 
 // Forward declarations for commands
 static void cmd_help(void);
@@ -14,6 +16,7 @@ static void cmd_info(void);
 static void cmd_reboot(void);
 static void cmd_halt(void);
 static void cmd_color(const char* args);
+static void cmd_basic(void);
 
 // Print the shell prompt
 static void print_prompt(void) {
@@ -58,6 +61,8 @@ static void execute_command(char* input) {
         cmd_halt();
     } else if (strcmp(input, "color") == 0) {
         cmd_color(args);
+    } else if (strcmp(input, "basic") == 0) {
+        cmd_basic();
     } else {
         screen_set_color(VGA_LIGHT_RED, VGA_BLACK);
         screen_print("Unknown command: ");
@@ -77,6 +82,7 @@ static void cmd_help(void) {
     screen_println("  echo <text>   - Print text to screen");
     screen_println("  info, about   - Show system information");
     screen_println("  color <0-15>  - Change text color");
+    screen_println("  basic         - Start BASIC interpreter");
     screen_println("  reboot        - Reboot the system");
     screen_println("  halt          - Halt the system");
 }
@@ -154,6 +160,88 @@ static void cmd_color(const char* args) {
         screen_println("Color changed.");
     } else {
         screen_println("Invalid color. Use 0-15.");
+    }
+}
+
+// BASIC interpreter command
+static char basic_program[BASIC_PROGRAM_SIZE];
+
+static void cmd_basic(void) {
+    char line_buffer[MAX_COMMAND_LENGTH];
+    int program_pos = 0;
+
+    screen_set_color(VGA_LIGHT_CYAN, VGA_BLACK);
+    screen_println("=== uBASIC Interpreter ===");
+    screen_set_color(VGA_WHITE, VGA_BLACK);
+    screen_println("Enter your BASIC program. Commands:");
+    screen_println("  RUN   - Execute the program");
+    screen_println("  LIST  - Show current program");
+    screen_println("  NEW   - Clear program");
+    screen_println("  EXIT  - Return to shell");
+    screen_println("");
+    screen_println("Example program:");
+    screen_set_color(VGA_YELLOW, VGA_BLACK);
+    screen_println("  10 print \"Hello World!\"");
+    screen_println("  20 for i = 1 to 5");
+    screen_println("  30 print i");
+    screen_println("  40 next i");
+    screen_println("  50 end");
+    screen_set_color(VGA_WHITE, VGA_BLACK);
+    screen_println("");
+
+    // Clear program buffer
+    memset(basic_program, 0, BASIC_PROGRAM_SIZE);
+    program_pos = 0;
+
+    while (1) {
+        screen_set_color(VGA_LIGHT_GREEN, VGA_BLACK);
+        screen_print("BASIC> ");
+        screen_set_color(VGA_WHITE, VGA_BLACK);
+        keyboard_getline(line_buffer, MAX_COMMAND_LENGTH);
+
+        // Check for commands
+        if (strcmp(line_buffer, "EXIT") == 0 || strcmp(line_buffer, "exit") == 0) {
+            screen_println("Returning to shell...");
+            return;
+        } else if (strcmp(line_buffer, "RUN") == 0 || strcmp(line_buffer, "run") == 0) {
+            if (program_pos == 0) {
+                screen_println("No program to run.");
+            } else {
+                screen_println("--- Running program ---");
+                screen_set_color(VGA_LIGHT_CYAN, VGA_BLACK);
+                ubasic_init(basic_program);
+                while (!ubasic_finished()) {
+                    ubasic_run();
+                }
+                screen_set_color(VGA_WHITE, VGA_BLACK);
+                screen_println("--- Program ended ---");
+            }
+        } else if (strcmp(line_buffer, "LIST") == 0 || strcmp(line_buffer, "list") == 0) {
+            if (program_pos == 0) {
+                screen_println("No program loaded.");
+            } else {
+                screen_set_color(VGA_YELLOW, VGA_BLACK);
+                screen_println(basic_program);
+                screen_set_color(VGA_WHITE, VGA_BLACK);
+            }
+        } else if (strcmp(line_buffer, "NEW") == 0 || strcmp(line_buffer, "new") == 0) {
+            memset(basic_program, 0, BASIC_PROGRAM_SIZE);
+            program_pos = 0;
+            screen_println("Program cleared.");
+        } else if (line_buffer[0] != '\0') {
+            // Add line to program
+            int line_len = strlen(line_buffer);
+            if (program_pos + line_len + 2 < BASIC_PROGRAM_SIZE) {
+                strcpy(basic_program + program_pos, line_buffer);
+                program_pos += line_len;
+                basic_program[program_pos++] = '\n';
+                basic_program[program_pos] = '\0';
+            } else {
+                screen_set_color(VGA_LIGHT_RED, VGA_BLACK);
+                screen_println("Program too large!");
+                screen_set_color(VGA_WHITE, VGA_BLACK);
+            }
+        }
     }
 }
 

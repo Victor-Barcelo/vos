@@ -34,6 +34,23 @@ static uint8_t current_color = 0x0F; // White on black
 
 static int reserved_bottom_rows = 0;
 
+// Minimal ANSI/VT100 parsing (CSI sequences) used by some vendored CLI code.
+typedef enum {
+    ANSI_STATE_NONE = 0,
+    ANSI_STATE_ESC,
+    ANSI_STATE_CSI,
+} ansi_state_t;
+
+static ansi_state_t ansi_state = ANSI_STATE_NONE;
+static int ansi_params[2];
+static int ansi_param_count = 0;
+static int ansi_current = -1;
+
+static inline int screen_phys_x(int x);
+static inline int screen_phys_y(int y);
+static void fb_render_cell(int x, int y);
+static void update_cursor(void);
+
 // "Safe area" padding (in character cells).
 static int pad_left_cols = 0;
 static int pad_right_cols = 0;
@@ -64,6 +81,14 @@ static uint8_t fb_b_size = 0;
 static font_t fb_font;
 
 static uint16_t fb_cells[FB_MAX_COLS * FB_MAX_ROWS];
+
+#define SCROLLBACK_MAX_LINES 1024
+static uint16_t scrollback_cells[SCROLLBACK_MAX_LINES * FB_MAX_COLS];
+static uint32_t scrollback_head = 0;
+static uint32_t scrollback_count = 0;
+static uint32_t scrollback_view_offset = 0;
+static int scrollback_cols = 0;
+static bool cursor_force_hidden = false;
 
 static const uint8_t vga_palette_rgb[16][3] = {
     {0, 0, 0},       // 0 black
@@ -98,6 +123,226 @@ static inline uint16_t vga_entry(char c, uint8_t color) {
 
 static inline uint8_t vga_color(uint8_t fg, uint8_t bg) {
     return fg | (bg << 4);
+}
+
+static void scrollback_reset(void) {
+    scrollback_head = 0;
+    scrollback_count = 0;
+    scrollback_view_offset = 0;
+    scrollback_cols = screen_cols_value;
+    cursor_force_hidden = false;
+}
+
+static uint16_t* scrollback_line_ptr(uint32_t idx) {
+    uint32_t real = (scrollback_head + idx) % SCROLLBACK_MAX_LINES;
+    return &scrollback_cells[real * FB_MAX_COLS];
+}
+
+static void scrollback_push_line(const uint16_t* line, int cols) {
+    if (!line) {
+        return;
+    }
+    if (cols < 1) {
+        return;
+    }
+    if (cols > FB_MAX_COLS) {
+        cols = FB_MAX_COLS;
+    }
+
+    if (scrollback_cols != cols) {
+        scrollback_reset();
+        scrollback_cols = cols;
+    }
+
+    uint16_t* dst = 0;
+    if (scrollback_count < SCROLLBACK_MAX_LINES) {
+        dst = scrollback_line_ptr(scrollback_count);
+        scrollback_count++;
+    } else {
+        dst = &scrollback_cells[scrollback_head * FB_MAX_COLS];
+        scrollback_head = (scrollback_head + 1) % SCROLLBACK_MAX_LINES;
+    }
+
+    memcpy(dst, line, (size_t)cols * sizeof(uint16_t));
+    if (cols < FB_MAX_COLS) {
+        uint16_t blank = vga_entry(' ', current_color);
+        for (int x = cols; x < FB_MAX_COLS; x++) {
+            dst[x] = blank;
+        }
+    }
+
+    if (scrollback_view_offset > 0 && scrollback_view_offset < scrollback_count) {
+        scrollback_view_offset++;
+    }
+}
+
+static void cursor_clamp(void) {
+    int max_y = usable_height() - 1;
+    if (max_y < 0) max_y = 0;
+
+    if (cursor_x < 0) cursor_x = 0;
+    if (cursor_y < 0) cursor_y = 0;
+    if (cursor_x >= screen_cols_value) cursor_x = screen_cols_value - 1;
+    if (cursor_y > max_y) cursor_y = max_y;
+}
+
+static void ansi_erase_to_eol(void) {
+    int y = cursor_y;
+    if (y < 0 || y >= usable_height()) {
+        return;
+    }
+    if (cursor_x < 0) {
+        cursor_x = 0;
+    }
+    if (cursor_x >= screen_cols_value) {
+        return;
+    }
+
+    if (backend == SCREEN_BACKEND_FRAMEBUFFER) {
+        uint16_t blank = vga_entry(' ', current_color);
+        uint16_t* row = &fb_cells[y * screen_cols_value];
+        for (int x = cursor_x; x < screen_cols_value; x++) {
+            row[x] = blank;
+            fb_render_cell(x, y);
+        }
+    } else {
+        for (int x = cursor_x; x < screen_cols_value; x++) {
+            VGA_BUFFER[screen_phys_y(y) * VGA_WIDTH + screen_phys_x(x)] = vga_entry(' ', current_color);
+        }
+    }
+}
+
+static void ansi_reset(void) {
+    ansi_state = ANSI_STATE_NONE;
+    ansi_param_count = 0;
+    ansi_current = -1;
+    ansi_params[0] = 0;
+    ansi_params[1] = 0;
+}
+
+static void ansi_push_param(void) {
+    if (ansi_param_count >= (int)(sizeof(ansi_params) / sizeof(ansi_params[0]))) {
+        ansi_current = -1;
+        return;
+    }
+    ansi_params[ansi_param_count++] = (ansi_current < 0) ? 0 : ansi_current;
+    ansi_current = -1;
+}
+
+static int ansi_get_param(int idx, int def) {
+    if (idx < 0) {
+        return def;
+    }
+    if (idx < ansi_param_count) {
+        int v = ansi_params[idx];
+        return (v == 0) ? def : v;
+    }
+    if (idx == ansi_param_count && ansi_current >= 0) {
+        int v = ansi_current;
+        return (v == 0) ? def : v;
+    }
+    return def;
+}
+
+static bool ansi_handle_char(char c) {
+    if (ansi_state == ANSI_STATE_NONE) {
+        if ((uint8_t)c == 0x1Bu) {
+            ansi_state = ANSI_STATE_ESC;
+            return true;
+        }
+        return false;
+    }
+
+    if (ansi_state == ANSI_STATE_ESC) {
+        if (c == '[') {
+            ansi_state = ANSI_STATE_CSI;
+            ansi_param_count = 0;
+            ansi_current = -1;
+            ansi_params[0] = 0;
+            ansi_params[1] = 0;
+            return true;
+        }
+
+        ansi_reset();
+        return true;
+    }
+
+    // CSI state.
+    if (c >= '0' && c <= '9') {
+        if (ansi_current < 0) {
+            ansi_current = 0;
+        }
+        ansi_current = ansi_current * 10 + (c - '0');
+        return true;
+    }
+    if (c == ';') {
+        ansi_push_param();
+        return true;
+    }
+
+    // Final byte.
+    if (ansi_current >= 0) {
+        ansi_push_param();
+    }
+
+    switch (c) {
+        case 'A': { // cursor up
+            int n = ansi_get_param(0, 1);
+            cursor_y -= n;
+            cursor_clamp();
+            update_cursor();
+            break;
+        }
+        case 'B': { // cursor down
+            int n = ansi_get_param(0, 1);
+            cursor_y += n;
+            cursor_clamp();
+            update_cursor();
+            break;
+        }
+        case 'C': { // cursor forward
+            int n = ansi_get_param(0, 1);
+            cursor_x += n;
+            cursor_clamp();
+            update_cursor();
+            break;
+        }
+        case 'D': { // cursor back
+            int n = ansi_get_param(0, 1);
+            cursor_x -= n;
+            cursor_clamp();
+            update_cursor();
+            break;
+        }
+        case 'H': // cursor position
+        case 'f': {
+            int row = ansi_get_param(0, 1);
+            int col = ansi_get_param(1, 1);
+            cursor_y = row - 1;
+            cursor_x = col - 1;
+            cursor_clamp();
+            update_cursor();
+            break;
+        }
+        case 'K': { // erase in line (0 = to end)
+            ansi_erase_to_eol();
+            update_cursor();
+            break;
+        }
+        case 'J': { // erase in display (2 = clear)
+            int mode = ansi_get_param(0, 0);
+            if (mode == 2) {
+                screen_clear();
+                update_cursor();
+            }
+            break;
+        }
+        default:
+            break;
+    }
+
+    ansi_reset();
+    return true;
 }
 
 int screen_cols(void) {
@@ -220,12 +465,11 @@ static void fb_fill_rect(uint32_t x, uint32_t y, uint32_t w, uint32_t h, uint32_
     }
 }
 
-static void fb_render_cell(int x, int y) {
+static void fb_render_entry(int x, int y, uint16_t entry) {
     if (x < 0 || y < 0 || x >= screen_cols_value || y >= screen_rows_value) {
         return;
     }
 
-    uint16_t entry = fb_cells[y * screen_cols_value + x];
     uint8_t ch = (uint8_t)(entry & 0xFFu);
     uint8_t color = (uint8_t)((entry >> 8) & 0xFFu);
     uint8_t fg = (uint8_t)(color & 0x0Fu);
@@ -258,6 +502,13 @@ static void fb_render_cell(int x, int y) {
     }
 }
 
+static void fb_render_cell(int x, int y) {
+    if (x < 0 || y < 0 || x >= screen_cols_value || y >= screen_rows_value) {
+        return;
+    }
+    fb_render_entry(x, y, fb_cells[y * screen_cols_value + x]);
+}
+
 static uint32_t fb_cursor_thickness(void) {
     return (fb_font.height >= 16u) ? 2u : 1u;
 }
@@ -280,7 +531,7 @@ static void fb_draw_cursor_overlay(int x, int y) {
 }
 
 static void fb_update_cursor(void) {
-    if (!cursor_enabled) {
+    if (cursor_force_hidden || !cursor_enabled) {
         if (cursor_drawn_x >= 0 && cursor_drawn_y >= 0) {
             fb_render_cell(cursor_drawn_x, cursor_drawn_y);
             cursor_drawn_x = -1;
@@ -304,6 +555,10 @@ static void update_cursor(void) {
     if (backend == SCREEN_BACKEND_FRAMEBUFFER) {
         fb_update_cursor();
     } else {
+        if (cursor_force_hidden) {
+            vga_hw_cursor_set_enabled(false);
+            return;
+        }
         vga_hw_cursor_update();
     }
 }
@@ -311,6 +566,17 @@ static void update_cursor(void) {
 static void vga_scroll(void) {
     int height = usable_height();
     int phys_top = pad_top_rows;
+
+    // Save the line that is about to scroll out (top visible line).
+    int cols = screen_cols_value;
+    if (cols > FB_MAX_COLS) cols = FB_MAX_COLS;
+    if (cols > 0) {
+        uint16_t line[FB_MAX_COLS];
+        for (int x = 0; x < cols; x++) {
+            line[x] = VGA_BUFFER[screen_phys_y(0) * VGA_WIDTH + screen_phys_x(x)];
+        }
+        scrollback_push_line(line, cols);
+    }
 
     // Move all lines up by one
     for (int y = 0; y < height - 1; y++) {
@@ -346,6 +612,9 @@ static void fb_scroll(void) {
     }
 
     int cols = screen_cols_value;
+    if (cols > 0) {
+        scrollback_push_line(&fb_cells[0], cols);
+    }
     size_t row_bytes = (size_t)cols * sizeof(uint16_t);
     memcpy(&fb_cells[0], &fb_cells[cols], row_bytes * (size_t)(height - 1));
 
@@ -354,21 +623,134 @@ static void fb_scroll(void) {
         fb_cells[(height - 1) * cols + x] = blank;
     }
 
-    uint32_t usable_px_height = (uint32_t)height * fb_font.height;
-    uint32_t copy_bytes = (usable_px_height - fb_font.height) * fb_pitch;
-    uint8_t* dst = fb_addr + fb_origin_y * fb_pitch;
-    uint8_t* src = dst + fb_font.height * fb_pitch;
-    memcpy(dst, src, copy_bytes);
+    if (scrollback_view_offset == 0) {
+        uint32_t usable_px_height = (uint32_t)height * fb_font.height;
+        uint32_t copy_bytes = (usable_px_height - fb_font.height) * fb_pitch;
+        uint8_t* dst = fb_addr + fb_origin_y * fb_pitch;
+        uint8_t* src = dst + fb_font.height * fb_pitch;
+        memcpy(dst, src, copy_bytes);
 
-    uint8_t bg = (uint8_t)((current_color >> 4) & 0x0Fu);
-    uint32_t bg_px = fb_color_from_vga(bg);
-    uint32_t clear_y = fb_origin_y + (uint32_t)(height - 1) * fb_font.height;
-    fb_fill_rect(0, clear_y, fb_width, fb_font.height, bg_px);
+        uint8_t bg = (uint8_t)((current_color >> 4) & 0x0Fu);
+        uint32_t bg_px = fb_color_from_vga(bg);
+        uint32_t clear_y = fb_origin_y + (uint32_t)(height - 1) * fb_font.height;
+        fb_fill_rect(0, clear_y, fb_width, fb_font.height, bg_px);
+    }
 
     cursor_y = height - 1;
 }
 
+static void scrollback_render_view(void) {
+    if (backend != SCREEN_BACKEND_FRAMEBUFFER) {
+        return;
+    }
+
+    int rows = usable_height();
+    int cols = screen_cols_value;
+    if (rows < 1 || cols < 1) {
+        return;
+    }
+    if (cols > FB_MAX_COLS) {
+        cols = FB_MAX_COLS;
+    }
+
+    uint32_t history = scrollback_count;
+    uint32_t offset = scrollback_view_offset;
+    if (offset > history) {
+        offset = history;
+    }
+    uint32_t start = history - offset;
+
+    for (int y = 0; y < rows; y++) {
+        uint32_t doc_idx = start + (uint32_t)y;
+        const uint16_t* src = 0;
+        bool is_history = doc_idx < history;
+        if (is_history) {
+            src = scrollback_line_ptr(doc_idx);
+        } else {
+            uint32_t live_row = doc_idx - history;
+            if (live_row >= (uint32_t)FB_MAX_ROWS) {
+                continue;
+            }
+            src = &fb_cells[live_row * (uint32_t)screen_cols_value];
+        }
+
+        for (int x = 0; x < cols; x++) {
+            uint16_t entry = is_history ? src[x] : src[x];
+            fb_render_entry(x, y, entry);
+        }
+    }
+}
+
+static void scrollback_render_bottom(void) {
+    if (backend != SCREEN_BACKEND_FRAMEBUFFER) {
+        return;
+    }
+
+    int rows = usable_height();
+    int cols = screen_cols_value;
+    if (rows < 1 || cols < 1) {
+        return;
+    }
+
+    for (int y = 0; y < rows; y++) {
+        for (int x = 0; x < cols; x++) {
+            fb_render_cell(x, y);
+        }
+    }
+}
+
+bool screen_scrollback_active(void) {
+    return scrollback_view_offset > 0;
+}
+
+void screen_scrollback_lines(int32_t delta) {
+    if (backend != SCREEN_BACKEND_FRAMEBUFFER) {
+        return;
+    }
+    if (scrollback_count == 0) {
+        return;
+    }
+
+    int32_t new_offset = (int32_t)scrollback_view_offset + delta;
+    if (new_offset < 0) {
+        new_offset = 0;
+    }
+    if ((uint32_t)new_offset > scrollback_count) {
+        new_offset = (int32_t)scrollback_count;
+    }
+    if ((uint32_t)new_offset == scrollback_view_offset) {
+        return;
+    }
+
+    scrollback_view_offset = (uint32_t)new_offset;
+    cursor_force_hidden = scrollback_view_offset > 0;
+    update_cursor();
+
+    if (scrollback_view_offset > 0) {
+        scrollback_render_view();
+    } else {
+        scrollback_render_bottom();
+        update_cursor();
+    }
+}
+
+void screen_scrollback_reset(void) {
+    if (backend != SCREEN_BACKEND_FRAMEBUFFER) {
+        return;
+    }
+    if (scrollback_view_offset == 0) {
+        return;
+    }
+    scrollback_view_offset = 0;
+    cursor_force_hidden = false;
+    scrollback_render_bottom();
+    update_cursor();
+}
+
 void screen_clear(void) {
+    scrollback_view_offset = 0;
+    cursor_force_hidden = false;
+
     if (backend == SCREEN_BACKEND_FRAMEBUFFER) {
         uint16_t blank = vga_entry(' ', current_color);
         int cols = screen_cols_value;
@@ -552,11 +934,17 @@ void screen_init(uint32_t multiboot_magic, uint32_t* mboot_info) {
         }
     }
 
+    scrollback_reset();
     screen_clear();
 }
 
 void screen_putchar(char c) {
+    if (ansi_handle_char(c)) {
+        return;
+    }
+
     int height = usable_height();
+    bool render_now = !(backend == SCREEN_BACKEND_FRAMEBUFFER && scrollback_view_offset > 0);
 
     if (c == '\n') {
         cursor_x = 0;
@@ -570,7 +958,9 @@ void screen_putchar(char c) {
             cursor_x--;
             if (backend == SCREEN_BACKEND_FRAMEBUFFER) {
                 fb_cells[cursor_y * screen_cols_value + cursor_x] = vga_entry(' ', current_color);
-                fb_render_cell(cursor_x, cursor_y);
+                if (render_now) {
+                    fb_render_cell(cursor_x, cursor_y);
+                }
             } else {
                 VGA_BUFFER[screen_phys_y(cursor_y) * VGA_WIDTH + screen_phys_x(cursor_x)] = vga_entry(' ', current_color);
             }
@@ -578,7 +968,9 @@ void screen_putchar(char c) {
     } else {
         if (backend == SCREEN_BACKEND_FRAMEBUFFER) {
             fb_cells[cursor_y * screen_cols_value + cursor_x] = vga_entry(c, current_color);
-            fb_render_cell(cursor_x, cursor_y);
+            if (render_now) {
+                fb_render_cell(cursor_x, cursor_y);
+            }
         } else {
             VGA_BUFFER[screen_phys_y(cursor_y) * VGA_WIDTH + screen_phys_x(cursor_x)] = vga_entry(c, current_color);
         }

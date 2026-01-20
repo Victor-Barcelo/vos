@@ -20,6 +20,7 @@ LD = $(CROSS_LD)
 BOOT_DIR = boot
 KERNEL_DIR = kernel
 INCLUDE_DIR = include
+THIRD_PARTY_DIR = third_party
 BUILD_DIR = build
 ISO_DIR = iso
 TOOLS_DIR = tools
@@ -28,7 +29,7 @@ TOOLS_BUILD_DIR = $(BUILD_DIR)/tools
 # Flags
 ASFLAGS = -f elf32
 CFLAGS = -ffreestanding -fno-stack-protector -fno-pie -nostdlib \
-         -Wall -Wextra -I$(INCLUDE_DIR) -O2 -c
+         -Wall -Wextra -I$(INCLUDE_DIR) -I$(THIRD_PARTY_DIR)/microrl -O2 -c
 LDFLAGS = -m elf_i386 -T linker.ld -nostdlib
 
 # Source files
@@ -38,7 +39,8 @@ C_SOURCES = $(wildcard $(KERNEL_DIR)/*.c)
 # Object files
 ASM_OBJECTS = $(BUILD_DIR)/boot.o
 C_OBJECTS = $(patsubst $(KERNEL_DIR)/%.c,$(BUILD_DIR)/%.o,$(C_SOURCES))
-OBJECTS = $(ASM_OBJECTS) $(C_OBJECTS)
+MICRORL_OBJ = $(BUILD_DIR)/microrl.o
+OBJECTS = $(ASM_OBJECTS) $(C_OBJECTS) $(MICRORL_OBJ)
 
 # Output
 KERNEL = $(BUILD_DIR)/kernel.bin
@@ -109,6 +111,10 @@ $(USER_INIT): $(USER_OBJECTS)
 
 # Compile C files
 $(BUILD_DIR)/%.o: $(KERNEL_DIR)/%.c | $(BUILD_DIR)
+	$(CC) $(CFLAGS) $< -o $@
+
+# Vendored microrl (readline-style line editing)
+$(MICRORL_OBJ): $(THIRD_PARTY_DIR)/microrl/microrl.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) $< -o $@
 
 # Link kernel

@@ -17,6 +17,7 @@
 #include "stdlib.h"
 #include "ramfs.h"
 #include "editor.h"
+#include "microrl.h"
 
 #define MAX_COMMAND_LENGTH 256
 #define BASIC_PROGRAM_SIZE 4096
@@ -60,7 +61,86 @@ static void cmd_cp(const char* args);
 static void cmd_mv(const char* args);
 static void cmd_nano(const char* args);
 
+static void execute_command(char* input);
+
 static char shell_cwd[SHELL_PATH_MAX] = "/";
+
+static microrl_t shell_rl;
+static char shell_prompt_buf[256];
+
+static void shell_update_prompt(void) {
+    size_t pos = 0;
+    const char* pfx = "vos:";
+    while (*pfx && pos + 1 < sizeof(shell_prompt_buf)) {
+        shell_prompt_buf[pos++] = *pfx++;
+    }
+    const char* cwd = shell_cwd;
+    while (cwd && *cwd && pos + 1 < sizeof(shell_prompt_buf)) {
+        shell_prompt_buf[pos++] = *cwd++;
+    }
+    const char* sfx = "> ";
+    while (*sfx && pos + 1 < sizeof(shell_prompt_buf)) {
+        shell_prompt_buf[pos++] = *sfx++;
+    }
+    shell_prompt_buf[pos] = '\0';
+    microrl_set_prompt(&shell_rl, shell_prompt_buf, (int)pos);
+}
+
+static void shell_rl_print(const char* s) {
+    if (!s) {
+        return;
+    }
+    screen_print(s);
+}
+
+static void join_argv(char* out, size_t out_len, int argc, const char* const* argv) {
+    if (!out || out_len == 0) {
+        return;
+    }
+    size_t pos = 0;
+    out[0] = '\0';
+
+    for (int i = 0; i < argc; i++) {
+        const char* token = argv[i] ? argv[i] : "";
+        if (i > 0 && pos + 1 < out_len) {
+            out[pos++] = ' ';
+        }
+        while (*token && pos + 1 < out_len) {
+            out[pos++] = *token++;
+        }
+    }
+
+    out[pos] = '\0';
+}
+
+static void microrl_feed_seq(microrl_t* rl, const char* seq) {
+    if (!rl || !seq) {
+        return;
+    }
+    while (*seq) {
+        microrl_insert_char(rl, (unsigned char)*seq++);
+    }
+}
+
+static void microrl_feed_arrow(microrl_t* rl, char final) {
+    char seq[4] = { 27, '[', final, 0 };
+    microrl_feed_seq(rl, seq);
+}
+
+static void microrl_feed_home_end(microrl_t* rl, bool home) {
+    char seq[5] = { 27, '[', (char)(home ? '7' : '8'), '~', 0 };
+    microrl_feed_seq(rl, seq);
+}
+
+static int shell_rl_execute(int argc, const char* const* argv) {
+    char line[MAX_COMMAND_LENGTH];
+    join_argv(line, sizeof(line), argc, argv);
+    execute_command(line);
+
+    screen_set_color(VGA_WHITE, VGA_BLUE);
+    shell_update_prompt();
+    return 0;
+}
 
 static void print_spaces(int count) {
     for (int i = 0; i < count; i++) {
@@ -550,17 +630,6 @@ static void shell_idle_hook(void) {
         interval = 1;
     }
     next_toggle_tick = now + interval;
-}
-
-// Print the shell prompt
-static void print_prompt(void) {
-    screen_set_color(VGA_LIGHT_CYAN, VGA_BLUE);
-    screen_print("vos:");
-    screen_set_color(VGA_WHITE, VGA_BLUE);
-    screen_print(shell_cwd);
-    screen_set_color(VGA_LIGHT_CYAN, VGA_BLUE);
-    screen_print("> ");
-    screen_set_color(VGA_WHITE, VGA_BLUE);
 }
 
 // Parse and execute a command
@@ -1597,8 +1666,6 @@ static void cmd_basic(void) {
 }
 
 void shell_run(void) {
-    char command_buffer[MAX_COMMAND_LENGTH];
-
     statusbar_init();
     keyboard_set_idle_hook(shell_idle_hook);
 
@@ -1610,9 +1677,46 @@ void shell_run(void) {
     screen_set_color(VGA_WHITE, VGA_BLUE);
     screen_println("Type 'help' for available commands.\n");
 
+    microrl_init(&shell_rl, shell_rl_print);
+    microrl_set_execute_callback(&shell_rl, shell_rl_execute);
+    shell_update_prompt();
+    screen_set_color(VGA_WHITE, VGA_BLUE);
+    microrl_print_prompt(&shell_rl);
+
     while (1) {
-        print_prompt();
-        keyboard_getline(command_buffer, MAX_COMMAND_LENGTH);
-        execute_command(command_buffer);
+        char c = keyboard_getchar();
+        int8_t key = (int8_t)c;
+
+        int page = screen_rows() - 1;
+        if (page < 1) page = 1;
+
+        if (screen_scrollback_active() && key != KEY_PGUP && key != KEY_PGDN) {
+            screen_scrollback_reset();
+        }
+
+        if (key == KEY_PGUP) {
+            screen_scrollback_lines(page);
+            continue;
+        }
+        if (key == KEY_PGDN) {
+            screen_scrollback_lines(-page);
+            continue;
+        }
+
+        if (key == KEY_UP) {
+            microrl_feed_arrow(&shell_rl, 'A');
+        } else if (key == KEY_DOWN) {
+            microrl_feed_arrow(&shell_rl, 'B');
+        } else if (key == KEY_RIGHT) {
+            microrl_feed_arrow(&shell_rl, 'C');
+        } else if (key == KEY_LEFT) {
+            microrl_feed_arrow(&shell_rl, 'D');
+        } else if (key == KEY_HOME) {
+            microrl_feed_home_end(&shell_rl, true);
+        } else if (key == KEY_END) {
+            microrl_feed_home_end(&shell_rl, false);
+        } else {
+            microrl_insert_char(&shell_rl, (unsigned char)c);
+        }
     }
 }

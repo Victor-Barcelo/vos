@@ -135,6 +135,11 @@ void keyboard_handler(void) {
                     case 0x50: buffer_push(KEY_DOWN);  break;  // Down arrow
                     case 0x4B: buffer_push(KEY_LEFT);  break;  // Left arrow
                     case 0x4D: buffer_push(KEY_RIGHT); break;  // Right arrow
+                    case 0x47: buffer_push(KEY_HOME);  break;  // Home
+                    case 0x4F: buffer_push(KEY_END);   break;  // End
+                    case 0x49: buffer_push(KEY_PGUP);  break;  // Page Up
+                    case 0x51: buffer_push(KEY_PGDN);  break;  // Page Down
+                    case 0x53: buffer_push(KEY_DELETE); break; // Delete
                 }
             }
         }

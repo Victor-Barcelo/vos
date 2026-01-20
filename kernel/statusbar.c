@@ -7,7 +7,7 @@
 static uint32_t last_drawn_minute = 0xFFFFFFFFu;
 
 static uint8_t status_color(void) {
-    return (uint8_t)(VGA_WHITE | (VGA_BLUE << 4));
+    return (uint8_t)(VGA_BLUE | (VGA_LIGHT_GREY << 4));
 }
 
 static void append_char(char* buf, int* pos, int max, char c) {
@@ -58,6 +58,9 @@ static void draw_statusbar(void) {
     line[cols] = '\0';
 
     int pos = 0;
+    if (cols > 1) {
+        pos = 1;
+    }
 
     rtc_datetime_t dt;
     if (rtc_read_datetime(&dt)) {

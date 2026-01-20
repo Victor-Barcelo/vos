@@ -26,7 +26,7 @@ void kernel_main(uint32_t magic, uint32_t* mboot_info) {
     screen_init(magic, mboot_info);
 
     // Display boot message
-    screen_set_color(VGA_WHITE, VGA_BLUE);
+    screen_set_color(VGA_LIGHT_CYAN, VGA_BLUE);
     screen_println("========================================");
     screen_println("          VOS - Minimal Kernel          ");
     screen_println("========================================");
@@ -35,7 +35,7 @@ void kernel_main(uint32_t magic, uint32_t* mboot_info) {
 
     // Verify multiboot
     if (magic == MULTIBOOT_MAGIC) {
-        screen_set_color(VGA_WHITE, VGA_BLUE);
+        screen_set_color(VGA_LIGHT_GREEN, VGA_BLUE);
         screen_print("[OK] ");
         screen_set_color(VGA_WHITE, VGA_BLUE);
         screen_println("Multiboot verified");
@@ -51,13 +51,13 @@ void kernel_main(uint32_t magic, uint32_t* mboot_info) {
     system_init(magic, mboot_info);
 
     idt_init();
-    screen_set_color(VGA_WHITE, VGA_BLUE);
+    screen_set_color(VGA_LIGHT_GREEN, VGA_BLUE);
     screen_print("[OK] ");
     screen_set_color(VGA_WHITE, VGA_BLUE);
     screen_println("IDT initialized");
 
     timer_init(1000);
-    screen_set_color(VGA_WHITE, VGA_BLUE);
+    screen_set_color(VGA_LIGHT_GREEN, VGA_BLUE);
     screen_print("[OK] ");
     screen_set_color(VGA_WHITE, VGA_BLUE);
     screen_println("Timer initialized");
@@ -67,20 +67,22 @@ void kernel_main(uint32_t magic, uint32_t* mboot_info) {
 
     // Initialize keyboard (flush controller)
     keyboard_init();
-    screen_set_color(VGA_WHITE, VGA_BLUE);
+    screen_set_color(VGA_LIGHT_GREEN, VGA_BLUE);
     screen_print("[OK] ");
     screen_set_color(VGA_WHITE, VGA_BLUE);
     screen_println("Keyboard initialized");
 
     // Enable interrupts
     sti();
-    screen_set_color(VGA_WHITE, VGA_BLUE);
+    screen_set_color(VGA_LIGHT_GREEN, VGA_BLUE);
     screen_print("[OK] ");
     screen_set_color(VGA_WHITE, VGA_BLUE);
     screen_println("Interrupts enabled");
 
     screen_println("");
+    screen_set_color(VGA_LIGHT_CYAN, VGA_BLUE);
     screen_println("Boot complete! Starting shell...");
+    screen_set_color(VGA_WHITE, VGA_BLUE);
     screen_println("");
 
     // Run the shell

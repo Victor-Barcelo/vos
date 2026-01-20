@@ -34,6 +34,16 @@ static uint8_t current_color = 0x0F; // White on black
 
 static int reserved_bottom_rows = 0;
 
+// "Safe area" padding (in character cells).
+static int pad_left_cols = 0;
+static int pad_right_cols = 0;
+static int pad_top_rows = 0;
+static int pad_bottom_rows = 0;
+
+// Framebuffer pixel origin for the top-left text cell (0,0).
+static uint32_t fb_origin_x = 0;
+static uint32_t fb_origin_y = 0;
+
 // Framebuffer mode state
 #define FB_MAX_COLS 200
 #define FB_MAX_ROWS 100
@@ -98,8 +108,22 @@ int screen_rows(void) {
     return screen_rows_value;
 }
 
+static inline int screen_phys_x(int x) {
+    return x + pad_left_cols;
+}
+
+static inline int screen_phys_y(int y) {
+    return y + pad_top_rows;
+}
+
 static void vga_hw_cursor_update(void) {
-    uint16_t pos = cursor_y * VGA_WIDTH + cursor_x;
+    int phys_x = screen_phys_x(cursor_x);
+    int phys_y = screen_phys_y(cursor_y);
+    if (phys_x < 0) phys_x = 0;
+    if (phys_y < 0) phys_y = 0;
+    if (phys_x >= VGA_WIDTH) phys_x = VGA_WIDTH - 1;
+    if (phys_y >= VGA_HEIGHT) phys_y = VGA_HEIGHT - 1;
+    uint16_t pos = (uint16_t)(phys_y * VGA_WIDTH + phys_x);
     outb(0x3D4, 0x0F);
     outb(0x3D5, (uint8_t)(pos & 0xFF));
     outb(0x3D4, 0x0E);
@@ -210,8 +234,8 @@ static void fb_render_cell(int x, int y) {
     uint32_t fg_px = fb_color_from_vga(fg);
     uint32_t bg_px = fb_color_from_vga(bg);
 
-    uint32_t base_x = (uint32_t)x * fb_font.width;
-    uint32_t base_y = (uint32_t)y * fb_font.height;
+    uint32_t base_x = fb_origin_x + (uint32_t)x * fb_font.width;
+    uint32_t base_y = fb_origin_y + (uint32_t)y * fb_font.height;
 
     uint32_t glyph_idx = (uint32_t)ch;
     if (glyph_idx >= fb_font.glyph_count) {
@@ -248,8 +272,8 @@ static void fb_draw_cursor_overlay(int x, int y) {
     uint8_t fg = (uint8_t)(color & 0x0Fu);
     uint32_t fg_px = fb_color_from_vga(fg);
 
-    uint32_t base_x = (uint32_t)x * fb_font.width;
-    uint32_t base_y = (uint32_t)y * fb_font.height;
+    uint32_t base_x = fb_origin_x + (uint32_t)x * fb_font.width;
+    uint32_t base_y = fb_origin_y + (uint32_t)y * fb_font.height;
     uint32_t thickness = fb_cursor_thickness();
     uint32_t y0 = base_y + (fb_font.height - thickness);
     fb_fill_rect(base_x, y0, fb_font.width, thickness, fg_px);
@@ -286,17 +310,21 @@ static void update_cursor(void) {
 
 static void vga_scroll(void) {
     int height = usable_height();
+    int phys_top = pad_top_rows;
 
     // Move all lines up by one
     for (int y = 0; y < height - 1; y++) {
+        int dst_y = phys_top + y;
+        int src_y = phys_top + y + 1;
         for (int x = 0; x < VGA_WIDTH; x++) {
-            VGA_BUFFER[y * VGA_WIDTH + x] = VGA_BUFFER[(y + 1) * VGA_WIDTH + x];
+            VGA_BUFFER[dst_y * VGA_WIDTH + x] = VGA_BUFFER[src_y * VGA_WIDTH + x];
         }
     }
 
     // Clear the last line
+    int last_y = phys_top + (height - 1);
     for (int x = 0; x < VGA_WIDTH; x++) {
-        VGA_BUFFER[(height - 1) * VGA_WIDTH + x] = vga_entry(' ', current_color);
+        VGA_BUFFER[last_y * VGA_WIDTH + x] = vga_entry(' ', current_color);
     }
 
     cursor_y = height - 1;
@@ -319,11 +347,14 @@ static void fb_scroll(void) {
 
     uint32_t usable_px_height = (uint32_t)height * fb_font.height;
     uint32_t copy_bytes = (usable_px_height - fb_font.height) * fb_pitch;
-    memcpy(fb_addr, fb_addr + fb_font.height * fb_pitch, copy_bytes);
+    uint8_t* dst = fb_addr + fb_origin_y * fb_pitch;
+    uint8_t* src = dst + fb_font.height * fb_pitch;
+    memcpy(dst, src, copy_bytes);
 
     uint8_t bg = (uint8_t)((current_color >> 4) & 0x0Fu);
     uint32_t bg_px = fb_color_from_vga(bg);
-    fb_fill_rect(0, (uint32_t)(height - 1) * fb_font.height, fb_width, fb_font.height, bg_px);
+    uint32_t clear_y = fb_origin_y + (uint32_t)(height - 1) * fb_font.height;
+    fb_fill_rect(0, clear_y, fb_width, fb_font.height, bg_px);
 
     cursor_y = height - 1;
 }
@@ -368,8 +399,22 @@ void screen_init(uint32_t multiboot_magic, uint32_t* mboot_info) {
     cursor_drawn_y = -1;
 
     backend = SCREEN_BACKEND_VGA_TEXT;
-    screen_cols_value = VGA_WIDTH;
-    screen_rows_value = VGA_HEIGHT;
+    pad_left_cols = 1;
+    pad_right_cols = 1;
+    pad_top_rows = 1;
+    pad_bottom_rows = 1;
+    if (VGA_WIDTH <= (pad_left_cols + pad_right_cols)) {
+        pad_left_cols = 0;
+        pad_right_cols = 0;
+    }
+    if (VGA_HEIGHT <= (pad_top_rows + pad_bottom_rows)) {
+        pad_top_rows = 0;
+        pad_bottom_rows = 0;
+    }
+    screen_cols_value = VGA_WIDTH - pad_left_cols - pad_right_cols;
+    screen_rows_value = VGA_HEIGHT - pad_top_rows - pad_bottom_rows;
+    if (screen_cols_value < 1) screen_cols_value = 1;
+    if (screen_rows_value < 1) screen_rows_value = 1;
 
     fb_addr = 0;
     fb_pitch = 0;
@@ -378,6 +423,8 @@ void screen_init(uint32_t multiboot_magic, uint32_t* mboot_info) {
     fb_bpp = 0;
     fb_bytes_per_pixel = 0;
     fb_type = 0;
+    fb_origin_x = 0;
+    fb_origin_y = 0;
     fb_font = (font_t){
         .width = 0,
         .height = 0,
@@ -434,44 +481,66 @@ void screen_init(uint32_t multiboot_magic, uint32_t* mboot_info) {
                         fb_bytes_per_pixel = 0;
                         fb_type = 0;
                     } else {
-                        int cols = (int)(fb_width / fb_font.width);
-                        int rows = (int)(fb_height / fb_font.height);
+                        int cols_total = (int)(fb_width / fb_font.width);
+                        int rows_total = (int)(fb_height / fb_font.height);
+                        int fb_pad_left = 1;
+                        int fb_pad_right = 1;
+                        int fb_pad_top = 1;
+                        int fb_pad_bottom = 1;
+
+                        if (cols_total <= (fb_pad_left + fb_pad_right)) {
+                            fb_pad_left = 0;
+                            fb_pad_right = 0;
+                        }
+                        if (rows_total <= (fb_pad_top + fb_pad_bottom)) {
+                            fb_pad_top = 0;
+                            fb_pad_bottom = 0;
+                        }
+
+                        int cols = cols_total - fb_pad_left - fb_pad_right;
+                        int rows = rows_total - fb_pad_top - fb_pad_bottom;
                         if (cols < 1) cols = 1;
                         if (rows < 1) rows = 1;
                         if (cols > FB_MAX_COLS) cols = FB_MAX_COLS;
                         if (rows > FB_MAX_ROWS) rows = FB_MAX_ROWS;
 
+                        pad_left_cols = fb_pad_left;
+                        pad_right_cols = fb_pad_right;
+                        pad_top_rows = fb_pad_top;
+                        pad_bottom_rows = fb_pad_bottom;
                         screen_cols_value = cols;
                         screen_rows_value = rows;
-                    backend = SCREEN_BACKEND_FRAMEBUFFER;
+                        fb_origin_x = (uint32_t)pad_left_cols * fb_font.width;
+                        fb_origin_y = (uint32_t)pad_top_rows * fb_font.height;
+                        backend = SCREEN_BACKEND_FRAMEBUFFER;
 
-                    serial_write_string("[OK] Framebuffer ");
-                    serial_write_dec((int32_t)fb_width);
-                    serial_write_char('x');
-                    serial_write_dec((int32_t)fb_height);
-                    serial_write_string("x");
-                    serial_write_dec((int32_t)fb_bpp);
-                    serial_write_string(" font ");
-                    serial_write_dec((int32_t)fb_font.width);
-                    serial_write_char('x');
-                    serial_write_dec((int32_t)fb_font.height);
-                    serial_write_string(" rgb ");
-                    serial_write_dec((int32_t)fb_r_pos);
-                    serial_write_char('/');
-                    serial_write_dec((int32_t)fb_r_size);
-                    serial_write_char(' ');
-                    serial_write_dec((int32_t)fb_g_pos);
-                    serial_write_char('/');
-                    serial_write_dec((int32_t)fb_g_size);
-                    serial_write_char(' ');
-                    serial_write_dec((int32_t)fb_b_pos);
-                    serial_write_char('/');
-                    serial_write_dec((int32_t)fb_b_size);
-                    serial_write_char('\n');
+                        serial_write_string("[OK] Framebuffer ");
+                        serial_write_dec((int32_t)fb_width);
+                        serial_write_char('x');
+                        serial_write_dec((int32_t)fb_height);
+                        serial_write_string("x");
+                        serial_write_dec((int32_t)fb_bpp);
+                        serial_write_string(" font ");
+                        serial_write_dec((int32_t)fb_font.width);
+                        serial_write_char('x');
+                        serial_write_dec((int32_t)fb_font.height);
+                        serial_write_string(" rgb ");
+                        serial_write_dec((int32_t)fb_r_pos);
+                        serial_write_char('/');
+                        serial_write_dec((int32_t)fb_r_size);
+                        serial_write_char(' ');
+                        serial_write_dec((int32_t)fb_g_pos);
+                        serial_write_char('/');
+                        serial_write_dec((int32_t)fb_g_size);
+                        serial_write_char(' ');
+                        serial_write_dec((int32_t)fb_b_pos);
+                        serial_write_char('/');
+                        serial_write_dec((int32_t)fb_b_size);
+                        serial_write_char('\n');
+                    }
                 }
             }
         }
-    }
     }
 
     screen_clear();
@@ -494,7 +563,7 @@ void screen_putchar(char c) {
                 fb_cells[cursor_y * screen_cols_value + cursor_x] = vga_entry(' ', current_color);
                 fb_render_cell(cursor_x, cursor_y);
             } else {
-                VGA_BUFFER[cursor_y * VGA_WIDTH + cursor_x] = vga_entry(' ', current_color);
+                VGA_BUFFER[screen_phys_y(cursor_y) * VGA_WIDTH + screen_phys_x(cursor_x)] = vga_entry(' ', current_color);
             }
         }
     } else {
@@ -502,7 +571,7 @@ void screen_putchar(char c) {
             fb_cells[cursor_y * screen_cols_value + cursor_x] = vga_entry(c, current_color);
             fb_render_cell(cursor_x, cursor_y);
         } else {
-            VGA_BUFFER[cursor_y * VGA_WIDTH + cursor_x] = vga_entry(c, current_color);
+            VGA_BUFFER[screen_phys_y(cursor_y) * VGA_WIDTH + screen_phys_x(cursor_x)] = vga_entry(c, current_color);
         }
         cursor_x++;
     }
@@ -602,7 +671,7 @@ void screen_backspace(void) {
             fb_cells[cursor_y * screen_cols_value + cursor_x] = vga_entry(' ', current_color);
             fb_render_cell(cursor_x, cursor_y);
         } else {
-            VGA_BUFFER[cursor_y * VGA_WIDTH + cursor_x] = vga_entry(' ', current_color);
+            VGA_BUFFER[screen_phys_y(cursor_y) * VGA_WIDTH + screen_phys_x(cursor_x)] = vga_entry(' ', current_color);
         }
         update_cursor();
     }
@@ -637,7 +706,7 @@ void screen_write_char_at(int x, int y, char c, uint8_t color) {
             update_cursor();
         }
     } else {
-        VGA_BUFFER[y * VGA_WIDTH + x] = vga_entry(c, color);
+        VGA_BUFFER[screen_phys_y(y) * VGA_WIDTH + screen_phys_x(x)] = vga_entry(c, color);
     }
 }
 

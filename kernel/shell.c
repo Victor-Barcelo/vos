@@ -27,6 +27,22 @@ static void cmd_sleep(const char* args);
 static void cmd_date(void);
 static void cmd_setdate(const char* args);
 
+static void print_help_cmd(const char* cmd, const char* desc) {
+    screen_set_color(VGA_YELLOW, VGA_BLUE);
+    screen_print("  ");
+    screen_print(cmd);
+
+    int pad = 14 - (int)strlen(cmd);
+    if (pad < 1) pad = 1;
+    for (int i = 0; i < pad; i++) {
+        screen_putchar(' ');
+    }
+
+    screen_set_color(VGA_WHITE, VGA_BLUE);
+    screen_print("- ");
+    screen_println(desc);
+}
+
 static void shell_idle_hook(void) {
     statusbar_tick();
 
@@ -55,7 +71,7 @@ static void shell_idle_hook(void) {
 
 // Print the shell prompt
 static void print_prompt(void) {
-    screen_set_color(VGA_WHITE, VGA_BLUE);
+    screen_set_color(VGA_LIGHT_CYAN, VGA_BLUE);
     screen_print("vos");
     screen_set_color(VGA_WHITE, VGA_BLUE);
     screen_print("> ");
@@ -117,21 +133,21 @@ static void execute_command(char* input) {
 
 // Help command
 static void cmd_help(void) {
-    screen_set_color(VGA_WHITE, VGA_BLUE);
+    screen_set_color(VGA_LIGHT_CYAN, VGA_BLUE);
     screen_println("Available commands:");
-    screen_set_color(VGA_WHITE, VGA_BLUE);
-    screen_println("  help          - Show this help message");
-    screen_println("  clear, cls    - Clear the screen");
-    screen_println("  echo <text>   - Print text to screen");
-    screen_println("  info, about   - Show system information");
-    screen_println("  uptime        - Show system uptime");
-    screen_println("  sleep <ms>    - Sleep for N milliseconds");
-    screen_println("  date          - Show RTC date/time");
-    screen_println("  setdate <YYYY-MM-DD HH:MM:SS> - Set RTC date/time");
-    screen_println("  color <0-15>  - Change text color");
-    screen_println("  basic         - Start BASIC interpreter");
-    screen_println("  reboot        - Reboot the system");
-    screen_println("  halt          - Halt the system");
+
+    print_help_cmd("help", "Show this help message");
+    print_help_cmd("clear, cls", "Clear the screen");
+    print_help_cmd("echo <text>", "Print text to screen");
+    print_help_cmd("info, about", "Show system information");
+    print_help_cmd("uptime", "Show system uptime");
+    print_help_cmd("sleep <ms>", "Sleep for N milliseconds");
+    print_help_cmd("date", "Show RTC date/time");
+    print_help_cmd("setdate", "Set RTC date/time (YYYY-MM-DD HH:MM:SS)");
+    print_help_cmd("color <0-15>", "Change text color");
+    print_help_cmd("basic", "Start BASIC interpreter");
+    print_help_cmd("reboot", "Reboot the system");
+    print_help_cmd("halt", "Halt the system");
 }
 
 // Clear screen command
@@ -147,12 +163,14 @@ static void cmd_echo(const char* args) {
 
 // System info command
 static void cmd_info(void) {
-    screen_set_color(VGA_WHITE, VGA_BLUE);
+    screen_set_color(VGA_LIGHT_CYAN, VGA_BLUE);
     screen_println("=== VOS - Victor's Operating System ===");
     screen_set_color(VGA_WHITE, VGA_BLUE);
     screen_println("Version: 0.1.0");
     screen_println("Architecture: i386 (x86 32-bit)");
+    screen_set_color(VGA_LIGHT_CYAN, VGA_BLUE);
     screen_println("Features:");
+    screen_set_color(VGA_WHITE, VGA_BLUE);
     screen_println("  - VGA text mode display (80x25)");
     screen_println("  - PS/2 keyboard input");
     screen_println("  - PIT timer + uptime");
@@ -329,17 +347,16 @@ static char basic_program[BASIC_PROGRAM_SIZE];
 
 // Show list of demo programs
 static void basic_show_demos(void) {
-    screen_set_color(VGA_WHITE, VGA_BLUE);
+    screen_set_color(VGA_LIGHT_CYAN, VGA_BLUE);
     screen_println("=== Available Demo Programs ===");
     screen_set_color(VGA_WHITE, VGA_BLUE);
 
     for (int i = 1; i <= BASIC_NUM_PROGRAMS; i++) {
-        screen_set_color(VGA_WHITE, VGA_BLUE);
+        screen_set_color(VGA_YELLOW, VGA_BLUE);
         screen_print_dec(i);
+        screen_set_color(VGA_WHITE, VGA_BLUE);
         screen_print(". ");
-        screen_set_color(VGA_WHITE, VGA_BLUE);
         screen_print(basic_get_program_name(i));
-        screen_set_color(VGA_WHITE, VGA_BLUE);
         screen_print(" - ");
         screen_println(basic_get_program_description(i));
     }
@@ -381,10 +398,11 @@ static void cmd_basic(void) {
     char line_buffer[MAX_COMMAND_LENGTH];
     int program_pos = 0;
 
-    screen_set_color(VGA_WHITE, VGA_BLUE);
+    screen_set_color(VGA_LIGHT_CYAN, VGA_BLUE);
     screen_println("=== uBASIC Interpreter ===");
-    screen_set_color(VGA_WHITE, VGA_BLUE);
+    screen_set_color(VGA_LIGHT_CYAN, VGA_BLUE);
     screen_println("Commands:");
+    screen_set_color(VGA_WHITE, VGA_BLUE);
     screen_println("  RUN        - Execute the program");
     screen_println("  LIST       - Show current program");
     screen_println("  NEW        - Clear program");
@@ -392,7 +410,7 @@ static void cmd_basic(void) {
     screen_println("  LOAD <1-10> - Load an example program");
     screen_println("  EXIT       - Return to shell");
     screen_println("");
-    screen_set_color(VGA_WHITE, VGA_BLUE);
+    screen_set_color(VGA_LIGHT_CYAN, VGA_BLUE);
     screen_println("Tip: Type DEMOS to see 10 example programs!");
     screen_set_color(VGA_WHITE, VGA_BLUE);
     screen_println("");
@@ -402,7 +420,7 @@ static void cmd_basic(void) {
     program_pos = 0;
 
     while (1) {
-        screen_set_color(VGA_WHITE, VGA_BLUE);
+        screen_set_color(VGA_YELLOW, VGA_BLUE);
         screen_print("BASIC> ");
         screen_set_color(VGA_WHITE, VGA_BLUE);
         keyboard_getline(line_buffer, MAX_COMMAND_LENGTH);
@@ -475,7 +493,7 @@ void shell_run(void) {
     statusbar_init();
     keyboard_set_idle_hook(shell_idle_hook);
 
-    screen_set_color(VGA_WHITE, VGA_BLUE);
+    screen_set_color(VGA_LIGHT_CYAN, VGA_BLUE);
     screen_println("Welcome to VOS Shell!");
     screen_set_color(VGA_WHITE, VGA_BLUE);
     screen_println("Type 'help' for available commands.\n");

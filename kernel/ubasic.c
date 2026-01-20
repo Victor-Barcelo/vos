@@ -42,9 +42,13 @@
 
 #include "stdio.h"
 #include "stdlib.h"
+#include "keyboard.h"
+#include "kheap.h"
+#include "string.h"
+#include "timer.h"
 
 static char const *program_ptr;
-#define MAX_STRINGLEN 40
+#define MAX_STRINGLEN 64
 static char string[MAX_STRINGLEN];
 
 #define MAX_GOSUB_STACK_DEPTH 10
@@ -62,18 +66,101 @@ static int for_stack_ptr;
 
 #define MAX_VARNUM 26
 static int variables[MAX_VARNUM];
+static char string_variables[MAX_VARNUM][MAX_STRINGLEN];
+
+typedef struct {
+  int* data;
+  int max_index;
+} int_array_t;
+static int_array_t int_arrays[MAX_VARNUM];
 
 static int ended;
 
 static int expr(void);
 static void line_statement(void);
 static void statement(void);
+static void input_statement(void);
+static void dim_statement(void);
+static void graphics_statement(void);
+static void text_statement(void);
+static void cls_statement(void);
+static void pset_statement(void);
+static void line_draw_statement(void);
+
+static bool graphics_mode;
+
+static uint32_t rnd_state;
+static bool rnd_seeded;
+
+static uint32_t ubasic_rand_u32(void) {
+  if(!rnd_seeded) {
+    rnd_seeded = true;
+    rnd_state = (uint32_t)timer_get_ticks() ^ (uint32_t)(uint32_t)program_ptr ^ 0xA5A5A5A5u;
+    if(rnd_state == 0) {
+      rnd_state = 0x12345678u;
+    }
+  }
+  rnd_state = rnd_state * 1664525u + 1013904223u;
+  return rnd_state;
+}
+
+static int array_get(int var, int index) {
+  if(var < 0 || var >= MAX_VARNUM) {
+    return 0;
+  }
+  if(!int_arrays[var].data || index < 0 || index > int_arrays[var].max_index) {
+    return 0;
+  }
+  return int_arrays[var].data[index];
+}
+
+static void array_set(int var, int index, int value) {
+  if(var < 0 || var >= MAX_VARNUM) {
+    return;
+  }
+  if(!int_arrays[var].data || index < 0 || index > int_arrays[var].max_index) {
+    return;
+  }
+  int_arrays[var].data[index] = value;
+}
+
+static void array_dim(int var, int max_index) {
+  if(var < 0 || var >= MAX_VARNUM || max_index < 0) {
+    return;
+  }
+
+  if(int_arrays[var].data) {
+    kfree(int_arrays[var].data);
+    int_arrays[var].data = NULL;
+    int_arrays[var].max_index = 0;
+  }
+
+  uint32_t count = (uint32_t)max_index + 1u;
+  int* data = (int*)kcalloc(count, sizeof(int));
+  if(!data) {
+    return;
+  }
+  int_arrays[var].data = data;
+  int_arrays[var].max_index = max_index;
+}
 /*---------------------------------------------------------------------------*/
 void
 ubasic_init(const char *program)
 {
   program_ptr = program;
   for_stack_ptr = gosub_stack_ptr = 0;
+  for(int i = 0; i < MAX_VARNUM; i++) {
+    variables[i] = 0;
+    string_variables[i][0] = 0;
+    if(int_arrays[i].data) {
+      kfree(int_arrays[i].data);
+      int_arrays[i].data = NULL;
+      int_arrays[i].max_index = 0;
+    }
+  }
+  rnd_state = 0;
+  rnd_seeded = false;
+  graphics_mode = false;
   tokenizer_init(program);
   ended = 0;
 }
@@ -85,7 +172,8 @@ accept(int token)
     DEBUG_PRINTF("Token not what was expected (expected %d, got %d)\n",
 		 token, tokenizer_token());
     tokenizer_error_print();
-    exit(1);
+    ended = 1;
+    return;
   }
   DEBUG_PRINTF("Expected %d, got it\n", token);
   tokenizer_next();
@@ -95,9 +183,19 @@ static int
 varfactor(void)
 {
   int r;
-  DEBUG_PRINTF("varfactor: obtaining %d from variable %d\n", variables[tokenizer_variable_num()], tokenizer_variable_num());
-  r = ubasic_get_variable(tokenizer_variable_num());
+  int var = tokenizer_variable_num();
   accept(TOKENIZER_VARIABLE);
+
+  if(tokenizer_token() == TOKENIZER_LEFTPAREN) {
+    accept(TOKENIZER_LEFTPAREN);
+    int idx = expr();
+    accept(TOKENIZER_RIGHTPAREN);
+    r = array_get(var, idx);
+    return r;
+  }
+
+  DEBUG_PRINTF("varfactor: obtaining %d from variable %d\n", variables[var], var);
+  r = ubasic_get_variable(var);
   return r;
 }
 /*---------------------------------------------------------------------------*/
@@ -113,6 +211,21 @@ factor(void)
     DEBUG_PRINTF("factor: number %d\n", r);
     accept(TOKENIZER_NUMBER);
     break;
+  case TOKENIZER_RND: {
+    accept(TOKENIZER_RND);
+    int max = 32768;
+    if(tokenizer_token() == TOKENIZER_LEFTPAREN) {
+      accept(TOKENIZER_LEFTPAREN);
+      max = expr();
+      accept(TOKENIZER_RIGHTPAREN);
+    }
+    if(max <= 0) {
+      r = 0;
+    } else {
+      r = (int)(ubasic_rand_u32() % (uint32_t)max);
+    }
+    break;
+  }
   case TOKENIZER_LEFTPAREN:
     accept(TOKENIZER_LEFTPAREN);
     r = expr();
@@ -259,6 +372,10 @@ print_statement(void)
       tokenizer_string(string, sizeof(string));
       printf("%s", string);
       tokenizer_next();
+    } else if(tokenizer_token() == TOKENIZER_STRINGVAR) {
+      int var = tokenizer_variable_num();
+      accept(TOKENIZER_STRINGVAR);
+      printf("%s", string_variables[var]);
     } else if(tokenizer_token() == TOKENIZER_COMMA) {
       printf(" ");
       tokenizer_next();
@@ -305,18 +422,211 @@ if_statement(void)
 }
 /*---------------------------------------------------------------------------*/
 static void
-let_statement(void)
+assign_statement(void)
 {
-  int var;
+  if(tokenizer_token() == TOKENIZER_STRINGVAR) {
+    int var = tokenizer_variable_num();
+    accept(TOKENIZER_STRINGVAR);
+    accept(TOKENIZER_EQ);
 
-  var = tokenizer_variable_num();
+    if(tokenizer_token() == TOKENIZER_STRING) {
+      tokenizer_string(string, sizeof(string));
+      accept(TOKENIZER_STRING);
+      strncpy(string_variables[var], string, MAX_STRINGLEN - 1);
+      string_variables[var][MAX_STRINGLEN - 1] = 0;
+    } else if(tokenizer_token() == TOKENIZER_STRINGVAR) {
+      int src = tokenizer_variable_num();
+      accept(TOKENIZER_STRINGVAR);
+      strncpy(string_variables[var], string_variables[src], MAX_STRINGLEN - 1);
+      string_variables[var][MAX_STRINGLEN - 1] = 0;
+    } else {
+      ended = 1;
+      return;
+    }
 
+    accept(TOKENIZER_CR);
+    return;
+  }
+
+  int var = tokenizer_variable_num();
   accept(TOKENIZER_VARIABLE);
+
+  bool is_array = false;
+  int idx = 0;
+  if(tokenizer_token() == TOKENIZER_LEFTPAREN) {
+    is_array = true;
+    accept(TOKENIZER_LEFTPAREN);
+    idx = expr();
+    accept(TOKENIZER_RIGHTPAREN);
+  }
+
   accept(TOKENIZER_EQ);
-  ubasic_set_variable(var, expr());
-  DEBUG_PRINTF("let_statement: assign %d to %d\n", variables[var], var);
+  int value = expr();
+  if(is_array) {
+    array_set(var, idx, value);
+  } else {
+    ubasic_set_variable(var, value);
+  }
+
+  DEBUG_PRINTF("assign_statement: assign %d to %d\n", value, var);
   accept(TOKENIZER_CR);
 
+}
+/*---------------------------------------------------------------------------*/
+static void
+input_statement(void)
+{
+  accept(TOKENIZER_INPUT);
+
+  if(tokenizer_token() == TOKENIZER_STRING) {
+    tokenizer_string(string, sizeof(string));
+    printf("%s", string);
+    accept(TOKENIZER_STRING);
+    if(tokenizer_token() == TOKENIZER_COMMA) {
+      accept(TOKENIZER_COMMA);
+    }
+  }
+
+  do {
+    printf("? ");
+    char line[64];
+    keyboard_getline(line, sizeof(line));
+
+    if(tokenizer_token() == TOKENIZER_STRINGVAR) {
+      int var = tokenizer_variable_num();
+      accept(TOKENIZER_STRINGVAR);
+      strncpy(string_variables[var], line, MAX_STRINGLEN - 1);
+      string_variables[var][MAX_STRINGLEN - 1] = 0;
+    } else {
+      int var = tokenizer_variable_num();
+      accept(TOKENIZER_VARIABLE);
+      bool is_array = false;
+      int idx = 0;
+      if(tokenizer_token() == TOKENIZER_LEFTPAREN) {
+        is_array = true;
+        accept(TOKENIZER_LEFTPAREN);
+        idx = expr();
+        accept(TOKENIZER_RIGHTPAREN);
+      }
+      int value = atoi(line);
+      if(is_array) {
+        array_set(var, idx, value);
+      } else {
+        ubasic_set_variable(var, value);
+      }
+    }
+
+    if(tokenizer_token() == TOKENIZER_COMMA) {
+      accept(TOKENIZER_COMMA);
+    } else {
+      break;
+    }
+  } while(1);
+
+  accept(TOKENIZER_CR);
+}
+/*---------------------------------------------------------------------------*/
+static void
+dim_statement(void)
+{
+  accept(TOKENIZER_DIM);
+
+  do {
+    int var = tokenizer_variable_num();
+    accept(TOKENIZER_VARIABLE);
+    accept(TOKENIZER_LEFTPAREN);
+    int size = expr();
+    accept(TOKENIZER_RIGHTPAREN);
+    if(size < 0) {
+      ended = 1;
+      return;
+    }
+    array_dim(var, size);
+
+    if(tokenizer_token() == TOKENIZER_COMMA) {
+      accept(TOKENIZER_COMMA);
+    } else {
+      break;
+    }
+  } while(1);
+
+  accept(TOKENIZER_CR);
+}
+/*---------------------------------------------------------------------------*/
+static void
+graphics_statement(void)
+{
+  accept(TOKENIZER_GRAPHICS);
+
+  int bg = 0;
+  if(tokenizer_token() != TOKENIZER_CR) {
+    bg = expr();
+  }
+  screen_graphics_clear((uint8_t)bg);
+  graphics_mode = true;
+  screen_cursor_set_enabled(false);
+  accept(TOKENIZER_CR);
+}
+/*---------------------------------------------------------------------------*/
+static void
+text_statement(void)
+{
+  accept(TOKENIZER_TEXT);
+  graphics_mode = false;
+  screen_cursor_set_enabled(true);
+  accept(TOKENIZER_CR);
+}
+/*---------------------------------------------------------------------------*/
+static void
+cls_statement(void)
+{
+  accept(TOKENIZER_CLS);
+  if(graphics_mode && screen_is_framebuffer()) {
+    screen_graphics_clear(0);
+  } else {
+    screen_clear();
+  }
+  accept(TOKENIZER_CR);
+}
+/*---------------------------------------------------------------------------*/
+static void
+pset_statement(void)
+{
+  accept(TOKENIZER_PSET);
+
+  int x = expr();
+  accept(TOKENIZER_COMMA);
+  int y = expr();
+  int c = 15;
+  if(tokenizer_token() == TOKENIZER_COMMA) {
+    accept(TOKENIZER_COMMA);
+    c = expr();
+  }
+
+  (void)screen_graphics_putpixel(x, y, (uint8_t)c);
+  accept(TOKENIZER_CR);
+}
+/*---------------------------------------------------------------------------*/
+static void
+line_draw_statement(void)
+{
+  accept(TOKENIZER_LINE);
+
+  int x0 = expr();
+  accept(TOKENIZER_COMMA);
+  int y0 = expr();
+  accept(TOKENIZER_COMMA);
+  int x1 = expr();
+  accept(TOKENIZER_COMMA);
+  int y1 = expr();
+  int c = 15;
+  if(tokenizer_token() == TOKENIZER_COMMA) {
+    accept(TOKENIZER_COMMA);
+    c = expr();
+  }
+
+  (void)screen_graphics_line(x0, y0, x1, y1, (uint8_t)c);
+  accept(TOKENIZER_CR);
 }
 /*---------------------------------------------------------------------------*/
 static void
@@ -419,6 +729,27 @@ statement(void)
   case TOKENIZER_PRINT:
     print_statement();
     break;
+  case TOKENIZER_GRAPHICS:
+    graphics_statement();
+    break;
+  case TOKENIZER_TEXT:
+    text_statement();
+    break;
+  case TOKENIZER_CLS:
+    cls_statement();
+    break;
+  case TOKENIZER_PSET:
+    pset_statement();
+    break;
+  case TOKENIZER_LINE:
+    line_draw_statement();
+    break;
+  case TOKENIZER_INPUT:
+    input_statement();
+    break;
+  case TOKENIZER_DIM:
+    dim_statement();
+    break;
   case TOKENIZER_IF:
     if_statement();
     break;
@@ -444,11 +775,13 @@ statement(void)
     accept(TOKENIZER_LET);
     /* Fall through. */
   case TOKENIZER_VARIABLE:
-    let_statement();
+  case TOKENIZER_STRINGVAR:
+    assign_statement();
     break;
   default:
     DEBUG_PRINTF("ubasic.c: statement(): not implemented %d\n", token);
-    exit(1);
+    ended = 1;
+    break;
   }
 }
 /*---------------------------------------------------------------------------*/
@@ -482,7 +815,7 @@ ubasic_finished(void)
 void
 ubasic_set_variable(int varnum, int value)
 {
-  if(varnum > 0 && varnum <= MAX_VARNUM) {
+  if(varnum >= 0 && varnum < MAX_VARNUM) {
     variables[varnum] = value;
   }
 }
@@ -490,7 +823,7 @@ ubasic_set_variable(int varnum, int value)
 int
 ubasic_get_variable(int varnum)
 {
-  if(varnum > 0 && varnum <= MAX_VARNUM) {
+  if(varnum >= 0 && varnum < MAX_VARNUM) {
     return variables[varnum];
   }
   return 0;

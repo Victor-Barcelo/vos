@@ -252,7 +252,7 @@ static void print_neofetch_like_banner(void) {
                 break;
             }
             case 10: {
-                print_banner_key("initramfs");
+                print_banner_key("VFS");
                 screen_print(": ");
                 if (vfs_is_ready()) {
                     screen_print_dec((int32_t)vfs_file_count());

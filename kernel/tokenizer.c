@@ -43,7 +43,7 @@
 
 static char const *ptr, *nextptr;
 
-#define MAX_NUMLEN 5
+#define MAX_NUMLEN 10
 
 struct keyword_token {
   char *keyword;
@@ -55,6 +55,8 @@ static int current_token = TOKENIZER_ERROR;
 static const struct keyword_token keywords[] = {
   {"let", TOKENIZER_LET},
   {"print", TOKENIZER_PRINT},
+  {"input", TOKENIZER_INPUT},
+  {"dim", TOKENIZER_DIM},
   {"if", TOKENIZER_IF},
   {"then", TOKENIZER_THEN},
   {"else", TOKENIZER_ELSE},
@@ -65,9 +67,37 @@ static const struct keyword_token keywords[] = {
   {"gosub", TOKENIZER_GOSUB},
   {"return", TOKENIZER_RETURN},
   {"call", TOKENIZER_CALL},
+  {"rnd", TOKENIZER_RND},
+  {"graphics", TOKENIZER_GRAPHICS},
+  {"text", TOKENIZER_TEXT},
+  {"cls", TOKENIZER_CLS},
+  {"pset", TOKENIZER_PSET},
+  {"line", TOKENIZER_LINE},
   {"end", TOKENIZER_END},
   {NULL, TOKENIZER_ERROR}
 };
+
+static bool is_kw_boundary(char c) {
+  if(c == 0) return true;
+  if(c == ' ' || c == '\t' || c == '\n' || c == '\r') return true;
+  if(c == ',' || c == ';') return true;
+  if(c == '(' || c == ')') return true;
+  if(c == '"' || c == '=' || c == '+' || c == '-' || c == '*' || c == '/' || c == '%') return true;
+  if(c == '<' || c == '>' || c == '&' || c == '|') return true;
+  return false;
+}
+
+static int kw_match(const char* s, const char* kw) {
+  int i = 0;
+  for(; kw[i] != 0; i++) {
+    char a = (char)tolower((unsigned char)s[i]);
+    char b = kw[i];
+    if(a != b) {
+      return 0;
+    }
+  }
+  return is_kw_boundary(s[i]);
+}
 
 /*---------------------------------------------------------------------------*/
 static int
@@ -144,19 +174,26 @@ get_next_token(void)
     nextptr = ptr;
     do {
       ++nextptr;
-    } while(*nextptr != '"');
+    } while(*nextptr != '"' && *nextptr != 0);
+    if(*nextptr != '"') {
+      return TOKENIZER_ERROR;
+    }
     ++nextptr;
     return TOKENIZER_STRING;
   } else {
     for(kt = keywords; kt->keyword != NULL; ++kt) {
-      if(strncmp(ptr, kt->keyword, strlen(kt->keyword)) == 0) {
-	nextptr = ptr + strlen(kt->keyword);
-	return kt->token;
+      if(kw_match(ptr, kt->keyword)) {
+        nextptr = ptr + strlen(kt->keyword);
+        return kt->token;
       }
     }
   }
 
-  if(*ptr >= 'a' && *ptr <= 'z') {
+  if(isalpha(*ptr)) {
+    if(ptr[1] == '$') {
+      nextptr = ptr + 2;
+      return TOKENIZER_STRINGVAR;
+    }
     nextptr = ptr + 1;
     return TOKENIZER_VARIABLE;
   }
@@ -188,7 +225,7 @@ tokenizer_next(void)
 
   DEBUG_PRINTF("tokenizer_next: %p\n", nextptr);
   ptr = nextptr;
-  while(*ptr == ' ') {
+  while(*ptr == ' ' || *ptr == '\t') {
     ++ptr;
   }
   current_token = get_next_token();
@@ -238,6 +275,6 @@ tokenizer_finished(void)
 int
 tokenizer_variable_num(void)
 {
-  return *ptr - 'a';
+  return tolower((unsigned char)*ptr) - 'a';
 }
 /*---------------------------------------------------------------------------*/

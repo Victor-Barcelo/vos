@@ -11,6 +11,8 @@ KERNEL_DIR = kernel
 INCLUDE_DIR = include
 BUILD_DIR = build
 ISO_DIR = iso
+TOOLS_DIR = tools
+TOOLS_BUILD_DIR = $(BUILD_DIR)/tools
 
 # Flags
 ASFLAGS = -f elf32
@@ -50,6 +52,10 @@ USER_INIT = $(USER_BUILD_DIR)/init.elf
 QEMU_XRES ?= 1920
 QEMU_YRES ?= 1080
 
+# Optional extra module: a small FAT12 image (for FAT12/16 support demo)
+MKFAT = $(TOOLS_BUILD_DIR)/mkfat
+FAT_IMG = $(ISO_DIR)/boot/fat.img
+
 # Default target
 all: $(ISO)
 
@@ -60,6 +66,19 @@ $(BUILD_DIR):
 # Create user build directory
 $(USER_BUILD_DIR): | $(BUILD_DIR)
 	mkdir -p $(USER_BUILD_DIR)
+
+# Create tools build directory
+$(TOOLS_BUILD_DIR): | $(BUILD_DIR)
+	mkdir -p $(TOOLS_BUILD_DIR)
+
+# Build host tool to generate a FAT image
+$(MKFAT): $(TOOLS_DIR)/mkfat.c | $(TOOLS_BUILD_DIR)
+	gcc -O2 $< -o $@
+
+# Generate the FAT image module
+$(FAT_IMG): $(MKFAT)
+	mkdir -p $(ISO_DIR)/boot
+	$(MKFAT) $@
 
 # Compile assembly
 $(BUILD_DIR)/boot.o: $(BOOT_DIR)/boot.asm | $(BUILD_DIR)
@@ -86,7 +105,7 @@ $(KERNEL): $(OBJECTS)
 	$(LD) $(LDFLAGS) $(OBJECTS) -o $@
 
 # Create bootable ISO
-$(ISO): $(KERNEL) $(USER_INIT)
+$(ISO): $(KERNEL) $(USER_INIT) $(FAT_IMG)
 	mkdir -p $(ISO_DIR)/boot/grub
 	cp $(KERNEL) $(ISO_DIR)/boot/kernel.bin
 	rm -rf $(INITRAMFS_ROOT)
@@ -107,6 +126,7 @@ $(ISO): $(KERNEL) $(USER_INIT)
 	echo 'menuentry "VOS" {' >> $(ISO_DIR)/boot/grub/grub.cfg
 	echo '    multiboot /boot/kernel.bin' >> $(ISO_DIR)/boot/grub/grub.cfg
 	echo '    module /boot/initramfs.tar' >> $(ISO_DIR)/boot/grub/grub.cfg
+	echo '    module /boot/fat.img' >> $(ISO_DIR)/boot/grub/grub.cfg
 	echo '}' >> $(ISO_DIR)/boot/grub/grub.cfg
 	grub-mkrescue -o $(ISO) $(ISO_DIR)
 
@@ -116,6 +136,7 @@ clean:
 	rm -rf $(ISO_DIR)/boot/kernel.bin
 	rm -rf $(INITRAMFS_TAR)
 	rm -rf $(ISO_DIR)/boot/grub/grub.cfg
+	rm -rf $(FAT_IMG)
 	rm -f $(ISO)
 
 # Run in QEMU (for quick testing)

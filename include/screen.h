@@ -84,4 +84,9 @@ uint32_t screen_framebuffer_bpp(void);
 uint32_t screen_font_width(void);
 uint32_t screen_font_height(void);
 
+// Simple framebuffer pixel primitives (no-op in VGA text mode).
+bool screen_graphics_clear(uint8_t bg_vga);
+bool screen_graphics_putpixel(int32_t x, int32_t y, uint8_t vga_color);
+bool screen_graphics_line(int32_t x0, int32_t y0, int32_t x1, int32_t y1, uint8_t vga_color);
+
 #endif

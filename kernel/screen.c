@@ -782,3 +782,66 @@ uint32_t screen_font_height(void) {
     }
     return fb_font.height;
 }
+
+static inline bool fb_xy_in_bounds(int32_t x, int32_t y) {
+    return x >= 0 && y >= 0 && (uint32_t)x < fb_width && (uint32_t)y < fb_height;
+}
+
+bool screen_graphics_clear(uint8_t bg_vga) {
+    if (backend != SCREEN_BACKEND_FRAMEBUFFER) {
+        return false;
+    }
+    uint32_t px = fb_color_from_vga(bg_vga);
+    fb_fill_rect(0, 0, fb_width, fb_height, px);
+    return true;
+}
+
+bool screen_graphics_putpixel(int32_t x, int32_t y, uint8_t vga_color) {
+    if (backend != SCREEN_BACKEND_FRAMEBUFFER) {
+        return false;
+    }
+    if (!fb_xy_in_bounds(x, y)) {
+        return false;
+    }
+    uint32_t px = fb_color_from_vga(vga_color);
+    fb_put_pixel((uint32_t)x, (uint32_t)y, px);
+    return true;
+}
+
+bool screen_graphics_line(int32_t x0, int32_t y0, int32_t x1, int32_t y1, uint8_t vga_color) {
+    if (backend != SCREEN_BACKEND_FRAMEBUFFER) {
+        return false;
+    }
+
+    uint32_t px = fb_color_from_vga(vga_color);
+
+    int32_t dx = x1 - x0;
+    int32_t sx = (dx >= 0) ? 1 : -1;
+    if (dx < 0) dx = -dx;
+
+    int32_t dy = y1 - y0;
+    int32_t sy = (dy >= 0) ? 1 : -1;
+    if (dy < 0) dy = -dy;
+
+    int32_t err = (dx > dy ? dx : -dy) / 2;
+
+    for (;;) {
+        if (fb_xy_in_bounds(x0, y0)) {
+            fb_put_pixel((uint32_t)x0, (uint32_t)y0, px);
+        }
+        if (x0 == x1 && y0 == y1) {
+            break;
+        }
+        int32_t e2 = err;
+        if (e2 > -dx) {
+            err -= dy;
+            x0 += sx;
+        }
+        if (e2 < dy) {
+            err += dx;
+            y0 += sy;
+        }
+    }
+
+    return true;
+}

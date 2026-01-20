@@ -1,5 +1,6 @@
 #include "vfs.h"
 #include "kheap.h"
+#include "ctype.h"
 #include "string.h"
 #include "serial.h"
 
@@ -61,6 +62,17 @@ static bool is_zero_block(const uint8_t* p) {
     return true;
 }
 
+static uint16_t read_le16(const uint8_t* p) {
+    return (uint16_t)p[0] | (uint16_t)((uint16_t)p[1] << 8);
+}
+
+static uint32_t read_le32(const uint8_t* p) {
+    return (uint32_t)p[0] |
+           ((uint32_t)p[1] << 8) |
+           ((uint32_t)p[2] << 16) |
+           ((uint32_t)p[3] << 24);
+}
+
 static char* dup_path(const char* prefix, const char* name) {
     while (name[0] == '.' && name[1] == '/') {
         name += 2;
@@ -93,28 +105,12 @@ static char* dup_path(const char* prefix, const char* name) {
     return out;
 }
 
-void vfs_init(const multiboot_info_t* mbi) {
-    ready = false;
-    file_count = 0;
-    files = NULL;
-
-    if (!mbi || (mbi->flags & MULTIBOOT_INFO_MODS) == 0 || mbi->mods_count == 0 || mbi->mods_addr == 0) {
-        serial_write_string("[VFS] no multiboot modules\n");
-        return;
+static uint32_t tar_count_files(const uint8_t* tar, uint32_t tar_len) {
+    if (!tar || tar_len < 512u) {
+        return 0;
     }
 
-    const multiboot_module_t* mods = (const multiboot_module_t*)mbi->mods_addr;
-    uint32_t start = mods[0].mod_start;
-    uint32_t end = mods[0].mod_end;
-    if (end <= start) {
-        serial_write_string("[VFS] initramfs module invalid\n");
-        return;
-    }
-
-    const uint8_t* tar = (const uint8_t*)start;
-    uint32_t tar_len = end - start;
-
-    // First pass: count files.
+    uint32_t count = 0;
     uint32_t off = 0;
     while (off + 512u <= tar_len) {
         const uint8_t* block = tar + off;
@@ -126,28 +122,23 @@ void vfs_init(const multiboot_info_t* mbi) {
         uint32_t size = parse_octal_u32(h->size, sizeof(h->size));
         char type = h->typeflag;
         if (type == '\0' || type == '0') {
-            file_count++;
+            count++;
         }
 
         off += 512u + align_up_512(size);
     }
 
-    if (file_count == 0) {
-        serial_write_string("[VFS] initramfs: no files\n");
-        return;
+    return count;
+}
+
+static uint32_t tar_fill_files(vfs_file_t* out_files, uint32_t max_files, const uint8_t* tar, uint32_t tar_len) {
+    if (!out_files || max_files == 0 || !tar || tar_len < 512u) {
+        return 0;
     }
 
-    files = (vfs_file_t*)kcalloc(file_count, sizeof(vfs_file_t));
-    if (!files) {
-        serial_write_string("[VFS] out of memory\n");
-        file_count = 0;
-        return;
-    }
-
-    // Second pass: populate file list.
     uint32_t idx = 0;
-    off = 0;
-    while (off + 512u <= tar_len && idx < file_count) {
+    uint32_t off = 0;
+    while (off + 512u <= tar_len && idx < max_files) {
         const uint8_t* block = tar + off;
         if (is_zero_block(block)) {
             break;
@@ -167,20 +158,441 @@ void vfs_init(const multiboot_info_t* mbi) {
             memcpy(prefix_buf, h->prefix, 155);
             prefix_buf[155] = '\0';
 
-            files[idx].name = dup_path(prefix_buf, name_buf);
-            files[idx].data = data;
-            files[idx].size = size;
+            out_files[idx].name = dup_path(prefix_buf, name_buf);
+            out_files[idx].data = data;
+            out_files[idx].size = size;
             idx++;
         }
 
         off += 512u + align_up_512(size);
     }
 
+    return idx;
+}
+
+typedef enum {
+    FAT_KIND_NONE = 0,
+    FAT_KIND_12 = 12,
+    FAT_KIND_16 = 16,
+} fat_kind_t;
+
+typedef struct fat_view {
+    const uint8_t* img;
+    uint32_t img_len;
+    uint16_t bytes_per_sector;
+    uint8_t sectors_per_cluster;
+    uint16_t reserved_sectors;
+    uint8_t num_fats;
+    uint16_t root_entries;
+    uint32_t total_sectors;
+    uint16_t fat_sectors;
+    uint32_t root_dir_sectors;
+    uint32_t first_root_sector;
+    uint32_t first_data_sector;
+    uint32_t fat_offset_bytes;
+    uint32_t fat_size_bytes;
+    uint32_t root_offset_bytes;
+    uint32_t root_size_bytes;
+    uint32_t data_offset_bytes;
+    uint32_t cluster_size_bytes;
+    uint32_t cluster_count;
+    fat_kind_t kind;
+} fat_view_t;
+
+static bool fat_mount_view(fat_view_t* out, const uint8_t* img, uint32_t img_len) {
+    if (!out) {
+        return false;
+    }
+    memset(out, 0, sizeof(*out));
+    out->kind = FAT_KIND_NONE;
+
+    if (!img || img_len < 512u) {
+        return false;
+    }
+
+    uint16_t bytes_per_sector = read_le16(img + 11);
+    uint8_t sectors_per_cluster = img[13];
+    uint16_t reserved_sectors = read_le16(img + 14);
+    uint8_t num_fats = img[16];
+    uint16_t root_entries = read_le16(img + 17);
+    uint16_t total16 = read_le16(img + 19);
+    uint16_t fat_sectors = read_le16(img + 22);
+    uint32_t total32 = read_le32(img + 32);
+
+    if (bytes_per_sector != 512u) {
+        return false;
+    }
+    if (sectors_per_cluster == 0 || (sectors_per_cluster & (sectors_per_cluster - 1u)) != 0) {
+        return false;
+    }
+    if (reserved_sectors == 0 || num_fats == 0 || fat_sectors == 0) {
+        return false;
+    }
+
+    uint32_t total_sectors = total16 ? (uint32_t)total16 : total32;
+    if (total_sectors == 0) {
+        return false;
+    }
+
+    uint32_t root_dir_sectors = ((uint32_t)root_entries * 32u + (bytes_per_sector - 1u)) / bytes_per_sector;
+    uint32_t first_root_sector = (uint32_t)reserved_sectors + (uint32_t)num_fats * (uint32_t)fat_sectors;
+    uint32_t first_data_sector = first_root_sector + root_dir_sectors;
+    if (first_data_sector > total_sectors) {
+        return false;
+    }
+
+    uint32_t data_sectors = total_sectors - first_data_sector;
+    uint32_t cluster_count = data_sectors / sectors_per_cluster;
+
+    fat_kind_t kind = FAT_KIND_NONE;
+    if (cluster_count < 4085u) {
+        kind = FAT_KIND_12;
+    } else if (cluster_count < 65525u) {
+        kind = FAT_KIND_16;
+    } else {
+        return false;
+    }
+
+    uint32_t fat_offset_bytes = (uint32_t)reserved_sectors * bytes_per_sector;
+    uint32_t fat_size_bytes = (uint32_t)fat_sectors * bytes_per_sector;
+    uint32_t root_offset_bytes = first_root_sector * bytes_per_sector;
+    uint32_t root_size_bytes = root_dir_sectors * bytes_per_sector;
+    uint32_t data_offset_bytes = first_data_sector * bytes_per_sector;
+    uint32_t cluster_size_bytes = (uint32_t)bytes_per_sector * sectors_per_cluster;
+
+    if (fat_offset_bytes + fat_size_bytes > img_len) {
+        return false;
+    }
+    if (root_offset_bytes + root_size_bytes > img_len) {
+        return false;
+    }
+    if (data_offset_bytes > img_len) {
+        return false;
+    }
+
+    out->img = img;
+    out->img_len = img_len;
+    out->bytes_per_sector = bytes_per_sector;
+    out->sectors_per_cluster = sectors_per_cluster;
+    out->reserved_sectors = reserved_sectors;
+    out->num_fats = num_fats;
+    out->root_entries = root_entries;
+    out->total_sectors = total_sectors;
+    out->fat_sectors = fat_sectors;
+    out->root_dir_sectors = root_dir_sectors;
+    out->first_root_sector = first_root_sector;
+    out->first_data_sector = first_data_sector;
+    out->fat_offset_bytes = fat_offset_bytes;
+    out->fat_size_bytes = fat_size_bytes;
+    out->root_offset_bytes = root_offset_bytes;
+    out->root_size_bytes = root_size_bytes;
+    out->data_offset_bytes = data_offset_bytes;
+    out->cluster_size_bytes = cluster_size_bytes;
+    out->cluster_count = cluster_count;
+    out->kind = kind;
+    return true;
+}
+
+static uint16_t fat_next_cluster(const fat_view_t* fs, uint16_t cluster) {
+    if (!fs || fs->kind == FAT_KIND_NONE) {
+        return 0;
+    }
+
+    const uint8_t* fat = fs->img + fs->fat_offset_bytes;
+    if (fs->kind == FAT_KIND_12) {
+        uint32_t offset = (uint32_t)cluster + (uint32_t)(cluster / 2u);
+        if (offset + 1u >= fs->fat_size_bytes) {
+            return 0;
+        }
+        uint16_t v = (uint16_t)fat[offset] | (uint16_t)((uint16_t)fat[offset + 1u] << 8);
+        if ((cluster & 1u) == 0) {
+            v &= 0x0FFFu;
+        } else {
+            v >>= 4;
+        }
+        return v;
+    }
+
+    uint32_t offset = (uint32_t)cluster * 2u;
+    if (offset + 1u >= fs->fat_size_bytes) {
+        return 0;
+    }
+    return (uint16_t)fat[offset] | (uint16_t)((uint16_t)fat[offset + 1u] << 8);
+}
+
+static bool fat_is_eoc(const fat_view_t* fs, uint16_t cluster) {
+    if (!fs) {
+        return true;
+    }
+    if (fs->kind == FAT_KIND_12) {
+        return cluster >= 0x0FF8u;
+    }
+    if (fs->kind == FAT_KIND_16) {
+        return cluster >= 0xFFF8u;
+    }
+    return true;
+}
+
+static uint32_t fat_count_root_files(const fat_view_t* fs) {
+    if (!fs || fs->kind == FAT_KIND_NONE) {
+        return 0;
+    }
+
+    uint32_t count = 0;
+    const uint8_t* root = fs->img + fs->root_offset_bytes;
+    uint32_t entries = (fs->root_size_bytes / 32u);
+    for (uint32_t i = 0; i < entries; i++) {
+        const uint8_t* e = root + i * 32u;
+        if (e[0] == 0x00) {
+            break;
+        }
+        if (e[0] == 0xE5) {
+            continue;
+        }
+        uint8_t attr = e[11];
+        if (attr == 0x0F) {
+            continue;
+        }
+        if (attr & 0x08u) {
+            continue;
+        }
+        if (attr & 0x10u) {
+            continue;
+        }
+        if (e[0] == '.') {
+            continue;
+        }
+        if (e[0] == ' ') {
+            continue;
+        }
+        count++;
+    }
+
+    return count;
+}
+
+static void fat_make_name(const uint8_t* e, char* out, uint32_t out_len) {
+    if (!out || out_len == 0) {
+        return;
+    }
+    out[0] = '\0';
+
+    char name[9];
+    char ext[4];
+    memcpy(name, e + 0, 8);
+    memcpy(ext, e + 8, 3);
+    name[8] = '\0';
+    ext[3] = '\0';
+
+    int n_end = 7;
+    while (n_end >= 0 && name[n_end] == ' ') n_end--;
+    int e_end = 2;
+    while (e_end >= 0 && ext[e_end] == ' ') e_end--;
+
+    uint32_t pos = 0;
+    for (int i = 0; i <= n_end && pos + 1u < out_len; i++) {
+        out[pos++] = (char)tolower(name[i]);
+    }
+    if (e_end >= 0 && pos + 1u < out_len) {
+        out[pos++] = '.';
+        for (int i = 0; i <= e_end && pos + 1u < out_len; i++) {
+            out[pos++] = (char)tolower(ext[i]);
+        }
+    }
+    out[pos] = '\0';
+}
+
+static bool fat_read_file_alloc(const fat_view_t* fs, uint16_t start_cluster, uint32_t size, uint8_t** out_buf) {
+    if (!out_buf) {
+        return false;
+    }
+    *out_buf = NULL;
+
+    if (!fs || fs->kind == FAT_KIND_NONE) {
+        return false;
+    }
+
+    uint8_t* buf = NULL;
+    if (size == 0) {
+        buf = (uint8_t*)kmalloc(1u);
+        if (!buf) {
+            return false;
+        }
+        buf[0] = 0;
+        *out_buf = buf;
+        return true;
+    }
+
+    buf = (uint8_t*)kmalloc(size);
+    if (!buf) {
+        return false;
+    }
+
+    uint32_t written = 0;
+    uint16_t cluster = start_cluster;
+    if (cluster < 2u) {
+        kfree(buf);
+        return false;
+    }
+
+    uint32_t max_steps = fs->cluster_count + 4u;
+    for (uint32_t step = 0; step < max_steps && written < size; step++) {
+        if (cluster < 2u || cluster >= (uint16_t)(fs->cluster_count + 2u)) {
+            kfree(buf);
+            return false;
+        }
+
+        uint32_t cl_off = fs->data_offset_bytes + (uint32_t)(cluster - 2u) * fs->cluster_size_bytes;
+        if (cl_off >= fs->img_len) {
+            kfree(buf);
+            return false;
+        }
+        uint32_t to_copy = fs->cluster_size_bytes;
+        if (to_copy > (size - written)) {
+            to_copy = (size - written);
+        }
+        if (cl_off + to_copy > fs->img_len) {
+            kfree(buf);
+            return false;
+        }
+        memcpy(buf + written, fs->img + cl_off, to_copy);
+        written += to_copy;
+
+        if (written >= size) {
+            break;
+        }
+
+        uint16_t next = fat_next_cluster(fs, cluster);
+        if (fat_is_eoc(fs, next)) {
+            break;
+        }
+        cluster = next;
+    }
+
+    if (written != size) {
+        kfree(buf);
+        return false;
+    }
+
+    *out_buf = buf;
+    return true;
+}
+
+static uint32_t fat_fill_root_files(vfs_file_t* out_files, uint32_t start_idx, uint32_t max_files, const fat_view_t* fs) {
+    if (!out_files || !fs || fs->kind == FAT_KIND_NONE) {
+        return 0;
+    }
+    uint32_t idx = start_idx;
+    const uint8_t* root = fs->img + fs->root_offset_bytes;
+    uint32_t entries = (fs->root_size_bytes / 32u);
+
+    for (uint32_t i = 0; i < entries && idx < max_files; i++) {
+        const uint8_t* e = root + i * 32u;
+        if (e[0] == 0x00) {
+            break;
+        }
+        if (e[0] == 0xE5) {
+            continue;
+        }
+        uint8_t attr = e[11];
+        if (attr == 0x0F) {
+            continue;
+        }
+        if (attr & 0x08u) {
+            continue;
+        }
+        if (attr & 0x10u) {
+            continue;
+        }
+        if (e[0] == '.') {
+            continue;
+        }
+
+        char name[32];
+        fat_make_name(e, name, sizeof(name));
+        if (name[0] == '\0') {
+            continue;
+        }
+
+        uint16_t first_cluster = read_le16(e + 26);
+        uint32_t size = read_le32(e + 28);
+
+        uint8_t* data = NULL;
+        if (!fat_read_file_alloc(fs, first_cluster, size, &data)) {
+            continue;
+        }
+
+        out_files[idx].name = dup_path("fat", name);
+        out_files[idx].data = data;
+        out_files[idx].size = size;
+        idx++;
+    }
+
+    return idx - start_idx;
+}
+
+void vfs_init(const multiboot_info_t* mbi) {
+    ready = false;
+    file_count = 0;
+    files = NULL;
+
+    if (!mbi || (mbi->flags & MULTIBOOT_INFO_MODS) == 0 || mbi->mods_count == 0 || mbi->mods_addr == 0) {
+        serial_write_string("[VFS] no multiboot modules\n");
+        return;
+    }
+
+    const multiboot_module_t* mods = (const multiboot_module_t*)mbi->mods_addr;
+    const uint8_t* tar = NULL;
+    uint32_t tar_len = 0;
+    if (mods[0].mod_end > mods[0].mod_start) {
+        tar = (const uint8_t*)mods[0].mod_start;
+        tar_len = mods[0].mod_end - mods[0].mod_start;
+    }
+
+    fat_view_t fat = {0};
+    bool fat_ok = false;
+    if (mbi->mods_count >= 2 && mods[1].mod_end > mods[1].mod_start) {
+        const uint8_t* fat_img = (const uint8_t*)mods[1].mod_start;
+        uint32_t fat_len = mods[1].mod_end - mods[1].mod_start;
+        fat_ok = fat_mount_view(&fat, fat_img, fat_len);
+        if (!fat_ok) {
+            serial_write_string("[VFS] fat module present but unsupported\n");
+        }
+    }
+
+    uint32_t tar_count = tar_count_files(tar, tar_len);
+    uint32_t fat_count = fat_ok ? fat_count_root_files(&fat) : 0;
+    file_count = tar_count + fat_count;
+
+    if (file_count == 0) {
+        serial_write_string("[VFS] no files\n");
+        return;
+    }
+
+    files = (vfs_file_t*)kcalloc(file_count, sizeof(vfs_file_t));
+    if (!files) {
+        serial_write_string("[VFS] out of memory\n");
+        file_count = 0;
+        return;
+    }
+
+    uint32_t idx = 0;
+    if (tar_count) {
+        idx += tar_fill_files(files + idx, file_count - idx, tar, tar_len);
+    }
+    if (fat_ok && fat_count) {
+        idx += fat_fill_root_files(files, idx, file_count, &fat);
+    }
+
     file_count = idx;
-    ready = true;
+    ready = (file_count != 0);
 
     serial_write_string("[VFS] initramfs files=");
-    serial_write_dec((int32_t)file_count);
+    serial_write_dec((int32_t)tar_count);
+    if (fat_ok) {
+        serial_write_string(" fat=");
+        serial_write_dec((int32_t)fat_count);
+    }
     serial_write_char('\n');
 }
 
@@ -199,6 +611,19 @@ const char* vfs_file_name(uint32_t idx) {
     return files[idx].name;
 }
 
+static bool path_equals_ci(const char* a, const char* b) {
+    for (;;) {
+        char ca = *a++;
+        char cb = *b++;
+        if (tolower((unsigned char)ca) != tolower((unsigned char)cb)) {
+            return false;
+        }
+        if (ca == '\0') {
+            return true;
+        }
+    }
+}
+
 bool vfs_read_file(const char* path, const uint8_t** out_data, uint32_t* out_size) {
     if (!ready || !path) {
         return false;
@@ -213,7 +638,7 @@ bool vfs_read_file(const char* path, const uint8_t** out_data, uint32_t* out_siz
         const char* name = files[i].name;
         const char* p = name;
         while (*p == '/') p++;
-        if (strcmp(p, path) == 0) {
+        if (path_equals_ci(p, path)) {
             if (out_data) *out_data = files[i].data;
             if (out_size) *out_size = files[i].size;
             return true;

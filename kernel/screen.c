@@ -3,7 +3,8 @@
 #include "serial.h"
 #include "string.h"
 #include "multiboot.h"
-#include "font8x8.h"
+#include "font.h"
+#include "font_terminus_psf2.h"
 
 typedef enum {
     SCREEN_BACKEND_VGA_TEXT = 0,
@@ -33,8 +34,6 @@ static uint8_t current_color = 0x0F; // White on black
 static int reserved_bottom_rows = 0;
 
 // Framebuffer mode state
-#define FONT_W 8
-#define FONT_H 8
 #define FB_MAX_COLS 200
 #define FB_MAX_ROWS 100
 
@@ -51,6 +50,7 @@ static uint8_t fb_g_pos = 0;
 static uint8_t fb_g_size = 0;
 static uint8_t fb_b_pos = 0;
 static uint8_t fb_b_size = 0;
+static font_t fb_font;
 
 static uint16_t fb_cells[FB_MAX_COLS * FB_MAX_ROWS];
 
@@ -209,18 +209,32 @@ static void fb_render_cell(int x, int y) {
     uint32_t fg_px = fb_color_from_vga(fg);
     uint32_t bg_px = fb_color_from_vga(bg);
 
-    uint32_t base_x = (uint32_t)x * FONT_W;
-    uint32_t base_y = (uint32_t)y * FONT_H;
+    uint32_t base_x = (uint32_t)x * fb_font.width;
+    uint32_t base_y = (uint32_t)y * fb_font.height;
 
-    for (uint32_t row = 0; row < 8; row++) {
-        uint8_t bits = font8x8_basic[ch < 128 ? ch : (uint8_t)'?'][row];
-        for (uint32_t col = 0; col < 8; col++) {
-            uint32_t px = base_x + col;
-            uint32_t py = base_y + row;
-            uint32_t pixel = (bits & (1u << col)) ? fg_px : bg_px;
-            fb_put_pixel(px, py, pixel);
+    uint32_t glyph_idx = (uint32_t)ch;
+    if (glyph_idx >= fb_font.glyph_count) {
+        glyph_idx = (uint32_t)'?';
+        if (glyph_idx >= fb_font.glyph_count) {
+            glyph_idx = 0;
         }
     }
+    const uint8_t* glyph = fb_font.glyphs + glyph_idx * fb_font.bytes_per_glyph;
+
+    for (uint32_t row = 0; row < fb_font.height; row++) {
+        const uint8_t* row_data = glyph + row * fb_font.row_bytes;
+        for (uint32_t col = 0; col < fb_font.width; col++) {
+            uint32_t px = base_x + col;
+            uint32_t py = base_y + row;
+            uint8_t byte = row_data[col / 8u];
+            bool on = (byte & (uint8_t)(0x80u >> (col & 7u))) != 0;
+            fb_put_pixel(px, py, on ? fg_px : bg_px);
+        }
+    }
+}
+
+static uint32_t fb_cursor_thickness(void) {
+    return (fb_font.height >= 16u) ? 2u : 1u;
 }
 
 static void fb_draw_cursor_overlay(int x, int y) {
@@ -233,10 +247,11 @@ static void fb_draw_cursor_overlay(int x, int y) {
     uint8_t fg = (uint8_t)(color & 0x0Fu);
     uint32_t fg_px = fb_color_from_vga(fg);
 
-    uint32_t base_x = (uint32_t)x * FONT_W;
-    uint32_t base_y = (uint32_t)y * FONT_H;
-    uint32_t y0 = base_y + (FONT_H - 1u);
-    fb_fill_rect(base_x, y0, FONT_W, 1u, fg_px);
+    uint32_t base_x = (uint32_t)x * fb_font.width;
+    uint32_t base_y = (uint32_t)y * fb_font.height;
+    uint32_t thickness = fb_cursor_thickness();
+    uint32_t y0 = base_y + (fb_font.height - thickness);
+    fb_fill_rect(base_x, y0, fb_font.width, thickness, fg_px);
 }
 
 static void fb_update_cursor(void) {
@@ -301,13 +316,13 @@ static void fb_scroll(void) {
         fb_cells[(height - 1) * cols + x] = blank;
     }
 
-    uint32_t usable_px_height = (uint32_t)height * FONT_H;
-    uint32_t copy_bytes = (usable_px_height - FONT_H) * fb_pitch;
-    memcpy(fb_addr, fb_addr + FONT_H * fb_pitch, copy_bytes);
+    uint32_t usable_px_height = (uint32_t)height * fb_font.height;
+    uint32_t copy_bytes = (usable_px_height - fb_font.height) * fb_pitch;
+    memcpy(fb_addr, fb_addr + fb_font.height * fb_pitch, copy_bytes);
 
     uint8_t bg = (uint8_t)((current_color >> 4) & 0x0Fu);
     uint32_t bg_px = fb_color_from_vga(bg);
-    fb_fill_rect(0, (uint32_t)(height - 1) * FONT_H, fb_width, FONT_H, bg_px);
+    fb_fill_rect(0, (uint32_t)(height - 1) * fb_font.height, fb_width, fb_font.height, bg_px);
 
     cursor_y = height - 1;
 }
@@ -362,6 +377,14 @@ void screen_init(uint32_t multiboot_magic, uint32_t* mboot_info) {
     fb_bpp = 0;
     fb_bytes_per_pixel = 0;
     fb_type = 0;
+    fb_font = (font_t){
+        .width = 0,
+        .height = 0,
+        .row_bytes = 0,
+        .glyph_count = 0,
+        .bytes_per_glyph = 0,
+        .glyphs = NULL,
+    };
 
     if (multiboot_magic == MULTIBOOT_BOOTLOADER_MAGIC && mboot_info) {
         const multiboot_info_t* mbi = (const multiboot_info_t*)mboot_info;
@@ -384,24 +407,53 @@ void screen_init(uint32_t multiboot_magic, uint32_t* mboot_info) {
                     fb_b_pos = mbi->framebuffer_blue_field_position;
                     fb_b_size = mbi->framebuffer_blue_mask_size;
 
-                    int cols = (int)(fb_width / FONT_W);
-                    int rows = (int)(fb_height / FONT_H);
-                    if (cols < 1) cols = 1;
-                    if (rows < 1) rows = 1;
-                    if (cols > FB_MAX_COLS) cols = FB_MAX_COLS;
-                    if (rows > FB_MAX_ROWS) rows = FB_MAX_ROWS;
+                    const uint8_t* font_data = font_terminus24x12_psf2;
+                    uint32_t font_len = font_terminus24x12_psf2_len;
+                    if (fb_width >= 1024 && fb_height >= 768) {
+                        font_data = font_terminus32x16_psf2;
+                        font_len = font_terminus32x16_psf2_len;
+                    }
 
-                    screen_cols_value = cols;
-                    screen_rows_value = rows;
-                    backend = SCREEN_BACKEND_FRAMEBUFFER;
+                    bool font_ok = font_psf2_parse(font_data, font_len, &fb_font);
+                    if (!font_ok) {
+                        font_data = font_terminus24x12_psf2;
+                        font_len = font_terminus24x12_psf2_len;
+                        font_ok = font_psf2_parse(font_data, font_len, &fb_font);
+                    }
 
-                    serial_write_string("[OK] Framebuffer ");
-                    serial_write_dec((int32_t)fb_width);
-                    serial_write_char('x');
-                    serial_write_dec((int32_t)fb_height);
-                    serial_write_string("x");
-                    serial_write_dec((int32_t)fb_bpp);
-                    serial_write_char('\n');
+                    if (!font_ok || fb_font.width == 0 || fb_font.height == 0) {
+                        serial_write_string("[WARN] Framebuffer font unavailable, using VGA text\n");
+                        fb_addr = 0;
+                        fb_pitch = 0;
+                        fb_width = 0;
+                        fb_height = 0;
+                        fb_bpp = 0;
+                        fb_bytes_per_pixel = 0;
+                        fb_type = 0;
+                    } else {
+                        int cols = (int)(fb_width / fb_font.width);
+                        int rows = (int)(fb_height / fb_font.height);
+                        if (cols < 1) cols = 1;
+                        if (rows < 1) rows = 1;
+                        if (cols > FB_MAX_COLS) cols = FB_MAX_COLS;
+                        if (rows > FB_MAX_ROWS) rows = FB_MAX_ROWS;
+
+                        screen_cols_value = cols;
+                        screen_rows_value = rows;
+                        backend = SCREEN_BACKEND_FRAMEBUFFER;
+
+                        serial_write_string("[OK] Framebuffer ");
+                        serial_write_dec((int32_t)fb_width);
+                        serial_write_char('x');
+                        serial_write_dec((int32_t)fb_height);
+                        serial_write_string("x");
+                        serial_write_dec((int32_t)fb_bpp);
+                        serial_write_string(" font ");
+                        serial_write_dec((int32_t)fb_font.width);
+                        serial_write_char('x');
+                        serial_write_dec((int32_t)fb_font.height);
+                        serial_write_char('\n');
+                    }
                 }
             }
         }

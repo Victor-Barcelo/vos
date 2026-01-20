@@ -5,6 +5,10 @@
 static struct idt_entry idt[256];
 static struct idt_ptr idtp;
 
+extern void isr_default(void);
+extern uint32_t isr_stub_table[32];
+extern uint32_t irq_stub_table[16];
+
 void idt_set_gate(uint8_t num, uint32_t base, uint16_t selector, uint8_t flags) {
     idt[num].base_low = base & 0xFFFF;
     idt[num].base_high = (base >> 16) & 0xFFFF;
@@ -49,29 +53,35 @@ static void pic_remap(void) {
 }
 
 void idt_init(void) {
+    uint16_t code_selector;
+    __asm__ volatile ("mov %%cs, %0" : "=r"(code_selector));
+
     // Set up IDT pointer
     idtp.limit = sizeof(idt) - 1;
     idtp.base = (uint32_t)&idt;
 
-    // Set default handler for all interrupts
-    // Note: GRUB uses selector 0x10 for code segment, not 0x08
+    // Set default handler for all vectors
     for (int i = 0; i < 256; i++) {
-        idt_set_gate(i, (uint32_t)isr_default, 0x10, 0x8E);
+        idt_set_gate(i, (uint32_t)isr_default, code_selector, 0x8E);
+    }
+
+    // CPU exceptions (0-31)
+    for (int i = 0; i < 32; i++) {
+        idt_set_gate((uint8_t)i, isr_stub_table[i], code_selector, 0x8E);
     }
 
     // Remap the PIC
     pic_remap();
 
-    // Set up timer handler (IRQ0 = INT 32)
-    idt_set_gate(32, (uint32_t)isr_timer, 0x10, 0x8E);
-
-    // Set up keyboard handler (IRQ1 = INT 33)
-    idt_set_gate(33, (uint32_t)isr_keyboard, 0x10, 0x8E);
+    // Hardware IRQs (32-47)
+    for (int i = 0; i < 16; i++) {
+        idt_set_gate((uint8_t)(32 + i), irq_stub_table[i], code_selector, 0x8E);
+    }
 
     // Mask all IRQs except keyboard (IRQ1)
-    // Master PIC: enable only IRQ1 (keyboard)
-    outb(0x21, 0xFD);  // 11111101 - enable only IRQ1 (keyboard)
-    // Slave PIC: mask all
+    // Master PIC: unmask IRQ1 (keyboard) and IRQ2 (cascade)
+    outb(0x21, 0xF9);
+    // Slave PIC: mask all by default
     outb(0xA1, 0xFF);
 
     // Load the IDT

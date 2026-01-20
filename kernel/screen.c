@@ -1,5 +1,6 @@
 #include "screen.h"
 #include "io.h"
+#include "serial.h"
 
 // VGA text buffer address
 static uint16_t* const VGA_BUFFER = (uint16_t*)0xB8000;
@@ -93,6 +94,9 @@ void screen_putchar(char c) {
     }
 
     update_cursor();
+
+    // Mirror VGA output to serial for debugging/logging.
+    serial_write_char(c);
 }
 
 void screen_print(const char* str) {

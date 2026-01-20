@@ -1,16 +1,26 @@
 #include "types.h"
+#include "serial.h"
 #include "screen.h"
 #include "keyboard.h"
 #include "idt.h"
 #include "shell.h"
 #include "io.h"
+#include "interrupts.h"
 
 // Multiboot magic number
 #define MULTIBOOT_MAGIC 0x2BADB002
 
+static void keyboard_irq_handler(interrupt_frame_t* frame) {
+    (void)frame;
+    keyboard_handler();
+}
+
 // Kernel main entry point
 void kernel_main(uint32_t magic, uint32_t* mboot_info) {
     (void)mboot_info;  // Reserved for future use
+
+    // Initialize serial early for logging/debugging (COM1).
+    serial_init();
 
     // Initialize the screen
     screen_init();
@@ -38,19 +48,21 @@ void kernel_main(uint32_t magic, uint32_t* mboot_info) {
         screen_println("");
     }
 
-    // Initialize IDT (Interrupt Descriptor Table)
+    idt_init();
     screen_set_color(VGA_LIGHT_GREEN, VGA_BLACK);
     screen_print("[OK] ");
     screen_set_color(VGA_WHITE, VGA_BLACK);
     screen_println("IDT initialized");
-    idt_init();
 
-    // Initialize keyboard
+    // Route IRQ1 (keyboard) through the common IRQ handler.
+    irq_register_handler(1, keyboard_irq_handler);
+
+    // Initialize keyboard (flush controller)
+    keyboard_init();
     screen_set_color(VGA_LIGHT_GREEN, VGA_BLACK);
     screen_print("[OK] ");
     screen_set_color(VGA_WHITE, VGA_BLACK);
     screen_println("Keyboard initialized");
-    keyboard_init();
 
     // Enable interrupts
     sti();

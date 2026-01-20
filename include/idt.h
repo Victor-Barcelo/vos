@@ -26,8 +26,5 @@ void idt_set_gate(uint8_t num, uint32_t base, uint16_t selector, uint8_t flags);
 
 // Assembly functions (defined in boot.asm)
 extern void idt_flush(uint32_t);
-extern void isr_default(void);
-extern void isr_timer(void);
-extern void isr_keyboard(void);
 
 #endif

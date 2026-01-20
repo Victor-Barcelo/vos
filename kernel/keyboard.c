@@ -106,7 +106,6 @@ void keyboard_handler(void) {
     // Check for extended key prefix
     if (scancode == 0xE0) {
         extended_key = true;
-        outb(0x20, 0x20);
         return;
     }
 
@@ -192,8 +191,7 @@ void keyboard_handler(void) {
         }
     }
 
-    // Send End of Interrupt to PIC
-    outb(0x20, 0x20);
+    // PIC EOI is sent by the common IRQ handler.
 }
 
 bool keyboard_has_key(void) {

@@ -10,3 +10,7 @@ build/
 *.swp
 *.swo
 *~
+
+# Runtime artifacts
+vos-serial.log
+qemu.pid

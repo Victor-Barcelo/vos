@@ -1079,6 +1079,9 @@ void screen_init(uint32_t multiboot_magic, uint32_t* mboot_info) {
 
 void screen_putchar(char c) {
     if (ansi_handle_char(c)) {
+        // Mirror ANSI escape bytes to serial so VT100-style userland (microrl, etc.)
+        // remains usable over a host terminal connected to COM1.
+        serial_write_char(c);
         return;
     }
 

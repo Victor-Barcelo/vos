@@ -4,6 +4,7 @@
 #include "idt.h"
 #include "ctype.h"
 #include "string.h"
+#include "serial.h"
 
 // Keyboard ports
 #define KEYBOARD_DATA_PORT   0x60
@@ -240,7 +241,13 @@ char keyboard_getchar(void) {
     }
 
     char c = 0;
-    while (!keyboard_try_getchar(&c)) {
+    for (;;) {
+        if (keyboard_try_getchar(&c)) {
+            break;
+        }
+        if (serial_try_read_char(&c)) {
+            break;
+        }
         hlt();
         if (idle_hook) {
             idle_hook();

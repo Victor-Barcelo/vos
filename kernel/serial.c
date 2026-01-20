@@ -9,6 +9,10 @@ static bool serial_transmit_empty(void) {
     return (inb(COM1_BASE + 5) & 0x20) != 0;
 }
 
+static bool serial_received(void) {
+    return (inb(COM1_BASE + 5) & 0x01) != 0;
+}
+
 void serial_init(void) {
     outb(COM1_BASE + 1, 0x00);  // Disable interrupts
     outb(COM1_BASE + 3, 0x80);  // Enable DLAB
@@ -84,4 +88,23 @@ void serial_write_dec(int32_t value) {
     while (i > 0) {
         serial_write_char(buf[--i]);
     }
+}
+
+bool serial_try_read_char(char* out) {
+    if (!serial_initialized || !out) {
+        return false;
+    }
+    if (!serial_received()) {
+        return false;
+    }
+
+    char c = (char)inb(COM1_BASE + 0);
+    if (c == '\r') {
+        c = '\n';
+    } else if ((uint8_t)c == 0x7Fu) {
+        c = '\b';
+    }
+
+    *out = c;
+    return true;
 }

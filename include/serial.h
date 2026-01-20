@@ -9,5 +9,6 @@ void serial_write_char(char c);
 void serial_write_string(const char* str);
 void serial_write_hex(uint32_t value);
 void serial_write_dec(int32_t value);
+bool serial_try_read_char(char* out);
 
 #endif

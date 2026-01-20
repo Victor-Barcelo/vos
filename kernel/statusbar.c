@@ -4,10 +4,10 @@
 #include "rtc.h"
 #include "system.h"
 
-static uint32_t last_drawn_second = 0xFFFFFFFFu;
+static uint32_t last_drawn_minute = 0xFFFFFFFFu;
 
 static uint8_t status_color(void) {
-    return (uint8_t)(VGA_BLACK | (VGA_LIGHT_GREY << 4));
+    return (uint8_t)(VGA_WHITE | (VGA_BLUE << 4));
 }
 
 static void append_char(char* buf, int* pos, int max, char c) {
@@ -64,15 +64,15 @@ static void draw_statusbar(void) {
         append_2d(line, &pos, VGA_WIDTH, dt.hour);
         append_char(line, &pos, VGA_WIDTH, ':');
         append_2d(line, &pos, VGA_WIDTH, dt.minute);
-        append_char(line, &pos, VGA_WIDTH, ':');
-        append_2d(line, &pos, VGA_WIDTH, dt.second);
     } else {
         append_str(line, &pos, VGA_WIDTH, "RTC ?");
     }
 
+    uint32_t up_ms = timer_uptime_ms();
+    uint32_t up_min = up_ms / 60000u;
     append_str(line, &pos, VGA_WIDTH, " | up ");
-    append_u32_dec(line, &pos, VGA_WIDTH, timer_uptime_ms() / 1000u);
-    append_char(line, &pos, VGA_WIDTH, 's');
+    append_u32_dec(line, &pos, VGA_WIDTH, up_min);
+    append_char(line, &pos, VGA_WIDTH, 'm');
 
     uint32_t mem_kb = system_mem_total_kb();
     if (mem_kb != 0) {
@@ -100,19 +100,20 @@ static void draw_statusbar(void) {
 
 void statusbar_init(void) {
     screen_set_reserved_bottom_rows(1);
-    last_drawn_second = 0xFFFFFFFFu;
+    last_drawn_minute = 0xFFFFFFFFu;
     draw_statusbar();
 }
 
 void statusbar_tick(void) {
-    uint32_t hz = timer_get_hz();
-    uint32_t second = 0;
-    if (hz != 0) {
-        second = timer_get_ticks() / hz;
-    }
-    if (second == last_drawn_second) {
+    uint32_t minute = timer_uptime_ms() / 60000u;
+    if (minute == last_drawn_minute) {
         return;
     }
-    last_drawn_second = second;
+    last_drawn_minute = minute;
+    draw_statusbar();
+}
+
+void statusbar_refresh(void) {
+    last_drawn_minute = 0xFFFFFFFFu;
     draw_statusbar();
 }

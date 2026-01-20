@@ -27,6 +27,32 @@ static void cmd_sleep(const char* args);
 static void cmd_date(void);
 static void cmd_setdate(const char* args);
 
+static void shell_idle_hook(void) {
+    statusbar_tick();
+
+    static bool cursor_on = true;
+    static uint32_t next_toggle_tick = 0;
+
+    uint32_t hz = timer_get_hz();
+    if (hz == 0) {
+        return;
+    }
+
+    uint32_t now = timer_get_ticks();
+    if ((int32_t)(now - next_toggle_tick) < 0) {
+        return;
+    }
+
+    cursor_on = !cursor_on;
+    screen_cursor_set_enabled(cursor_on);
+
+    uint32_t interval = hz / 2u;
+    if (interval == 0) {
+        interval = 1;
+    }
+    next_toggle_tick = now + interval;
+}
+
 // Print the shell prompt
 static void print_prompt(void) {
     screen_set_color(VGA_LIGHT_GREEN, VGA_BLACK);
@@ -294,6 +320,7 @@ static void cmd_setdate(const char* args) {
     }
 
     screen_println("RTC updated.");
+    statusbar_refresh();
 }
 
 // BASIC interpreter command
@@ -445,7 +472,7 @@ void shell_run(void) {
     char command_buffer[MAX_COMMAND_LENGTH];
 
     statusbar_init();
-    keyboard_set_idle_hook(statusbar_tick);
+    keyboard_set_idle_hook(shell_idle_hook);
 
     screen_set_color(VGA_LIGHT_CYAN, VGA_BLACK);
     screen_println("Welcome to VOS Shell!");

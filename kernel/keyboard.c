@@ -202,6 +202,8 @@ bool keyboard_has_key(void) {
 
 char keyboard_getchar(void) {
     // Wait for a key.
+    screen_cursor_set_enabled(true);
+
     if (!irq_are_enabled()) {
         while (!keyboard_has_key()) {
             __asm__ volatile ("pause");
@@ -215,6 +217,7 @@ char keyboard_getchar(void) {
             idle_hook();
         }
     }
+    screen_cursor_set_enabled(true);
     return buffer_pop();
 }
 

@@ -233,3 +233,15 @@ void screen_fill_row(int y, char c, uint8_t color) {
         screen_write_char_at(x, y, c, color);
     }
 }
+
+void screen_cursor_set_enabled(bool enabled) {
+    outb(0x3D4, 0x0A);
+    uint8_t cur_start = inb(0x3D5);
+    if (enabled) {
+        cur_start &= (uint8_t)~0x20;
+    } else {
+        cur_start |= 0x20;
+    }
+    outb(0x3D4, 0x0A);
+    outb(0x3D5, cur_start);
+}

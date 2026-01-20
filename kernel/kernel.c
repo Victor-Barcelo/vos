@@ -14,11 +14,15 @@
 #include "paging.h"
 #include "kheap.h"
 #include "vfs.h"
+#include "gdt.h"
+#include "task.h"
+#include "elf.h"
 
 // Multiboot magic number
 #define MULTIBOOT_MAGIC 0x2BADB002
 
 extern uint8_t __kernel_end;
+extern uint8_t stack_top;
 
 static uint32_t align_up_u32(uint32_t v, uint32_t a) {
     return (v + a - 1u) & ~(a - 1u);
@@ -63,6 +67,33 @@ static void keyboard_irq_handler(interrupt_frame_t* frame) {
     keyboard_handler();
 }
 
+static void try_start_init(void) {
+    if (!vfs_is_ready()) {
+        return;
+    }
+
+    const uint8_t* data = NULL;
+    uint32_t size = 0;
+    if (!vfs_read_file("/bin/init", &data, &size) || !data || size == 0) {
+        return;
+    }
+
+    uint32_t entry = 0;
+    uint32_t user_esp = 0;
+    if (!elf_load_user_image(data, size, &entry, &user_esp)) {
+        return;
+    }
+
+    if (!tasking_spawn_user(entry, user_esp)) {
+        return;
+    }
+
+    serial_write_string("[INIT] spawned /bin/init\n");
+
+    // Let init run immediately.
+    __asm__ volatile ("int $0x80" : : "a"(2u) : "memory");
+}
+
 // Kernel main entry point
 void kernel_main(uint32_t magic, uint32_t* mboot_info) {
     // Initialize serial early for logging/debugging (COM1).
@@ -104,6 +135,9 @@ void kernel_main(uint32_t magic, uint32_t* mboot_info) {
 
     system_init(magic, mboot_info);
 
+    gdt_init();
+    tss_set_kernel_stack((uint32_t)&stack_top);
+
     idt_init();
     screen_set_color(VGA_LIGHT_GREEN, VGA_BLUE);
     screen_print("[OK] ");
@@ -126,12 +160,16 @@ void kernel_main(uint32_t magic, uint32_t* mboot_info) {
     screen_set_color(VGA_WHITE, VGA_BLUE);
     screen_println("Keyboard initialized");
 
+    tasking_init();
+
     // Enable interrupts
     sti();
     screen_set_color(VGA_LIGHT_GREEN, VGA_BLUE);
     screen_print("[OK] ");
     screen_set_color(VGA_WHITE, VGA_BLUE);
     screen_println("Interrupts enabled");
+
+    try_start_init();
 
     screen_println("");
     screen_set_color(VGA_LIGHT_CYAN, VGA_BLUE);

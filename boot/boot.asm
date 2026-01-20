@@ -22,6 +22,7 @@ section .bss
 align 16
 stack_bottom:
     resb 16384                      ; 16 KB stack
+global stack_top
 stack_top:
 
 ; Entry point
@@ -59,6 +60,12 @@ gdt_flush:
     mov ss, ax
     jmp 0x08:.flush                 ; Far jump to code segment
 .flush:
+    ret
+
+global tss_flush
+tss_flush:
+    mov ax, [esp + 4]              ; TSS selector
+    ltr ax
     ret
 
 global idt_flush
@@ -132,6 +139,9 @@ ISR_NOERRCODE 29
 ISR_NOERRCODE 30
 ISR_NOERRCODE 31
 
+; Syscall interrupt (int 0x80)
+ISR_NOERRCODE 128
+
 ; Hardware IRQs (mapped to vectors 32-47)
 IRQ 0, 32
 IRQ 1, 33
@@ -170,10 +180,16 @@ isr_common_stub:
     push es
     push fs
     push gs
+    mov ax, 0x10                    ; Kernel data selector
+    mov ds, ax
+    mov es, ax
+    mov fs, ax
+    mov gs, ax
     cld
     push esp
     call interrupt_handler
     add esp, 4
+    mov esp, eax
     pop gs
     pop fs
     pop es

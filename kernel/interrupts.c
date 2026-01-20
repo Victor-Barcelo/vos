@@ -1,6 +1,8 @@
 #include "interrupts.h"
 #include "io.h"
 #include "panic.h"
+#include "syscall.h"
+#include "task.h"
 
 static irq_handler_t irq_handlers[16] = {0};
 
@@ -52,13 +54,17 @@ static const char* const exception_names[32] = {
     "Reserved",
 };
 
-void interrupt_handler(interrupt_frame_t* frame) {
+interrupt_frame_t* interrupt_handler(interrupt_frame_t* frame) {
     if (!frame) {
         panic("interrupt_handler: NULL frame");
     }
 
     if (frame->int_no < 32) {
         panic_with_frame(exception_names[frame->int_no], frame);
+    }
+
+    if (frame->int_no == 0x80) {
+        return syscall_handle(frame);
     }
 
     if (frame->int_no >= 32 && frame->int_no < 48) {
@@ -68,6 +74,11 @@ void interrupt_handler(interrupt_frame_t* frame) {
             handler(frame);
         }
         pic_send_eoi(irq);
-        return;
+        if (irq == 0) {
+            return tasking_on_timer_tick(frame);
+        }
+        return frame;
     }
+
+    return frame;
 }

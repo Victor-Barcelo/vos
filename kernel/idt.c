@@ -8,6 +8,7 @@ static struct idt_ptr idtp;
 extern void isr_default(void);
 extern uint32_t isr_stub_table[32];
 extern uint32_t irq_stub_table[16];
+extern void isr128(void);
 
 void idt_set_gate(uint8_t num, uint32_t base, uint16_t selector, uint8_t flags) {
     idt[num].base_low = base & 0xFFFF;
@@ -77,6 +78,9 @@ void idt_init(void) {
     for (int i = 0; i < 16; i++) {
         idt_set_gate((uint8_t)(32 + i), irq_stub_table[i], code_selector, 0x8E);
     }
+
+    // Syscall gate (int 0x80) - callable from ring 3.
+    idt_set_gate(0x80, (uint32_t)isr128, code_selector, 0xEE);
 
     // Mask all IRQs except timer (IRQ0) and keyboard (IRQ1).
     // Master PIC: unmask IRQ0 (timer), IRQ1 (keyboard), IRQ2 (cascade)

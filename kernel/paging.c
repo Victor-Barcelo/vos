@@ -13,15 +13,22 @@ static inline uint32_t page_align_up(uint32_t addr) {
     return (addr + PAGE_SIZE - 1u) & ~(PAGE_SIZE - 1u);
 }
 
-static uint32_t* ensure_page_table(uint32_t dir_index) {
+static uint32_t* ensure_page_table(uint32_t dir_index, uint32_t map_flags) {
     uint32_t entry = page_directory[dir_index];
     if (entry & PAGE_PRESENT) {
+        if (map_flags & PAGE_USER) {
+            page_directory[dir_index] |= PAGE_USER;
+        }
         return (uint32_t*)(entry & 0xFFFFF000u);
     }
 
     uint32_t* table = (uint32_t*)early_alloc(PAGE_SIZE, PAGE_SIZE);
     memset(table, 0, PAGE_SIZE);
-    page_directory[dir_index] = ((uint32_t)table & 0xFFFFF000u) | PAGE_PRESENT | PAGE_RW;
+    uint32_t pde_flags = PAGE_PRESENT | PAGE_RW;
+    if (map_flags & PAGE_USER) {
+        pde_flags |= PAGE_USER;
+    }
+    page_directory[dir_index] = ((uint32_t)table & 0xFFFFF000u) | pde_flags;
     return table;
 }
 
@@ -29,7 +36,7 @@ void paging_map_page(uint32_t vaddr, uint32_t paddr, uint32_t flags) {
     uint32_t dir_index = (vaddr >> 22) & 0x3FFu;
     uint32_t tbl_index = (vaddr >> 12) & 0x3FFu;
 
-    uint32_t* table = ensure_page_table(dir_index);
+    uint32_t* table = ensure_page_table(dir_index, flags);
     table[tbl_index] = (paddr & 0xFFFFF000u) | (flags & 0xFFFu);
 }
 
@@ -98,4 +105,3 @@ uint32_t paging_get_cr3(void) {
     __asm__ volatile ("mov %%cr3, %0" : "=r"(cr3));
     return cr3;
 }
-

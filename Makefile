@@ -34,6 +34,17 @@ ISO = vos.iso
 # Initramfs (multiboot module)
 INITRAMFS_DIR = initramfs
 INITRAMFS_TAR = $(ISO_DIR)/boot/initramfs.tar
+INITRAMFS_ROOT = $(BUILD_DIR)/initramfs_root
+
+# Simple userland (ELF32)
+USER_DIR = user
+USER_BUILD_DIR = $(BUILD_DIR)/user
+USER_ASM_SOURCES = $(USER_DIR)/crt0.asm
+USER_C_SOURCES = $(USER_DIR)/init.c
+USER_ASM_OBJECTS = $(USER_BUILD_DIR)/crt0.o
+USER_C_OBJECTS = $(USER_BUILD_DIR)/init.o
+USER_OBJECTS = $(USER_ASM_OBJECTS) $(USER_C_OBJECTS)
+USER_INIT = $(USER_BUILD_DIR)/init.elf
 
 # QEMU defaults
 QEMU_XRES ?= 1280
@@ -46,9 +57,25 @@ all: $(ISO)
 $(BUILD_DIR):
 	mkdir -p $(BUILD_DIR)
 
+# Create user build directory
+$(USER_BUILD_DIR): | $(BUILD_DIR)
+	mkdir -p $(USER_BUILD_DIR)
+
 # Compile assembly
 $(BUILD_DIR)/boot.o: $(BOOT_DIR)/boot.asm | $(BUILD_DIR)
 	$(AS) $(ASFLAGS) $< -o $@
+
+# Compile userland assembly
+$(USER_BUILD_DIR)/%.o: $(USER_DIR)/%.asm | $(USER_BUILD_DIR)
+	$(AS) $(ASFLAGS) $< -o $@
+
+# Compile userland C
+$(USER_BUILD_DIR)/%.o: $(USER_DIR)/%.c | $(USER_BUILD_DIR)
+	$(CC) -m32 -ffreestanding -fno-stack-protector -fno-pie -nostdlib -Wall -Wextra -O2 -I$(USER_DIR) -c $< -o $@
+
+# Link userland init (static, freestanding)
+$(USER_INIT): $(USER_OBJECTS)
+	$(LD) -m elf_i386 -T $(USER_DIR)/linker.ld -nostdlib $(USER_OBJECTS) -o $@
 
 # Compile C files
 $(BUILD_DIR)/%.o: $(KERNEL_DIR)/%.c | $(BUILD_DIR)
@@ -59,10 +86,15 @@ $(KERNEL): $(OBJECTS)
 	$(LD) $(LDFLAGS) $(OBJECTS) -o $@
 
 # Create bootable ISO
-$(ISO): $(KERNEL)
+$(ISO): $(KERNEL) $(USER_INIT)
 	mkdir -p $(ISO_DIR)/boot/grub
 	cp $(KERNEL) $(ISO_DIR)/boot/kernel.bin
-	if [ -d "$(INITRAMFS_DIR)" ]; then tar -C $(INITRAMFS_DIR) -cf $(INITRAMFS_TAR) . ; fi
+	rm -rf $(INITRAMFS_ROOT)
+	mkdir -p $(INITRAMFS_ROOT)
+	if [ -d "$(INITRAMFS_DIR)" ]; then cp -r $(INITRAMFS_DIR)/* $(INITRAMFS_ROOT)/ 2>/dev/null || true ; fi
+	mkdir -p $(INITRAMFS_ROOT)/bin
+	cp $(USER_INIT) $(INITRAMFS_ROOT)/bin/init
+	tar -C $(INITRAMFS_ROOT) -cf $(INITRAMFS_TAR) .
 	echo 'set timeout=0' > $(ISO_DIR)/boot/grub/grub.cfg
 	echo 'set default=0' >> $(ISO_DIR)/boot/grub/grub.cfg
 	echo 'insmod all_video' >> $(ISO_DIR)/boot/grub/grub.cfg
@@ -74,7 +106,7 @@ $(ISO): $(KERNEL)
 	echo 'terminal_output gfxterm' >> $(ISO_DIR)/boot/grub/grub.cfg
 	echo 'menuentry "VOS" {' >> $(ISO_DIR)/boot/grub/grub.cfg
 	echo '    multiboot /boot/kernel.bin' >> $(ISO_DIR)/boot/grub/grub.cfg
-	if [ -f "$(INITRAMFS_TAR)" ]; then echo '    module /boot/initramfs.tar' >> $(ISO_DIR)/boot/grub/grub.cfg ; fi
+	echo '    module /boot/initramfs.tar' >> $(ISO_DIR)/boot/grub/grub.cfg
 	echo '}' >> $(ISO_DIR)/boot/grub/grub.cfg
 	grub-mkrescue -o $(ISO) $(ISO_DIR)
 

@@ -7,6 +7,8 @@
 #include "rtc.h"
 #include "statusbar.h"
 #include "vfs.h"
+#include "elf.h"
+#include "task.h"
 #include "ubasic.h"
 #include "basic_programs.h"
 #include "stdlib.h"
@@ -29,6 +31,7 @@ static void cmd_date(void);
 static void cmd_setdate(const char* args);
 static void cmd_ls(void);
 static void cmd_cat(const char* args);
+static void cmd_run(const char* args);
 
 static void print_help_cmd(const char* cmd, const char* desc) {
     screen_set_color(VGA_YELLOW, VGA_BLUE);
@@ -129,6 +132,8 @@ static void execute_command(char* input) {
         cmd_ls();
     } else if (strcmp(input, "cat") == 0) {
         cmd_cat(args);
+    } else if (strcmp(input, "run") == 0) {
+        cmd_run(args);
     } else {
         screen_set_color(VGA_LIGHT_RED, VGA_BLUE);
         screen_print("Unknown command: ");
@@ -153,6 +158,7 @@ static void cmd_help(void) {
     print_help_cmd("setdate", "Set RTC date/time (YYYY-MM-DD HH:MM:SS)");
     print_help_cmd("ls", "List initramfs files");
     print_help_cmd("cat <file>", "Print a file from initramfs");
+    print_help_cmd("run <elf>", "Run a user-mode ELF from initramfs");
     print_help_cmd("color <0-15>", "Change text color");
     print_help_cmd("basic", "Start BASIC interpreter");
     print_help_cmd("reboot", "Reboot the system");
@@ -396,6 +402,41 @@ static void cmd_cat(const char* args) {
     if (size > max) {
         screen_println("[...truncated...]");
     }
+}
+
+static void cmd_run(const char* args) {
+    if (!vfs_is_ready()) {
+        screen_println("initramfs not loaded.");
+        return;
+    }
+    if (!args || args[0] == '\0') {
+        screen_println("Usage: run <file>");
+        return;
+    }
+
+    const uint8_t* data = NULL;
+    uint32_t size = 0;
+    if (!vfs_read_file(args, &data, &size) || !data || size == 0) {
+        screen_println("File not found.");
+        return;
+    }
+
+    uint32_t entry = 0;
+    uint32_t user_esp = 0;
+    if (!elf_load_user_image(data, size, &entry, &user_esp)) {
+        screen_println("ELF load failed.");
+        return;
+    }
+
+    if (!tasking_spawn_user(entry, user_esp)) {
+        screen_println("Failed to spawn task.");
+        return;
+    }
+
+    screen_println("Spawned user task.");
+
+    // Give the new task a chance to run immediately.
+    __asm__ volatile ("int $0x80" : : "a"(2u) : "memory");
 }
 
 // BASIC interpreter command

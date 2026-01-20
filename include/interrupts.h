@@ -31,6 +31,6 @@ typedef void (*irq_handler_t)(interrupt_frame_t* frame);
 void irq_register_handler(uint8_t irq, irq_handler_t handler);
 
 // Called from assembly stubs in boot/boot.asm
-void interrupt_handler(interrupt_frame_t* frame);
+interrupt_frame_t* interrupt_handler(interrupt_frame_t* frame);
 
 #endif

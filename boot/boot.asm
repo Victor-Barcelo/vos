@@ -21,7 +21,7 @@ align 4
 section .bss
 align 16
 stack_bottom:
-    resb 16384                      ; 16 KB stack
+    resb 65536                      ; 64 KB stack
 global stack_top
 stack_top:
 
@@ -73,6 +73,24 @@ idt_flush:
     mov eax, [esp + 4]              ; Get IDT pointer
     lidt [eax]                      ; Load IDT
     ret
+
+; Switch to a new stack and call a C function.
+; void stack_switch_and_call(uint32_t new_stack_top, void (*fn)(uint32_t magic, uint32_t* mboot_info),
+;                            uint32_t magic, uint32_t* mboot_info);
+global stack_switch_and_call
+stack_switch_and_call:
+    mov eax, [esp + 4]              ; new_stack_top
+    mov ecx, [esp + 8]              ; fn
+    mov edx, [esp + 12]             ; magic
+    mov ebx, [esp + 16]             ; mboot_info
+    mov esp, eax
+    push ebx                        ; mboot_info
+    push edx                        ; magic
+    call ecx
+.stack_hang:
+    cli
+    hlt
+    jmp .stack_hang
 
 ; Interrupt/exception stubs
 global isr_default

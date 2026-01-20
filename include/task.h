@@ -60,5 +60,13 @@ interrupt_frame_t* tasking_sbrk(interrupt_frame_t* frame, int32_t increment);
 int32_t tasking_fd_open(const char* path, uint32_t flags);
 int32_t tasking_fd_close(int32_t fd);
 int32_t tasking_fd_read(int32_t fd, void* dst_user, uint32_t len);
+int32_t tasking_fd_write(int32_t fd, const void* src_user, uint32_t len);
+int32_t tasking_fd_lseek(int32_t fd, int32_t offset, int32_t whence);
+int32_t tasking_fd_fstat(int32_t fd, void* st_user);
+int32_t tasking_stat(const char* path, void* st_user);
+int32_t tasking_mkdir(const char* path);
+int32_t tasking_readdir(int32_t fd, void* dirent_user);
+int32_t tasking_chdir(const char* path);
+int32_t tasking_getcwd(void* dst_user, uint32_t len);
 
 #endif

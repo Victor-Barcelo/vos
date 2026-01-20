@@ -7,6 +7,8 @@
 #include "paging.h"
 #include "pmm.h"
 #include "usercopy.h"
+#include "kerrno.h"
+#include "screen.h"
 #include "vfs.h"
 #include "keyboard.h"
 
@@ -21,14 +23,15 @@ typedef enum {
     FD_KIND_STDIN = 1,
     FD_KIND_STDOUT = 2,
     FD_KIND_STDERR = 3,
-    FD_KIND_VFS_FILE = 4,
+    FD_KIND_VFS = 4,
 } fd_kind_t;
 
 typedef struct fd_entry {
     fd_kind_t kind;
-    const uint8_t* data;
-    uint32_t size;
-    uint32_t off;
+    vfs_handle_t* handle;
+    uint8_t pending[8];
+    uint8_t pending_len;
+    uint8_t pending_off;
 } fd_entry_t;
 
 typedef struct task {
@@ -40,6 +43,7 @@ typedef struct task {
     uint32_t user_brk;
     uint32_t user_brk_min;
     fd_entry_t fds[TASK_MAX_FDS];
+    char cwd[VFS_PATH_MAX];
     task_state_t state;
     uint32_t wake_tick;
     uint32_t wait_pid;
@@ -71,6 +75,36 @@ static void fd_init(task_t* t) {
     if (TASK_MAX_FDS > 0) t->fds[0].kind = FD_KIND_STDIN;
     if (TASK_MAX_FDS > 1) t->fds[1].kind = FD_KIND_STDOUT;
     if (TASK_MAX_FDS > 2) t->fds[2].kind = FD_KIND_STDERR;
+}
+
+static void cwd_init(task_t* t) {
+    if (!t) {
+        return;
+    }
+    t->cwd[0] = '/';
+    t->cwd[1] = '\0';
+}
+
+static void task_close_fds(task_t* t) {
+    if (!t) {
+        return;
+    }
+
+    for (int32_t fd = 3; fd < (int32_t)TASK_MAX_FDS; fd++) {
+        if (t->fds[fd].kind == FD_KIND_VFS && t->fds[fd].handle) {
+            vfs_handle_t* h = t->fds[fd].handle;
+            t->fds[fd].kind = FD_KIND_FREE;
+            t->fds[fd].handle = NULL;
+            t->fds[fd].pending_len = 0;
+            t->fds[fd].pending_off = 0;
+            (void)vfs_close(h);
+        } else if (t->fds[fd].kind != FD_KIND_FREE) {
+            t->fds[fd].kind = FD_KIND_FREE;
+            t->fds[fd].handle = NULL;
+            t->fds[fd].pending_len = 0;
+            t->fds[fd].pending_off = 0;
+        }
+    }
 }
 
 static void task_set_name(task_t* t, const char* name) {
@@ -166,6 +200,7 @@ static task_t* task_create_kernel(void (*entry)(void), const char* name) {
     t->user_brk = 0;
     t->user_brk_min = 0;
     fd_init(t);
+    cwd_init(t);
     t->state = TASK_STATE_RUNNABLE;
     t->wake_tick = 0;
     t->wait_pid = 0;
@@ -224,6 +259,7 @@ static task_t* task_create_user(uint32_t entry, uint32_t user_esp, uint32_t* pag
     t->user_brk = user_brk;
     t->user_brk_min = user_brk;
     fd_init(t);
+    cwd_init(t);
     t->state = TASK_STATE_RUNNABLE;
     t->wake_tick = 0;
     t->wait_pid = 0;
@@ -404,6 +440,7 @@ void tasking_init(void) {
     boot->user_brk = 0;
     boot->user_brk_min = 0;
     fd_init(boot);
+    cwd_init(boot);
     boot->state = TASK_STATE_RUNNABLE;
     boot->wake_tick = 0;
     boot->wait_pid = 0;
@@ -480,6 +517,7 @@ interrupt_frame_t* tasking_exit(interrupt_frame_t* frame, int32_t exit_code) {
         return frame;
     }
 
+    task_close_fds(current_task);
     current_task->state = TASK_STATE_ZOMBIE;
     current_task->exit_code = exit_code;
     current_task->esp = (uint32_t)frame;
@@ -555,6 +593,7 @@ bool tasking_kill(uint32_t pid, int32_t exit_code) {
         }
         if (t->id == pid) {
             if (t->state != TASK_STATE_ZOMBIE) {
+                task_close_fds(t);
                 t->state = TASK_STATE_ZOMBIE;
                 t->exit_code = exit_code;
                 wake_waiters(pid, exit_code);
@@ -685,136 +724,437 @@ bool tasking_spawn_user(uint32_t entry, uint32_t user_esp, uint32_t* page_direct
 }
 
 int32_t tasking_fd_open(const char* path, uint32_t flags) {
-    (void)flags;
     if (!current_task || !path) {
-        return -1;
+        return -EINVAL;
     }
 
-    const uint8_t* data = NULL;
-    uint32_t size = 0;
-    if (!vfs_read_file(path, &data, &size) || !data) {
-        return -1;
+    vfs_handle_t* h = NULL;
+    int32_t rc = vfs_open_path(current_task->cwd, path, flags, &h);
+    if (rc < 0) {
+        return rc;
     }
 
     uint32_t irq_flags = irq_save();
     for (int32_t fd = 3; fd < (int32_t)TASK_MAX_FDS; fd++) {
         if (current_task->fds[fd].kind == FD_KIND_FREE) {
-            current_task->fds[fd].kind = FD_KIND_VFS_FILE;
-            current_task->fds[fd].data = data;
-            current_task->fds[fd].size = size;
-            current_task->fds[fd].off = 0;
+            current_task->fds[fd].kind = FD_KIND_VFS;
+            current_task->fds[fd].handle = h;
             irq_restore(irq_flags);
             return fd;
         }
     }
     irq_restore(irq_flags);
-    return -1;
+
+    (void)vfs_close(h);
+    return -EMFILE;
 }
 
 int32_t tasking_fd_close(int32_t fd) {
     if (!current_task) {
-        return -1;
+        return -EINVAL;
     }
     if (fd < 0 || fd >= (int32_t)TASK_MAX_FDS) {
-        return -1;
+        return -EBADF;
     }
 
     uint32_t irq_flags = irq_save();
-    if (current_task->fds[fd].kind == FD_KIND_FREE) {
+    fd_entry_t* ent = &current_task->fds[fd];
+    if (ent->kind == FD_KIND_FREE) {
         irq_restore(irq_flags);
-        return -1;
+        return -EBADF;
     }
-    current_task->fds[fd].kind = FD_KIND_FREE;
-    current_task->fds[fd].data = NULL;
-    current_task->fds[fd].size = 0;
-    current_task->fds[fd].off = 0;
+
+    vfs_handle_t* h = ent->handle;
+    ent->kind = FD_KIND_FREE;
+    ent->handle = NULL;
+    ent->pending_len = 0;
+    ent->pending_off = 0;
     irq_restore(irq_flags);
+
+    if (h) {
+        return vfs_close(h);
+    }
     return 0;
+}
+
+static uint32_t tty_encode_key(int8_t key, uint8_t seq[8]) {
+    if (!seq) {
+        return 0;
+    }
+
+    switch (key) {
+        case KEY_UP:
+            seq[0] = 0x1Bu; seq[1] = '['; seq[2] = 'A';
+            return 3;
+        case KEY_DOWN:
+            seq[0] = 0x1Bu; seq[1] = '['; seq[2] = 'B';
+            return 3;
+        case KEY_RIGHT:
+            seq[0] = 0x1Bu; seq[1] = '['; seq[2] = 'C';
+            return 3;
+        case KEY_LEFT:
+            seq[0] = 0x1Bu; seq[1] = '['; seq[2] = 'D';
+            return 3;
+        case KEY_HOME:
+            seq[0] = 0x1Bu; seq[1] = '['; seq[2] = 'H';
+            return 3;
+        case KEY_END:
+            seq[0] = 0x1Bu; seq[1] = '['; seq[2] = 'F';
+            return 3;
+        case KEY_PGUP:
+            seq[0] = 0x1Bu; seq[1] = '['; seq[2] = '5'; seq[3] = '~';
+            return 4;
+        case KEY_PGDN:
+            seq[0] = 0x1Bu; seq[1] = '['; seq[2] = '6'; seq[3] = '~';
+            return 4;
+        case KEY_DELETE:
+            seq[0] = 0x1Bu; seq[1] = '['; seq[2] = '3'; seq[3] = '~';
+            return 4;
+        default:
+            seq[0] = (uint8_t)key;
+            return 1;
+    }
 }
 
 int32_t tasking_fd_read(int32_t fd, void* dst_user, uint32_t len) {
     if (!current_task || !dst_user) {
-        return -1;
+        return -EFAULT;
     }
     if (fd < 0 || fd >= (int32_t)TASK_MAX_FDS) {
-        return -1;
+        return -EBADF;
     }
     if (len == 0) {
         return 0;
     }
 
     uint32_t irq_flags = irq_save();
-    fd_entry_t ent = current_task->fds[fd];
+    fd_entry_t* ent = &current_task->fds[fd];
 
-    if (ent.kind == FD_KIND_STDIN) {
+    if (ent->kind == FD_KIND_STDIN) {
         irq_restore(irq_flags);
 
         uint8_t* dst = (uint8_t*)dst_user;
         uint32_t read = 0;
 
-        // Block until we can return at least 1 byte.
-        char c = keyboard_getchar();
-        if (!copy_to_user(dst, &c, 1u)) {
-            return -1;
-        }
-        dst++;
-        read++;
-
+        // Drain any buffered escape sequence bytes first.
         while (read < len) {
-            char next = 0;
-            if (!keyboard_try_getchar(&next)) {
+            uint8_t b = 0;
+            bool have = false;
+
+            uint32_t f = irq_save();
+            if (ent->pending_off < ent->pending_len) {
+                b = ent->pending[ent->pending_off++];
+                have = true;
+                if (ent->pending_off >= ent->pending_len) {
+                    ent->pending_len = 0;
+                    ent->pending_off = 0;
+                }
+            }
+            irq_restore(f);
+
+            if (!have) {
                 break;
             }
-            if (!copy_to_user(dst, &next, 1u)) {
-                return -1;
+
+            if (!copy_to_user(dst + read, &b, 1u)) {
+                return (read != 0) ? (int32_t)read : -EFAULT;
             }
-            dst++;
             read++;
+        }
+
+        bool block = (read == 0);
+        while (read < len) {
+            char c = 0;
+            if (block) {
+                c = keyboard_getchar(); // guarantees progress
+            } else {
+                if (!keyboard_try_getchar(&c)) {
+                    break;
+                }
+            }
+            block = false;
+
+            uint8_t seq[8];
+            uint32_t seq_len = tty_encode_key((int8_t)c, seq);
+            if (seq_len == 0) {
+                continue;
+            }
+
+            uint32_t avail = len - read;
+            uint32_t to_copy = seq_len;
+            if (to_copy > avail) {
+                to_copy = avail;
+            }
+
+            if (!copy_to_user(dst + read, seq, to_copy)) {
+                return (read != 0) ? (int32_t)read : -EFAULT;
+            }
+            read += to_copy;
+
+            if (to_copy < seq_len) {
+                uint32_t left = seq_len - to_copy;
+                if (left > sizeof(ent->pending)) {
+                    left = sizeof(ent->pending);
+                }
+                uint32_t f = irq_save();
+                ent->pending_len = (uint8_t)left;
+                ent->pending_off = 0;
+                for (uint32_t i = 0; i < left; i++) {
+                    ent->pending[i] = seq[to_copy + i];
+                }
+                irq_restore(f);
+                break;
+            }
         }
 
         return (int32_t)read;
     }
 
-    if (ent.kind != FD_KIND_VFS_FILE) {
+    if (ent->kind != FD_KIND_VFS || !ent->handle) {
         irq_restore(irq_flags);
-        return -1;
+        return -EBADF;
     }
-    if (!ent.data) {
-        irq_restore(irq_flags);
-        return -1;
-    }
-
-    uint32_t off = ent.off;
-    uint32_t size = ent.size;
-    const uint8_t* src_data = ent.data;
-
-    if (off >= size) {
-        irq_restore(irq_flags);
-        return 0;
-    }
-
-    uint32_t avail = size - off;
-    uint32_t to_copy = len;
-    if (to_copy > avail) {
-        to_copy = avail;
-    }
-    current_task->fds[fd].off = off + to_copy;
     irq_restore(irq_flags);
 
-    uint32_t remaining = to_copy;
-    const uint8_t* src = src_data + off;
-    uint8_t* dst = (uint8_t*)dst_user;
-    while (remaining) {
-        uint32_t chunk = remaining;
-        if (chunk > 256u) {
-            chunk = 256u;
+    uint32_t total = 0;
+    uint8_t tmp[256];
+    while (total < len) {
+        uint32_t chunk = len - total;
+        if (chunk > (uint32_t)sizeof(tmp)) {
+            chunk = (uint32_t)sizeof(tmp);
         }
-        if (!copy_to_user(dst, src, chunk)) {
-            return -1;
+
+        uint32_t got = 0;
+        int32_t rc = vfs_read(ent->handle, tmp, chunk, &got);
+        if (rc < 0) {
+            return (total != 0) ? (int32_t)total : rc;
         }
-        dst += chunk;
-        src += chunk;
-        remaining -= chunk;
+        if (got == 0) {
+            break;
+        }
+        if (!copy_to_user((uint8_t*)dst_user + total, tmp, got)) {
+            return (total != 0) ? (int32_t)total : -EFAULT;
+        }
+        total += got;
     }
-    return (int32_t)to_copy;
+    return (int32_t)total;
+}
+
+int32_t tasking_fd_write(int32_t fd, const void* src_user, uint32_t len) {
+    if (!current_task) {
+        return -EINVAL;
+    }
+    if (fd < 0 || fd >= (int32_t)TASK_MAX_FDS) {
+        return -EBADF;
+    }
+    if (len == 0) {
+        return 0;
+    }
+    if (!src_user) {
+        return -EFAULT;
+    }
+
+    uint32_t irq_flags = irq_save();
+    fd_entry_t* ent = &current_task->fds[fd];
+    fd_kind_t kind = ent->kind;
+    vfs_handle_t* h = ent->handle;
+    irq_restore(irq_flags);
+
+    uint32_t total = 0;
+    uint8_t tmp[128];
+
+    if (kind == FD_KIND_STDOUT || kind == FD_KIND_STDERR) {
+        while (total < len) {
+            uint32_t chunk = len - total;
+            if (chunk > (uint32_t)sizeof(tmp)) {
+                chunk = (uint32_t)sizeof(tmp);
+            }
+            if (!copy_from_user(tmp, (const uint8_t*)src_user + total, chunk)) {
+                return (total != 0) ? (int32_t)total : -EFAULT;
+            }
+            for (uint32_t i = 0; i < chunk; i++) {
+                screen_putchar((char)tmp[i]);
+            }
+            total += chunk;
+        }
+        return (int32_t)total;
+    }
+
+    if (kind != FD_KIND_VFS || !h) {
+        return -EBADF;
+    }
+
+    while (total < len) {
+        uint32_t chunk = len - total;
+        if (chunk > (uint32_t)sizeof(tmp)) {
+            chunk = (uint32_t)sizeof(tmp);
+        }
+        if (!copy_from_user(tmp, (const uint8_t*)src_user + total, chunk)) {
+            return (total != 0) ? (int32_t)total : -EFAULT;
+        }
+        uint32_t wrote = 0;
+        int32_t rc = vfs_write(h, tmp, chunk, &wrote);
+        if (rc < 0) {
+            return (total != 0) ? (int32_t)total : rc;
+        }
+        total += wrote;
+        if (wrote != chunk) {
+            break;
+        }
+    }
+    return (int32_t)total;
+}
+
+int32_t tasking_fd_lseek(int32_t fd, int32_t offset, int32_t whence) {
+    if (!current_task) {
+        return -EINVAL;
+    }
+    if (fd < 0 || fd >= (int32_t)TASK_MAX_FDS) {
+        return -EBADF;
+    }
+
+    uint32_t irq_flags = irq_save();
+    fd_entry_t* ent = &current_task->fds[fd];
+    vfs_handle_t* h = ent->handle;
+    fd_kind_t kind = ent->kind;
+    irq_restore(irq_flags);
+
+    if (kind != FD_KIND_VFS || !h) {
+        return -ESPIPE;
+    }
+
+    uint32_t new_off = 0;
+    int32_t rc = vfs_lseek(h, offset, whence, &new_off);
+    if (rc < 0) {
+        return rc;
+    }
+    return (int32_t)new_off;
+}
+
+int32_t tasking_fd_fstat(int32_t fd, void* st_user) {
+    if (!current_task || !st_user) {
+        return -EFAULT;
+    }
+    if (fd < 0 || fd >= (int32_t)TASK_MAX_FDS) {
+        return -EBADF;
+    }
+
+    uint32_t irq_flags = irq_save();
+    fd_entry_t* ent = &current_task->fds[fd];
+    fd_kind_t kind = ent->kind;
+    vfs_handle_t* h = ent->handle;
+    irq_restore(irq_flags);
+
+    vfs_stat_t st;
+    st.is_dir = false;
+    st.size = 0;
+
+    if (kind == FD_KIND_VFS && h) {
+        int32_t rc = vfs_fstat(h, &st);
+        if (rc < 0) {
+            return rc;
+        }
+    } else if (kind == FD_KIND_STDIN || kind == FD_KIND_STDOUT || kind == FD_KIND_STDERR) {
+        // Leave as a "tty-like" entry (size 0, not a directory).
+    } else {
+        return -EBADF;
+    }
+
+    if (!copy_to_user(st_user, &st, (uint32_t)sizeof(st))) {
+        return -EFAULT;
+    }
+    return 0;
+}
+
+int32_t tasking_stat(const char* path, void* st_user) {
+    if (!current_task || !path || !st_user) {
+        return -EINVAL;
+    }
+
+    vfs_stat_t st;
+    int32_t rc = vfs_stat_path(current_task->cwd, path, &st);
+    if (rc < 0) {
+        return rc;
+    }
+    if (!copy_to_user(st_user, &st, (uint32_t)sizeof(st))) {
+        return -EFAULT;
+    }
+    return 0;
+}
+
+int32_t tasking_mkdir(const char* path) {
+    if (!current_task || !path) {
+        return -EINVAL;
+    }
+    return vfs_mkdir_path(current_task->cwd, path);
+}
+
+int32_t tasking_readdir(int32_t fd, void* dirent_user) {
+    if (!current_task || !dirent_user) {
+        return -EFAULT;
+    }
+    if (fd < 0 || fd >= (int32_t)TASK_MAX_FDS) {
+        return -EBADF;
+    }
+
+    uint32_t irq_flags = irq_save();
+    fd_entry_t* ent = &current_task->fds[fd];
+    vfs_handle_t* h = ent->handle;
+    fd_kind_t kind = ent->kind;
+    irq_restore(irq_flags);
+
+    if (kind != FD_KIND_VFS || !h) {
+        return -EBADF;
+    }
+
+    vfs_dirent_t de;
+    int32_t rc = vfs_readdir(h, &de);
+    if (rc <= 0) {
+        return rc;
+    }
+
+    if (!copy_to_user(dirent_user, &de, (uint32_t)sizeof(de))) {
+        return -EFAULT;
+    }
+    return 1;
+}
+
+int32_t tasking_chdir(const char* path) {
+    if (!current_task || !path) {
+        return -EINVAL;
+    }
+
+    vfs_stat_t st;
+    int32_t rc = vfs_stat_path(current_task->cwd, path, &st);
+    if (rc < 0) {
+        return rc;
+    }
+    if (!st.is_dir) {
+        return -ENOTDIR;
+    }
+
+    char abs[VFS_PATH_MAX];
+    rc = vfs_path_resolve(current_task->cwd, path, abs);
+    if (rc < 0) {
+        return rc;
+    }
+
+    strncpy(current_task->cwd, abs, sizeof(current_task->cwd) - 1u);
+    current_task->cwd[sizeof(current_task->cwd) - 1u] = '\0';
+    return 0;
+}
+
+int32_t tasking_getcwd(void* dst_user, uint32_t len) {
+    if (!current_task || !dst_user) {
+        return -EFAULT;
+    }
+
+    uint32_t need = (uint32_t)strlen(current_task->cwd) + 1u;
+    if (len < need) {
+        return -ERANGE;
+    }
+    if (!copy_to_user(dst_user, current_task->cwd, need)) {
+        return -EFAULT;
+    }
+    return (int32_t)(need - 1u);
 }

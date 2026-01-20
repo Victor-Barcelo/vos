@@ -35,6 +35,19 @@ int main(void) {
     printf("\n[init] Reading fat/dir/nested.txt:\n");
     cat_file("fat/dir/nested.txt");
 
+    printf("\n[init] Persistent /disk test:\n");
+    int fdw = open("/disk/userland.txt", O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    if (fdw < 0) {
+        printf("[init] open(/disk/userland.txt) failed: %s\n", strerror(errno));
+    } else {
+        const char* msg = "Hello from userland on persistent /disk!\n";
+        (void)write(fdw, msg, strlen(msg));
+        close(fdw);
+
+        printf("[init] Reading back /disk/userland.txt:\n");
+        cat_file("/disk/userland.txt");
+    }
+
     printf("\n[init] done.\n");
     return 0;
 }

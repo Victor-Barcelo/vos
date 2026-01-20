@@ -26,11 +26,13 @@ static int cursor_y = 0;
 
 // Cursor rendering state
 static bool cursor_enabled = true;
+static bool cursor_vt_hidden = false;
 static int cursor_drawn_x = -1;
 static int cursor_drawn_y = -1;
 
 // Current color attribute (VGA-style: fg | (bg << 4))
 static uint8_t current_color = 0x0F; // White on black
+static uint8_t default_color = 0x0F;
 
 static int reserved_bottom_rows = 0;
 
@@ -42,9 +44,12 @@ typedef enum {
 } ansi_state_t;
 
 static ansi_state_t ansi_state = ANSI_STATE_NONE;
-static int ansi_params[2];
+static int ansi_params[8];
 static int ansi_param_count = 0;
 static int ansi_current = -1;
+static bool ansi_private = false;
+static int ansi_saved_x = 0;
+static int ansi_saved_y = 0;
 
 static inline int screen_phys_x(int x);
 static inline int screen_phys_y(int y);
@@ -216,8 +221,10 @@ static void ansi_reset(void) {
     ansi_state = ANSI_STATE_NONE;
     ansi_param_count = 0;
     ansi_current = -1;
-    ansi_params[0] = 0;
-    ansi_params[1] = 0;
+    ansi_private = false;
+    for (uint32_t i = 0; i < (uint32_t)(sizeof(ansi_params) / sizeof(ansi_params[0])); i++) {
+        ansi_params[i] = 0;
+    }
 }
 
 static void ansi_push_param(void) {
@@ -244,6 +251,88 @@ static int ansi_get_param(int idx, int def) {
     return def;
 }
 
+static uint8_t ansi_basic_to_vga(uint8_t idx) {
+    static const uint8_t map[8] = {
+        VGA_BLACK,      // 30 black
+        VGA_RED,        // 31 red
+        VGA_GREEN,      // 32 green
+        VGA_BROWN,      // 33 yellow (dim)
+        VGA_BLUE,       // 34 blue
+        VGA_MAGENTA,    // 35 magenta
+        VGA_CYAN,       // 36 cyan
+        VGA_LIGHT_GREY, // 37 white (dim)
+    };
+    if (idx < 8u) {
+        return map[idx];
+    }
+    return VGA_LIGHT_GREY;
+}
+
+static void ansi_apply_sgr_param(int p) {
+    uint8_t fg = (uint8_t)(current_color & 0x0Fu);
+    uint8_t bg = (uint8_t)((current_color >> 4) & 0x0Fu);
+    uint8_t def_fg = (uint8_t)(default_color & 0x0Fu);
+    uint8_t def_bg = (uint8_t)((default_color >> 4) & 0x0Fu);
+
+    if (p == 0) {
+        current_color = default_color;
+        return;
+    }
+    if (p == 1) { // bold/bright
+        if (fg < 8u) {
+            fg = (uint8_t)(fg + 8u);
+        }
+        current_color = vga_color(fg, bg);
+        return;
+    }
+    if (p == 22) { // normal intensity
+        if (fg >= 8u) {
+            fg = (uint8_t)(fg - 8u);
+        }
+        current_color = vga_color(fg, bg);
+        return;
+    }
+    if (p == 7) { // reverse video
+        current_color = vga_color(bg, fg);
+        return;
+    }
+    if (p == 27) { // reverse off (best-effort)
+        current_color = default_color;
+        return;
+    }
+
+    if (p >= 30 && p <= 37) {
+        fg = ansi_basic_to_vga((uint8_t)(p - 30));
+        current_color = vga_color(fg, bg);
+        return;
+    }
+    if (p >= 90 && p <= 97) {
+        fg = (uint8_t)(ansi_basic_to_vga((uint8_t)(p - 90)) + 8u);
+        current_color = vga_color(fg, bg);
+        return;
+    }
+    if (p >= 40 && p <= 47) {
+        bg = ansi_basic_to_vga((uint8_t)(p - 40));
+        current_color = vga_color(fg, bg);
+        return;
+    }
+    if (p >= 100 && p <= 107) {
+        bg = (uint8_t)(ansi_basic_to_vga((uint8_t)(p - 100)) + 8u);
+        current_color = vga_color(fg, bg);
+        return;
+    }
+    if (p == 39) { // default fg
+        fg = def_fg;
+        current_color = vga_color(fg, bg);
+        return;
+    }
+    if (p == 49) { // default bg
+        bg = def_bg;
+        current_color = vga_color(fg, bg);
+        return;
+    }
+}
+
 static bool ansi_handle_char(char c) {
     if (ansi_state == ANSI_STATE_NONE) {
         if ((uint8_t)c == 0x1Bu) {
@@ -258,8 +347,10 @@ static bool ansi_handle_char(char c) {
             ansi_state = ANSI_STATE_CSI;
             ansi_param_count = 0;
             ansi_current = -1;
-            ansi_params[0] = 0;
-            ansi_params[1] = 0;
+            ansi_private = false;
+            for (uint32_t i = 0; i < (uint32_t)(sizeof(ansi_params) / sizeof(ansi_params[0])); i++) {
+                ansi_params[i] = 0;
+            }
             return true;
         }
 
@@ -268,6 +359,10 @@ static bool ansi_handle_char(char c) {
     }
 
     // CSI state.
+    if (c == '?' && ansi_param_count == 0 && ansi_current < 0 && !ansi_private) {
+        ansi_private = true;
+        return true;
+    }
     if (c >= '0' && c <= '9') {
         if (ansi_current < 0) {
             ansi_current = 0;
@@ -324,6 +419,13 @@ static bool ansi_handle_char(char c) {
             update_cursor();
             break;
         }
+        case 'G': { // cursor horizontal absolute
+            int col = ansi_get_param(0, 1);
+            cursor_x = col - 1;
+            cursor_clamp();
+            update_cursor();
+            break;
+        }
         case 'K': { // erase in line (0 = to end)
             ansi_erase_to_eol();
             update_cursor();
@@ -334,6 +436,42 @@ static bool ansi_handle_char(char c) {
             if (mode == 2) {
                 screen_clear();
                 update_cursor();
+            }
+            break;
+        }
+        case 's': { // save cursor
+            ansi_saved_x = cursor_x;
+            ansi_saved_y = cursor_y;
+            break;
+        }
+        case 'u': { // restore cursor
+            cursor_x = ansi_saved_x;
+            cursor_y = ansi_saved_y;
+            cursor_clamp();
+            update_cursor();
+            break;
+        }
+        case 'm': { // SGR (colors)
+            if (ansi_param_count == 0) {
+                ansi_apply_sgr_param(0);
+                break;
+            }
+            for (int i = 0; i < ansi_param_count; i++) {
+                ansi_apply_sgr_param(ansi_params[i]);
+            }
+            break;
+        }
+        case 'h':
+        case 'l': {
+            if (ansi_private) {
+                bool set = (c == 'h');
+                for (int i = 0; i < ansi_param_count; i++) {
+                    if (ansi_params[i] == 25) {
+                        cursor_vt_hidden = !set;
+                        update_cursor();
+                        break;
+                    }
+                }
             }
             break;
         }
@@ -531,7 +669,7 @@ static void fb_draw_cursor_overlay(int x, int y) {
 }
 
 static void fb_update_cursor(void) {
-    if (cursor_force_hidden || !cursor_enabled) {
+    if (cursor_force_hidden || cursor_vt_hidden || !cursor_enabled) {
         if (cursor_drawn_x >= 0 && cursor_drawn_y >= 0) {
             fb_render_cell(cursor_drawn_x, cursor_drawn_y);
             cursor_drawn_x = -1;
@@ -555,10 +693,11 @@ static void update_cursor(void) {
     if (backend == SCREEN_BACKEND_FRAMEBUFFER) {
         fb_update_cursor();
     } else {
-        if (cursor_force_hidden) {
+        if (cursor_force_hidden || cursor_vt_hidden || !cursor_enabled) {
             vga_hw_cursor_set_enabled(false);
             return;
         }
+        vga_hw_cursor_set_enabled(true);
         vga_hw_cursor_update();
     }
 }
@@ -1048,7 +1187,8 @@ void screen_print_dec(int32_t num) {
 }
 
 void screen_set_color(uint8_t fg, uint8_t bg) {
-    current_color = vga_color(fg, bg);
+    default_color = vga_color(fg, bg);
+    current_color = default_color;
 }
 
 void screen_set_cursor(int x, int y) {
@@ -1136,13 +1276,7 @@ void screen_fill_row(int y, char c, uint8_t color) {
 
 void screen_cursor_set_enabled(bool enabled) {
     cursor_enabled = enabled;
-
-    if (backend == SCREEN_BACKEND_FRAMEBUFFER) {
-        update_cursor();
-        return;
-    }
-
-    vga_hw_cursor_set_enabled(enabled);
+    update_cursor();
 }
 
 bool screen_is_framebuffer(void) {

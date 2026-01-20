@@ -4,6 +4,7 @@
 #include "syscall.h"
 #include "task.h"
 #include "screen.h"
+#include "usercopy.h"
 
 static irq_handler_t irq_handlers[16] = {0};
 
@@ -86,6 +87,38 @@ static void print_page_fault_decode(uint32_t err_code) {
     screen_putchar('\n');
 }
 
+static void print_user_backtrace(uint32_t ebp) {
+    if (ebp == 0) {
+        return;
+    }
+
+    screen_println("  backtrace (user EBP chain):");
+
+    for (int depth = 0; depth < 16; depth++) {
+        uint32_t pair[2] = {0, 0};
+        if (!copy_from_user(pair, (const void*)ebp, (uint32_t)sizeof(pair))) {
+            break;
+        }
+
+        uint32_t next = pair[0];
+        uint32_t ret = pair[1];
+
+        screen_print("    #");
+        screen_print_dec(depth);
+        screen_print(" ");
+        screen_print_hex(ret);
+        screen_putchar('\n');
+
+        if (next == 0 || next <= ebp) {
+            break;
+        }
+        if (next - ebp > 0x100000u) {
+            break;
+        }
+        ebp = next;
+    }
+}
+
 interrupt_frame_t* interrupt_handler(interrupt_frame_t* frame) {
     if (!frame) {
         panic("interrupt_handler: NULL frame");
@@ -110,6 +143,8 @@ interrupt_frame_t* interrupt_handler(interrupt_frame_t* frame) {
             screen_print(" err=");
             screen_print_hex(frame->err_code);
             screen_putchar('\n');
+
+            print_user_backtrace(frame->ebp);
 
             screen_println("  -> killing user task");
             return tasking_exit(frame, -(int32_t)frame->int_no);

@@ -4,6 +4,7 @@
 #include "usercopy.h"
 #include "timer.h"
 #include "vfs.h"
+#include "kerrno.h"
 
 enum {
     SYS_WRITE = 0,
@@ -17,6 +18,13 @@ enum {
     SYS_OPEN = 8,
     SYS_READ = 9,
     SYS_CLOSE = 10,
+    SYS_LSEEK = 11,
+    SYS_FSTAT = 12,
+    SYS_STAT = 13,
+    SYS_MKDIR = 14,
+    SYS_READDIR = 15,
+    SYS_CHDIR = 16,
+    SYS_GETCWD = 17,
 };
 
 static bool copy_user_cstring(char* dst, uint32_t dst_cap, const char* src_user) {
@@ -50,36 +58,11 @@ interrupt_frame_t* syscall_handle(interrupt_frame_t* frame) {
     uint32_t num = frame->eax;
     switch (num) {
         case SYS_WRITE: {
-            const char* buf = (const char*)frame->ebx;
-            uint32_t len = frame->ecx;
-            if (len == 0) {
-                frame->eax = 0;
-                return frame;
-            }
-            if (!buf) {
-                frame->eax = (uint32_t)-1;
-                return frame;
-            }
-
-            char tmp[128];
-            uint32_t remaining = len;
-            const char* p = buf;
-            while (remaining) {
-                uint32_t chunk = remaining;
-                if (chunk > (uint32_t)sizeof(tmp)) {
-                    chunk = (uint32_t)sizeof(tmp);
-                }
-                if (!copy_from_user(tmp, p, chunk)) {
-                    frame->eax = (uint32_t)-1;
-                    return frame;
-                }
-                for (uint32_t i = 0; i < chunk; i++) {
-                    screen_putchar(tmp[i]);
-                }
-                p += chunk;
-                remaining -= chunk;
-            }
-            frame->eax = len;
+            int32_t fd = (int32_t)frame->ebx;
+            const void* buf_user = (const void*)frame->ecx;
+            uint32_t len = frame->edx;
+            int32_t n = tasking_fd_write(fd, buf_user, len);
+            frame->eax = (uint32_t)n;
             return frame;
         }
         case SYS_YIELD:
@@ -202,6 +185,75 @@ interrupt_frame_t* syscall_handle(interrupt_frame_t* frame) {
         case SYS_CLOSE: {
             int32_t fd = (int32_t)frame->ebx;
             int32_t rc = tasking_fd_close(fd);
+            frame->eax = (uint32_t)rc;
+            return frame;
+        }
+        case SYS_LSEEK: {
+            int32_t fd = (int32_t)frame->ebx;
+            int32_t offset = (int32_t)frame->ecx;
+            int32_t whence = (int32_t)frame->edx;
+            int32_t rc = tasking_fd_lseek(fd, offset, whence);
+            frame->eax = (uint32_t)rc;
+            return frame;
+        }
+        case SYS_FSTAT: {
+            int32_t fd = (int32_t)frame->ebx;
+            void* st_user = (void*)frame->ecx;
+            int32_t rc = tasking_fd_fstat(fd, st_user);
+            frame->eax = (uint32_t)rc;
+            return frame;
+        }
+        case SYS_STAT: {
+            const char* path_user = (const char*)frame->ebx;
+            void* st_user = (void*)frame->ecx;
+
+            char path[128];
+            if (!copy_user_cstring(path, sizeof(path), path_user)) {
+                frame->eax = (uint32_t)-EINVAL;
+                return frame;
+            }
+
+            int32_t rc = tasking_stat(path, st_user);
+            frame->eax = (uint32_t)rc;
+            return frame;
+        }
+        case SYS_MKDIR: {
+            const char* path_user = (const char*)frame->ebx;
+
+            char path[128];
+            if (!copy_user_cstring(path, sizeof(path), path_user)) {
+                frame->eax = (uint32_t)-EINVAL;
+                return frame;
+            }
+
+            int32_t rc = tasking_mkdir(path);
+            frame->eax = (uint32_t)rc;
+            return frame;
+        }
+        case SYS_READDIR: {
+            int32_t fd = (int32_t)frame->ebx;
+            void* de_user = (void*)frame->ecx;
+            int32_t rc = tasking_readdir(fd, de_user);
+            frame->eax = (uint32_t)rc;
+            return frame;
+        }
+        case SYS_CHDIR: {
+            const char* path_user = (const char*)frame->ebx;
+
+            char path[128];
+            if (!copy_user_cstring(path, sizeof(path), path_user)) {
+                frame->eax = (uint32_t)-EINVAL;
+                return frame;
+            }
+
+            int32_t rc = tasking_chdir(path);
+            frame->eax = (uint32_t)rc;
+            return frame;
+        }
+        case SYS_GETCWD: {
+            void* buf_user = (void*)frame->ebx;
+            uint32_t len = frame->ecx;
+            int32_t rc = tasking_getcwd(buf_user, len);
             frame->eax = (uint32_t)rc;
             return frame;
         }

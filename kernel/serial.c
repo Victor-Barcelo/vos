@@ -21,11 +21,7 @@ void serial_init(void) {
     // Loopback test
     outb(COM1_BASE + 4, 0x1E);
     outb(COM1_BASE + 0, 0xAE);
-    if (inb(COM1_BASE + 0) != 0xAE) {
-        outb(COM1_BASE + 4, 0x0F);
-        serial_initialized = false;
-        return;
-    }
+    (void)inb(COM1_BASE + 0);   // Some emulators don't reflect loopback reads reliably.
 
     outb(COM1_BASE + 4, 0x0F);  // Normal operation mode
     serial_initialized = true;

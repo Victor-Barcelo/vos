@@ -16,14 +16,21 @@ enum {
     SYS_OPEN = 8,
     SYS_READ = 9,
     SYS_CLOSE = 10,
+    SYS_LSEEK = 11,
+    SYS_FSTAT = 12,
+    SYS_STAT = 13,
+    SYS_MKDIR = 14,
+    SYS_READDIR = 15,
+    SYS_CHDIR = 16,
+    SYS_GETCWD = 17,
 };
 
-static inline int sys_write(const char* buf, uint32_t len) {
+static inline int sys_write(int fd, const char* buf, uint32_t len) {
     int ret;
     __asm__ volatile (
         "int $0x80"
         : "=a"(ret)
-        : "a"(SYS_WRITE), "b"(buf), "c"(len)
+        : "a"(SYS_WRITE), "b"(fd), "c"(buf), "d"(len)
         : "memory"
     );
     return ret;

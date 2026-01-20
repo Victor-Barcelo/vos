@@ -18,12 +18,14 @@
 #include "task.h"
 #include "elf.h"
 #include "fatdisk.h"
+#include "string.h"
 
 // Multiboot magic number
 #define MULTIBOOT_MAGIC 0x2BADB002
 
 extern uint8_t __kernel_end;
 extern uint8_t stack_top;
+extern void stack_switch_and_call(uint32_t new_stack_top, void (*fn)(uint32_t, uint32_t*), uint32_t magic, uint32_t* mboot_info);
 
 static uint32_t align_up_u32(uint32_t v, uint32_t a) {
     return (v + a - 1u) & ~(a - 1u);
@@ -108,6 +110,63 @@ static void try_start_init(void) {
     __asm__ volatile ("int $0x80" : "=a"(exit_code) : "a"(4u), "b"(pid) : "memory");
 }
 
+static uint32_t alloc_guarded_stack(uint32_t base_vaddr, uint32_t size_bytes) {
+    if (size_bytes == 0) {
+        return 0;
+    }
+    if ((size_bytes & (PAGE_SIZE - 1u)) != 0) {
+        size_bytes = (size_bytes + PAGE_SIZE - 1u) & ~(PAGE_SIZE - 1u);
+    }
+
+    uint32_t stack_bottom = base_vaddr + PAGE_SIZE; // guard page below
+    uint32_t stack_top_addr = stack_bottom + size_bytes;
+    if (stack_top_addr < stack_bottom) {
+        return 0;
+    }
+
+    paging_prepare_range(stack_bottom, size_bytes, PAGE_PRESENT | PAGE_RW);
+    for (uint32_t va = stack_bottom; va < stack_top_addr; va += PAGE_SIZE) {
+        uint32_t frame = pmm_alloc_frame();
+        if (frame == 0) {
+            return 0;
+        }
+        paging_map_page(va, frame, PAGE_PRESENT | PAGE_RW);
+        memset((void*)va, 0, PAGE_SIZE);
+    }
+
+    return stack_top_addr;
+}
+
+static void kernel_main_continued(uint32_t magic, uint32_t* mboot_info) {
+    (void)magic;
+    (void)mboot_info;
+
+    // Enable interrupts
+    sti();
+    screen_set_color(VGA_LIGHT_GREEN, VGA_BLUE);
+    screen_print("[OK] ");
+    screen_set_color(VGA_WHITE, VGA_BLUE);
+    screen_println("Interrupts enabled");
+
+    try_start_init();
+
+    screen_println("");
+    screen_set_color(VGA_LIGHT_CYAN, VGA_BLUE);
+    screen_println("Boot complete! Starting shell...");
+    screen_set_color(VGA_WHITE, VGA_BLUE);
+    screen_println("");
+
+    // Run the shell
+    shell_run();
+
+    // If shell exits, halt
+    screen_println("Shell exited. Halting...");
+    cli();
+    for (;;) {
+        hlt();
+    }
+}
+
 // Kernel main entry point
 void kernel_main(uint32_t magic, uint32_t* mboot_info) {
     // Initialize serial early for logging/debugging (COM1).
@@ -177,28 +236,13 @@ void kernel_main(uint32_t magic, uint32_t* mboot_info) {
 
     tasking_init();
 
-    // Enable interrupts
-    sti();
-    screen_set_color(VGA_LIGHT_GREEN, VGA_BLUE);
-    screen_print("[OK] ");
-    screen_set_color(VGA_WHITE, VGA_BLUE);
-    screen_println("Interrupts enabled");
-
-    try_start_init();
-
-    screen_println("");
-    screen_set_color(VGA_LIGHT_CYAN, VGA_BLUE);
-    screen_println("Boot complete! Starting shell...");
-    screen_set_color(VGA_WHITE, VGA_BLUE);
-    screen_println("");
-
-    // Run the shell
-    shell_run();
-
-    // If shell exits, halt
-    screen_println("Shell exited. Halting...");
-    cli();
-    for (;;) {
-        hlt();
+    // Switch to a guarded kernel stack for the long-running boot task (shell, etc.).
+    uint32_t new_stack = alloc_guarded_stack(0xEF000000u, 64u * 1024u);
+    if (new_stack) {
+        tss_set_kernel_stack(new_stack);
+        stack_switch_and_call(new_stack, kernel_main_continued, magic, mboot_info);
     }
+
+    // Fallback: continue on the static boot stack if allocation fails.
+    kernel_main_continued(magic, mboot_info);
 }

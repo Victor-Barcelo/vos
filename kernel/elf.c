@@ -100,7 +100,8 @@ static bool elf32_validate_header(const elf32_ehdr_t* eh, uint32_t size) {
 
 static bool map_user_stack(uint32_t* out_user_esp) {
     uint32_t stack_top = USER_STACK_TOP;
-    uint32_t stack_bottom = USER_STACK_TOP - USER_STACK_PAGES * PAGE_SIZE;
+    uint32_t guard_bottom = USER_STACK_TOP - (USER_STACK_PAGES + 1u) * PAGE_SIZE;
+    uint32_t stack_bottom = guard_bottom + PAGE_SIZE;
 
     paging_prepare_range(stack_bottom, USER_STACK_PAGES * PAGE_SIZE, PAGE_PRESENT | PAGE_RW | PAGE_USER);
 
@@ -119,7 +120,7 @@ static bool map_user_stack(uint32_t* out_user_esp) {
     return true;
 }
 
-bool elf_load_user_image(const uint8_t* image, uint32_t size, uint32_t* out_entry, uint32_t* out_user_esp) {
+bool elf_load_user_image(const uint8_t* image, uint32_t size, uint32_t* out_entry, uint32_t* out_user_esp, uint32_t* out_brk) {
     if (!image || size < sizeof(elf32_ehdr_t)) {
         return false;
     }
@@ -129,6 +130,8 @@ bool elf_load_user_image(const uint8_t* image, uint32_t size, uint32_t* out_entr
         serial_write_string("[ELF] invalid header\n");
         return false;
     }
+
+    uint32_t max_end = USER_BASE;
 
     // Load PT_LOAD segments.
     for (uint16_t i = 0; i < eh->e_phnum; i++) {
@@ -159,6 +162,9 @@ bool elf_load_user_image(const uint8_t* image, uint32_t size, uint32_t* out_entr
         if (seg_start < USER_BASE || seg_end > USER_LIMIT) {
             serial_write_string("[ELF] segment not in user range\n");
             return false;
+        }
+        if (seg_end > max_end) {
+            max_end = seg_end;
         }
 
         uint32_t map_flags = PAGE_PRESENT | PAGE_USER;
@@ -198,17 +204,29 @@ bool elf_load_user_image(const uint8_t* image, uint32_t size, uint32_t* out_entr
         return false;
     }
 
+    uint32_t brk = align_up(max_end, PAGE_SIZE);
+    uint32_t stack_guard_bottom = USER_STACK_TOP - (USER_STACK_PAGES + 1u) * PAGE_SIZE;
+    if (brk < USER_BASE || brk > stack_guard_bottom) {
+        serial_write_string("[ELF] brk collides with stack\n");
+        return false;
+    }
+
     if (out_entry) {
         *out_entry = eh->e_entry;
     }
     if (out_user_esp) {
         *out_user_esp = user_esp;
     }
+    if (out_brk) {
+        *out_brk = brk;
+    }
 
     serial_write_string("[ELF] loaded entry=");
     serial_write_hex(eh->e_entry);
     serial_write_string(" user_esp=");
     serial_write_hex(user_esp);
+    serial_write_string(" brk=");
+    serial_write_hex(brk);
     serial_write_char('\n');
 
     return true;

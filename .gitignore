@@ -13,5 +13,5 @@ iso/boot/initramfs.tar
 *~
 
 # Runtime artifacts
-vos-serial.log
+vos-serial*.log
 qemu.pid

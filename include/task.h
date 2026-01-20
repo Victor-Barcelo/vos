@@ -2,6 +2,7 @@
 #define TASK_H
 
 #include "interrupts.h"
+#include "types.h"
 
 void tasking_init(void);
 bool tasking_is_enabled(void);
@@ -11,9 +12,45 @@ interrupt_frame_t* tasking_on_timer_tick(interrupt_frame_t* frame);
 
 // Voluntary context switches (used by syscalls).
 interrupt_frame_t* tasking_yield(interrupt_frame_t* frame);
-interrupt_frame_t* tasking_exit(interrupt_frame_t* frame);
+interrupt_frame_t* tasking_exit(interrupt_frame_t* frame, int32_t exit_code);
 
 // Create a user-mode task that starts at `entry` with user stack pointer `user_esp`.
-bool tasking_spawn_user(uint32_t entry, uint32_t user_esp);
+bool tasking_spawn_user(uint32_t entry, uint32_t user_esp, uint32_t* page_directory, uint32_t user_brk);
+
+typedef enum {
+    TASK_STATE_RUNNABLE = 0,
+    TASK_STATE_SLEEPING = 1,
+    TASK_STATE_WAITING  = 2,
+    TASK_STATE_ZOMBIE   = 3,
+} task_state_t;
+
+typedef struct task_info {
+    uint32_t pid;
+    bool user;
+    task_state_t state;
+    uint32_t cpu_ticks;
+    uint32_t eip;
+    uint32_t esp;
+    int32_t exit_code;
+    uint32_t wake_tick;
+    uint32_t wait_pid;
+    char name[16];
+} task_info_t;
+
+uint32_t tasking_current_pid(void);
+uint32_t tasking_task_count(void);
+bool tasking_get_task_info(uint32_t index, task_info_t* out);
+
+// Put the current task to sleep until `wake_tick` (timer_get_ticks() units).
+interrupt_frame_t* tasking_sleep_until(interrupt_frame_t* frame, uint32_t wake_tick);
+
+// Wait for a task to exit (returns exit code in EAX via the syscall frame).
+interrupt_frame_t* tasking_wait(interrupt_frame_t* frame, uint32_t pid);
+
+// Kill a task by pid (best-effort).
+bool tasking_kill(uint32_t pid, int32_t exit_code);
+
+// Adjust the user heap break (sbrk-style). Returns previous brk in EAX or -1.
+interrupt_frame_t* tasking_sbrk(interrupt_frame_t* frame, int32_t increment);
 
 #endif

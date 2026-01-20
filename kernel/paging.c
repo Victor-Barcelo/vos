@@ -4,6 +4,7 @@
 #include "serial.h"
 
 static uint32_t* page_directory = NULL;
+static uint32_t* kernel_directory = NULL;
 
 static inline uint32_t page_align_down(uint32_t addr) {
     return addr & ~(PAGE_SIZE - 1u);
@@ -56,6 +57,31 @@ void paging_map_page(uint32_t vaddr, uint32_t paddr, uint32_t flags) {
     table[tbl_index] = (paddr & 0xFFFFF000u) | (flags & 0xFFFu);
 }
 
+bool paging_unmap_page(uint32_t vaddr, uint32_t* out_paddr) {
+    uint32_t va = page_align_down(vaddr);
+    uint32_t dir_index = (va >> 22) & 0x3FFu;
+    uint32_t tbl_index = (va >> 12) & 0x3FFu;
+
+    uint32_t pde = page_directory[dir_index];
+    if ((pde & PAGE_PRESENT) == 0) {
+        return false;
+    }
+
+    uint32_t* table = (uint32_t*)(pde & 0xFFFFF000u);
+    uint32_t pte = table[tbl_index];
+    if ((pte & PAGE_PRESENT) == 0) {
+        return false;
+    }
+
+    if (out_paddr) {
+        *out_paddr = pte & 0xFFFFF000u;
+    }
+
+    table[tbl_index] = 0;
+    __asm__ volatile ("invlpg (%0)" : : "r"(va) : "memory");
+    return true;
+}
+
 void paging_map_range(uint32_t vaddr, uint32_t paddr, uint32_t size, uint32_t flags) {
     uint32_t start_v = page_align_down(vaddr);
     uint32_t start_p = page_align_down(paddr);
@@ -77,6 +103,7 @@ static void enable_paging(uint32_t dir_paddr) {
 void paging_init(const multiboot_info_t* mbi) {
     page_directory = (uint32_t*)early_alloc(PAGE_SIZE, PAGE_SIZE);
     memset(page_directory, 0, PAGE_SIZE);
+    kernel_directory = page_directory;
 
     // Identity-map the first 16 MiB for the kernel and early boot data.
     paging_map_range(0x00000000u, 0x00000000u, 16u * 1024u * 1024u, PAGE_PRESENT | PAGE_RW);
@@ -120,4 +147,99 @@ uint32_t paging_get_cr3(void) {
     uint32_t cr3;
     __asm__ volatile ("mov %%cr3, %0" : "=r"(cr3));
     return cr3;
+}
+
+uint32_t* paging_kernel_directory(void) {
+    return kernel_directory;
+}
+
+uint32_t* paging_create_user_directory(void) {
+    if (!kernel_directory) {
+        return NULL;
+    }
+
+    uint32_t* dir = (uint32_t*)early_alloc(PAGE_SIZE, PAGE_SIZE);
+    memset(dir, 0, PAGE_SIZE);
+
+    // Kernel-reserved regions:
+    // - Low identity-mapped region (below USER_BASE)
+    // - High kernel region (>= USER_LIMIT)
+    const uint32_t USER_BASE = 0x01000000u;
+    const uint32_t USER_LIMIT = 0xC0000000u;
+
+    uint32_t low_end = USER_BASE >> 22;     // exclusive
+    uint32_t high_start = USER_LIMIT >> 22; // inclusive
+
+    for (uint32_t i = 0; i < low_end; i++) {
+        dir[i] = kernel_directory[i];
+    }
+    for (uint32_t i = high_start; i < 1024u; i++) {
+        dir[i] = kernel_directory[i];
+    }
+
+    return dir;
+}
+
+void paging_switch_directory(uint32_t* dir) {
+    if (!dir) {
+        dir = kernel_directory;
+    }
+    if (!dir || dir == page_directory) {
+        return;
+    }
+
+    page_directory = dir;
+    __asm__ volatile ("mov %0, %%cr3" : : "r"((uint32_t)dir & 0xFFFFF000u) : "memory");
+}
+
+bool paging_user_accessible_range(uint32_t vaddr, uint32_t size, bool write) {
+    if (size == 0) {
+        return true;
+    }
+
+    uint32_t end = vaddr + size;
+    if (end < vaddr) {
+        return false;
+    }
+
+    // VOS user address range (matches kernel/elf.c).
+    if (vaddr < 0x01000000u) {
+        return false;
+    }
+    if (end > 0xC0000000u) {
+        return false;
+    }
+
+    uint32_t start_v = page_align_down(vaddr);
+    uint32_t end_v = page_align_up(end);
+
+    uint32_t cr3 = paging_get_cr3();
+    uint32_t* dir = (uint32_t*)(cr3 & 0xFFFFF000u);
+
+    for (uint32_t va = start_v; va < end_v; va += PAGE_SIZE) {
+        uint32_t dir_index = (va >> 22) & 0x3FFu;
+        uint32_t tbl_index = (va >> 12) & 0x3FFu;
+
+        uint32_t pde = dir[dir_index];
+        if ((pde & PAGE_PRESENT) == 0) {
+            return false;
+        }
+        if ((pde & PAGE_USER) == 0) {
+            return false;
+        }
+
+        uint32_t* table = (uint32_t*)(pde & 0xFFFFF000u);
+        uint32_t pte = table[tbl_index];
+        if ((pte & PAGE_PRESENT) == 0) {
+            return false;
+        }
+        if ((pte & PAGE_USER) == 0) {
+            return false;
+        }
+        if (write && ((pte & PAGE_RW) == 0)) {
+            return false;
+        }
+    }
+
+    return true;
 }

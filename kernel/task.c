@@ -2,14 +2,30 @@
 #include "kheap.h"
 #include "string.h"
 #include "gdt.h"
+#include "timer.h"
+#include "io.h"
+#include "paging.h"
+#include "pmm.h"
 
 #define KSTACK_SIZE (16u * 1024u)
+#define TASK_NAME_LEN 15
+#define TASK_MAX_SCAN 256
+#define KSTACK_REGION_BASE 0xF0000000u
 
 typedef struct task {
     uint32_t id;
     uint32_t esp;            // saved stack pointer (points to interrupt frame)
     uint32_t kstack_top;     // top of kernel stack (for TSS.esp0)
-    bool runnable;
+    uint32_t* page_directory;
+    bool user;
+    uint32_t user_brk;
+    uint32_t user_brk_min;
+    task_state_t state;
+    uint32_t wake_tick;
+    uint32_t wait_pid;
+    int32_t exit_code;
+    uint32_t cpu_ticks;
+    char name[TASK_NAME_LEN + 1];
     struct task* next;
 } task_t;
 
@@ -19,11 +35,23 @@ static task_t* current_task = NULL;
 static bool enabled = false;
 static uint32_t next_id = 1;
 static uint32_t tick_div = 0;
+static uint32_t next_kstack_region = KSTACK_REGION_BASE;
 
 static uint32_t* push32(uint32_t* sp, uint32_t v) {
     sp--;
     *sp = v;
     return sp;
+}
+
+static void task_set_name(task_t* t, const char* name) {
+    if (!t) {
+        return;
+    }
+    if (!name) {
+        name = "";
+    }
+    strncpy(t->name, name, TASK_NAME_LEN);
+    t->name[TASK_NAME_LEN] = '\0';
 }
 
 static void idle_thread(void) {
@@ -32,13 +60,42 @@ static void idle_thread(void) {
     }
 }
 
-static task_t* task_create_kernel(void (*entry)(void)) {
-    uint8_t* stack = (uint8_t*)kmalloc(KSTACK_SIZE);
-    if (!stack) {
+static bool kstack_alloc(uint32_t* out_stack_top) {
+    if (!out_stack_top) {
+        return false;
+    }
+
+    uint32_t region_base = next_kstack_region;
+    uint32_t stack_bottom = region_base + PAGE_SIZE;          // guard page below
+    uint32_t stack_top = stack_bottom + KSTACK_SIZE;
+
+    if (stack_top < stack_bottom) {
+        return false;
+    }
+
+    next_kstack_region = stack_top;
+
+    paging_prepare_range(stack_bottom, KSTACK_SIZE, PAGE_PRESENT | PAGE_RW);
+
+    for (uint32_t va = stack_bottom; va < stack_top; va += PAGE_SIZE) {
+        uint32_t frame = pmm_alloc_frame();
+        if (frame == 0) {
+            return false;
+        }
+        paging_map_page(va, frame, PAGE_PRESENT | PAGE_RW);
+        memset((void*)va, 0, PAGE_SIZE);
+    }
+
+    *out_stack_top = stack_top;
+    return true;
+}
+
+static task_t* task_create_kernel(void (*entry)(void), const char* name) {
+    uint32_t stack_top_addr = 0;
+    if (!kstack_alloc(&stack_top_addr)) {
         return NULL;
     }
 
-    uint32_t stack_top_addr = (uint32_t)(stack + KSTACK_SIZE);
     uint32_t* sp = (uint32_t*)stack_top_addr;
 
     // iret frame (ring 0): eip, cs, eflags
@@ -74,18 +131,26 @@ static task_t* task_create_kernel(void (*entry)(void)) {
     t->id = ++next_id;
     t->esp = (uint32_t)sp;
     t->kstack_top = stack_top_addr;
-    t->runnable = true;
+    t->page_directory = paging_kernel_directory();
+    t->user = false;
+    t->user_brk = 0;
+    t->user_brk_min = 0;
+    t->state = TASK_STATE_RUNNABLE;
+    t->wake_tick = 0;
+    t->wait_pid = 0;
+    t->exit_code = 0;
+    t->cpu_ticks = 0;
+    task_set_name(t, name);
     t->next = NULL;
     return t;
 }
 
-static task_t* task_create_user(uint32_t entry, uint32_t user_esp) {
-    uint8_t* stack = (uint8_t*)kmalloc(KSTACK_SIZE);
-    if (!stack) {
+static task_t* task_create_user(uint32_t entry, uint32_t user_esp, uint32_t* page_directory, uint32_t user_brk, const char* name) {
+    uint32_t stack_top_addr = 0;
+    if (!kstack_alloc(&stack_top_addr)) {
         return NULL;
     }
 
-    uint32_t stack_top_addr = (uint32_t)(stack + KSTACK_SIZE);
     uint32_t* sp = (uint32_t*)stack_top_addr;
 
     // iret frame (ring 3): eip, cs, eflags, useresp, ss
@@ -123,7 +188,16 @@ static task_t* task_create_user(uint32_t entry, uint32_t user_esp) {
     t->id = ++next_id;
     t->esp = (uint32_t)sp;
     t->kstack_top = stack_top_addr;
-    t->runnable = true;
+    t->page_directory = page_directory;
+    t->user = true;
+    t->user_brk = user_brk;
+    t->user_brk_min = user_brk;
+    t->state = TASK_STATE_RUNNABLE;
+    t->wake_tick = 0;
+    t->wait_pid = 0;
+    t->exit_code = 0;
+    t->cpu_ticks = 0;
+    task_set_name(t, name);
     t->next = NULL;
     return t;
 }
@@ -140,6 +214,146 @@ static void task_append(task_t* t) {
     current_task->next = t;
 }
 
+uint32_t tasking_current_pid(void) {
+    return current_task ? current_task->id : 0;
+}
+
+uint32_t tasking_task_count(void) {
+    uint32_t flags = irq_save();
+
+    if (!current_task) {
+        irq_restore(flags);
+        return 0;
+    }
+
+    uint32_t count = 0;
+    task_t* t = current_task;
+    do {
+        count++;
+        t = t->next;
+        if (!t) {
+            break;
+        }
+    } while (t != current_task && count < TASK_MAX_SCAN);
+
+    irq_restore(flags);
+    return count;
+}
+
+static void fill_task_info(task_info_t* out, const task_t* t) {
+    memset(out, 0, sizeof(*out));
+    out->pid = t->id;
+    out->user = t->user;
+    out->state = t->state;
+    out->cpu_ticks = t->cpu_ticks;
+    out->exit_code = t->exit_code;
+    out->wake_tick = t->wake_tick;
+    out->wait_pid = t->wait_pid;
+    strncpy(out->name, t->name, sizeof(out->name) - 1u);
+    out->name[sizeof(out->name) - 1u] = '\0';
+
+    out->eip = 0;
+    out->esp = 0;
+    if (t->esp != 0) {
+        const interrupt_frame_t* f = (const interrupt_frame_t*)t->esp;
+        out->eip = f->eip;
+        out->esp = (uint32_t)t->esp;
+    }
+}
+
+bool tasking_get_task_info(uint32_t index, task_info_t* out) {
+    if (!out) {
+        return false;
+    }
+
+    uint32_t flags = irq_save();
+
+    if (!current_task) {
+        irq_restore(flags);
+        return false;
+    }
+
+    task_t* t = current_task;
+    uint32_t i = 0;
+    for (;;) {
+        if (i == index) {
+            fill_task_info(out, t);
+            irq_restore(flags);
+            return true;
+        }
+        t = t->next;
+        i++;
+        if (!t || t == current_task || i >= TASK_MAX_SCAN) {
+            break;
+        }
+    }
+
+    irq_restore(flags);
+    return false;
+}
+
+static void wake_sleepers(uint32_t now_ticks) {
+    if (!current_task) {
+        return;
+    }
+
+    task_t* t = current_task;
+    for (uint32_t i = 0; i < TASK_MAX_SCAN; i++) {
+        if (!t) {
+            break;
+        }
+        if (t->state == TASK_STATE_SLEEPING) {
+            if ((int32_t)(now_ticks - t->wake_tick) >= 0) {
+                t->state = TASK_STATE_RUNNABLE;
+                t->wake_tick = 0;
+            }
+        }
+        t = t->next;
+        if (t == current_task) {
+            break;
+        }
+    }
+}
+
+static void wake_waiters(uint32_t pid, int32_t exit_code) {
+    if (!current_task) {
+        return;
+    }
+
+    task_t* t = current_task;
+    for (uint32_t i = 0; i < TASK_MAX_SCAN; i++) {
+        if (!t) {
+            break;
+        }
+        if (t->state == TASK_STATE_WAITING && t->wait_pid == pid) {
+            t->state = TASK_STATE_RUNNABLE;
+            t->wait_pid = 0;
+            if (t->esp) {
+                interrupt_frame_t* f = (interrupt_frame_t*)t->esp;
+                f->eax = (uint32_t)exit_code;
+            }
+        }
+        t = t->next;
+        if (t == current_task) {
+            break;
+        }
+    }
+}
+
+static task_t* pick_next_runnable(task_t* start, const task_t* stop) {
+    task_t* t = start;
+    for (uint32_t i = 0; i < TASK_MAX_SCAN; i++) {
+        if (!t || t == stop) {
+            return NULL;
+        }
+        if (t->state == TASK_STATE_RUNNABLE && t->esp != 0) {
+            return t;
+        }
+        t = t->next;
+    }
+    return NULL;
+}
+
 void tasking_init(void) {
     if (current_task) {
         return;
@@ -153,11 +367,20 @@ void tasking_init(void) {
     boot->id = next_id;
     boot->esp = 0;
     boot->kstack_top = (uint32_t)&stack_top;
-    boot->runnable = true;
+    boot->page_directory = paging_kernel_directory();
+    boot->user = false;
+    boot->user_brk = 0;
+    boot->user_brk_min = 0;
+    boot->state = TASK_STATE_RUNNABLE;
+    boot->wake_tick = 0;
+    boot->wait_pid = 0;
+    boot->exit_code = 0;
+    boot->cpu_ticks = 0;
+    task_set_name(boot, "boot");
     boot->next = boot;
     current_task = boot;
 
-    task_t* idle = task_create_kernel(idle_thread);
+    task_t* idle = task_create_kernel(idle_thread, "idle");
     if (idle) {
         task_append(idle);
     }
@@ -176,6 +399,11 @@ interrupt_frame_t* tasking_on_timer_tick(interrupt_frame_t* frame) {
         return frame;
     }
 
+    current_task->cpu_ticks++;
+
+    uint32_t now = timer_get_ticks();
+    wake_sleepers(now);
+
     tick_div++;
     if (tick_div < 10u) {
         return frame;
@@ -186,23 +414,14 @@ interrupt_frame_t* tasking_on_timer_tick(interrupt_frame_t* frame) {
     current_task->esp = (uint32_t)frame;
 
     // Find next runnable task.
-    task_t* next = current_task->next;
-    if (!next || next == current_task) {
+    task_t* next = pick_next_runnable(current_task->next, current_task);
+    if (!next) {
         return frame;
-    }
-
-    for (int i = 0; i < 64; i++) {
-        if (next->runnable && next->esp != 0) {
-            break;
-        }
-        next = next->next;
-        if (!next || next == current_task) {
-            return frame;
-        }
     }
 
     current_task = next;
     tss_set_kernel_stack(current_task->kstack_top);
+    paging_switch_directory(current_task->page_directory);
     return (interrupt_frame_t*)current_task->esp;
 }
 
@@ -212,42 +431,215 @@ interrupt_frame_t* tasking_yield(interrupt_frame_t* frame) {
     }
 
     current_task->esp = (uint32_t)frame;
-    task_t* next = current_task->next;
-    if (!next || next == current_task) {
+    task_t* next = pick_next_runnable(current_task->next, current_task);
+    if (!next) {
         return frame;
-    }
-
-    for (int i = 0; i < 64; i++) {
-        if (next->runnable && next->esp != 0) {
-            break;
-        }
-        next = next->next;
-        if (!next || next == current_task) {
-            return frame;
-        }
     }
 
     current_task = next;
     tss_set_kernel_stack(current_task->kstack_top);
+    paging_switch_directory(current_task->page_directory);
     return (interrupt_frame_t*)current_task->esp;
 }
 
-interrupt_frame_t* tasking_exit(interrupt_frame_t* frame) {
+interrupt_frame_t* tasking_exit(interrupt_frame_t* frame, int32_t exit_code) {
     if (!enabled || !current_task || !frame) {
         return frame;
     }
 
-    current_task->runnable = false;
+    current_task->state = TASK_STATE_ZOMBIE;
+    current_task->exit_code = exit_code;
+    current_task->esp = (uint32_t)frame;
+    wake_waiters(current_task->id, exit_code);
+    return tasking_yield(frame);
+}
+
+interrupt_frame_t* tasking_sleep_until(interrupt_frame_t* frame, uint32_t wake_tick) {
+    if (!enabled || !current_task || !frame) {
+        return frame;
+    }
+    current_task->state = TASK_STATE_SLEEPING;
+    current_task->wake_tick = wake_tick;
     current_task->esp = (uint32_t)frame;
     return tasking_yield(frame);
 }
 
-bool tasking_spawn_user(uint32_t entry, uint32_t user_esp) {
-    if (!current_task) {
+interrupt_frame_t* tasking_wait(interrupt_frame_t* frame, uint32_t pid) {
+    if (!enabled || !current_task || !frame) {
+        return frame;
+    }
+    if (pid == 0 || pid == current_task->id) {
+        frame->eax = (uint32_t)-1;
+        return frame;
+    }
+
+    task_t* target = NULL;
+    task_t* t = current_task;
+    for (uint32_t i = 0; i < TASK_MAX_SCAN; i++) {
+        if (!t) {
+            break;
+        }
+        if (t->id == pid) {
+            target = t;
+            break;
+        }
+        t = t->next;
+        if (t == current_task) {
+            break;
+        }
+    }
+
+    if (!target) {
+        frame->eax = (uint32_t)-1;
+        return frame;
+    }
+
+    if (target->state == TASK_STATE_ZOMBIE) {
+        frame->eax = (uint32_t)target->exit_code;
+        return frame;
+    }
+
+    current_task->state = TASK_STATE_WAITING;
+    current_task->wait_pid = pid;
+    current_task->esp = (uint32_t)frame;
+    return tasking_yield(frame);
+}
+
+bool tasking_kill(uint32_t pid, int32_t exit_code) {
+    if (!enabled || !current_task || pid == 0) {
+        return false;
+    }
+    if (pid == current_task->id) {
         return false;
     }
 
-    task_t* t = task_create_user(entry, user_esp);
+    uint32_t flags = irq_save();
+
+    task_t* t = current_task;
+    for (uint32_t i = 0; i < TASK_MAX_SCAN; i++) {
+        if (!t) {
+            break;
+        }
+        if (t->id == pid) {
+            if (t->state != TASK_STATE_ZOMBIE) {
+                t->state = TASK_STATE_ZOMBIE;
+                t->exit_code = exit_code;
+                wake_waiters(pid, exit_code);
+            }
+            irq_restore(flags);
+            return true;
+        }
+        t = t->next;
+        if (t == current_task) {
+            break;
+        }
+    }
+
+    irq_restore(flags);
+    return false;
+}
+
+interrupt_frame_t* tasking_sbrk(interrupt_frame_t* frame, int32_t increment) {
+    if (!enabled || !current_task || !frame) {
+        return frame;
+    }
+    if (!current_task->user) {
+        frame->eax = (uint32_t)-1;
+        return frame;
+    }
+
+    uint32_t old_brk = current_task->user_brk;
+    if (increment == 0) {
+        frame->eax = old_brk;
+        return frame;
+    }
+
+    uint32_t new_brk = old_brk;
+    if (increment > 0) {
+        uint32_t inc = (uint32_t)increment;
+        if (old_brk + inc < old_brk) {
+            frame->eax = (uint32_t)-1;
+            return frame;
+        }
+        new_brk = old_brk + inc;
+    } else {
+        uint32_t dec = (uint32_t)(-increment);
+        if (dec > old_brk) {
+            frame->eax = (uint32_t)-1;
+            return frame;
+        }
+        new_brk = old_brk - dec;
+    }
+
+    const uint32_t USER_BASE = 0x01000000u;
+    const uint32_t USER_STACK_TOP = 0x02000000u;
+    const uint32_t USER_STACK_PAGES = 8u;
+    uint32_t stack_guard_bottom = USER_STACK_TOP - (USER_STACK_PAGES + 1u) * PAGE_SIZE;
+
+    if (new_brk < USER_BASE || new_brk < current_task->user_brk_min || new_brk > stack_guard_bottom) {
+        frame->eax = (uint32_t)-1;
+        return frame;
+    }
+
+    uint32_t irq_flags = irq_save();
+
+    if (increment > 0) {
+        uint32_t start = (old_brk + PAGE_SIZE - 1u) & ~(PAGE_SIZE - 1u);
+        uint32_t end = (new_brk + PAGE_SIZE - 1u) & ~(PAGE_SIZE - 1u);
+
+        uint32_t va = start;
+        for (; va < end; va += PAGE_SIZE) {
+            if (va >= stack_guard_bottom) {
+                break;
+            }
+
+            uint32_t frame_paddr = pmm_alloc_frame();
+            if (frame_paddr == 0) {
+                break;
+            }
+            paging_map_page(va, frame_paddr, PAGE_PRESENT | PAGE_RW | PAGE_USER);
+            memset((void*)va, 0, PAGE_SIZE);
+        }
+
+        if (va != end) {
+            // Roll back partial growth.
+            for (uint32_t un = start; un < va; un += PAGE_SIZE) {
+                uint32_t paddr = 0;
+                if (paging_unmap_page(un, &paddr) && paddr) {
+                    pmm_free_frame(paddr);
+                }
+            }
+            irq_restore(irq_flags);
+            frame->eax = (uint32_t)-1;
+            return frame;
+        }
+    } else {
+        uint32_t start = (new_brk + PAGE_SIZE - 1u) & ~(PAGE_SIZE - 1u);
+        uint32_t end = (old_brk + PAGE_SIZE - 1u) & ~(PAGE_SIZE - 1u);
+
+        for (uint32_t va = start; va < end; va += PAGE_SIZE) {
+            uint32_t paddr = 0;
+            if (paging_unmap_page(va, &paddr) && paddr) {
+                pmm_free_frame(paddr);
+            }
+        }
+    }
+
+    current_task->user_brk = new_brk;
+    irq_restore(irq_flags);
+    frame->eax = old_brk;
+    return frame;
+}
+
+bool tasking_spawn_user(uint32_t entry, uint32_t user_esp, uint32_t* page_directory, uint32_t user_brk) {
+    if (!current_task) {
+        return false;
+    }
+    if (!page_directory) {
+        return false;
+    }
+
+    task_t* t = task_create_user(entry, user_esp, page_directory, user_brk, "user");
     if (!t) {
         return false;
     }

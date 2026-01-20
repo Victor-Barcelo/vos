@@ -8,6 +8,7 @@
 #include "statusbar.h"
 #include "vfs.h"
 #include "elf.h"
+#include "paging.h"
 #include "task.h"
 #include "system.h"
 #include "ubasic.h"
@@ -17,6 +18,15 @@
 #define MAX_COMMAND_LENGTH 256
 #define BASIC_PROGRAM_SIZE 4096
 #define VOS_VERSION "0.1.0"
+
+enum {
+    SYS_WRITE = 0,
+    SYS_EXIT  = 1,
+    SYS_YIELD = 2,
+    SYS_SLEEP = 3,
+    SYS_WAIT  = 4,
+    SYS_KILL  = 5,
+};
 
 // Forward declarations for commands
 static void cmd_help(void);
@@ -34,6 +44,10 @@ static void cmd_setdate(const char* args);
 static void cmd_ls(void);
 static void cmd_cat(const char* args);
 static void cmd_run(const char* args);
+static void cmd_ps(void);
+static void cmd_top(void);
+static void cmd_kill(const char* args);
+static void cmd_wait(const char* args);
 
 static void print_spaces(int count) {
     for (int i = 0; i < count; i++) {
@@ -365,6 +379,14 @@ static void execute_command(char* input) {
         cmd_cat(args);
     } else if (strcmp(input, "run") == 0) {
         cmd_run(args);
+    } else if (strcmp(input, "ps") == 0) {
+        cmd_ps();
+    } else if (strcmp(input, "top") == 0) {
+        cmd_top();
+    } else if (strcmp(input, "kill") == 0) {
+        cmd_kill(args);
+    } else if (strcmp(input, "wait") == 0) {
+        cmd_wait(args);
     } else {
         screen_set_color(VGA_LIGHT_RED, VGA_BLUE);
         screen_print("Unknown command: ");
@@ -390,6 +412,10 @@ static void cmd_help(void) {
     print_help_cmd("ls", "List initramfs files");
     print_help_cmd("cat <file>", "Print a file from initramfs");
     print_help_cmd("run <elf>", "Run a user-mode ELF from initramfs");
+    print_help_cmd("ps", "List running tasks");
+    print_help_cmd("top", "Live task view (press q)");
+    print_help_cmd("kill <pid> [code]", "Kill a task");
+    print_help_cmd("wait <pid>", "Wait for a task to exit");
     print_help_cmd("color <0-15>", "Change text color");
     print_help_cmd("basic", "Start BASIC interpreter");
     print_help_cmd("reboot", "Reboot the system");
@@ -505,7 +531,9 @@ static void cmd_sleep(const char* args) {
         return;
     }
 
-    timer_sleep_ms((uint32_t)ms);
+    int ret;
+    __asm__ volatile ("int $0x80" : "=a"(ret) : "a"((uint32_t)SYS_SLEEP), "b"((uint32_t)ms) : "memory");
+    (void)ret;
 }
 
 static void print_2d(uint8_t v) {
@@ -654,12 +682,24 @@ static void cmd_run(const char* args) {
 
     uint32_t entry = 0;
     uint32_t user_esp = 0;
-    if (!elf_load_user_image(data, size, &entry, &user_esp)) {
+    uint32_t brk = 0;
+    uint32_t* user_dir = paging_create_user_directory();
+    if (!user_dir) {
+        screen_println("Out of memory (page directory).");
+        return;
+    }
+
+    uint32_t flags = irq_save();
+    paging_switch_directory(user_dir);
+    bool ok = elf_load_user_image(data, size, &entry, &user_esp, &brk);
+    paging_switch_directory(paging_kernel_directory());
+    irq_restore(flags);
+    if (!ok) {
         screen_println("ELF load failed.");
         return;
     }
 
-    if (!tasking_spawn_user(entry, user_esp)) {
+    if (!tasking_spawn_user(entry, user_esp, user_dir, brk)) {
         screen_println("Failed to spawn task.");
         return;
     }
@@ -668,6 +708,122 @@ static void cmd_run(const char* args) {
 
     // Give the new task a chance to run immediately.
     __asm__ volatile ("int $0x80" : : "a"(2u) : "memory");
+}
+
+static const char* task_state_str(task_state_t state) {
+    switch (state) {
+        case TASK_STATE_RUNNABLE: return "RUN";
+        case TASK_STATE_SLEEPING: return "SLEEP";
+        case TASK_STATE_WAITING:  return "WAIT";
+        case TASK_STATE_ZOMBIE:   return "ZOMB";
+        default:                  return "?";
+    }
+}
+
+static void cmd_ps(void) {
+    uint32_t count = tasking_task_count();
+    uint32_t cur = tasking_current_pid();
+
+    screen_set_color(VGA_LIGHT_CYAN, VGA_BLUE);
+    screen_print("PID   USER  STATE  TICKS    EIP       NAME");
+    screen_set_color(VGA_WHITE, VGA_BLUE);
+    screen_putchar('\n');
+
+    for (uint32_t i = 0; i < count; i++) {
+        task_info_t info;
+        if (!tasking_get_task_info(i, &info)) {
+            continue;
+        }
+
+        if (info.pid == cur) {
+            screen_set_color(VGA_YELLOW, VGA_BLUE);
+        } else {
+            screen_set_color(VGA_WHITE, VGA_BLUE);
+        }
+
+        screen_print_dec((int32_t)info.pid);
+        screen_print((info.pid < 10) ? "     " : (info.pid < 100) ? "    " : (info.pid < 1000) ? "   " : "  ");
+
+        screen_print(info.user ? "user  " : "kern  ");
+        screen_print(task_state_str(info.state));
+        screen_print((strlen(task_state_str(info.state)) < 5) ? "   " : "  ");
+
+        screen_print_dec((int32_t)info.cpu_ticks);
+        screen_print("  ");
+
+        screen_print_hex(info.eip);
+        screen_print("  ");
+
+        screen_println(info.name);
+    }
+
+    screen_set_color(VGA_WHITE, VGA_BLUE);
+}
+
+static void cmd_top(void) {
+    screen_set_color(VGA_WHITE, VGA_BLUE);
+    screen_println("top: press 'q' to quit");
+
+    for (;;) {
+        // Exit if user typed q.
+        if (keyboard_has_key()) {
+            char c = keyboard_getchar();
+            if (c == 'q' || c == 'Q') {
+                return;
+            }
+        }
+
+        screen_clear();
+        statusbar_refresh();
+
+        cmd_ps();
+
+        // Sleep ~1s in small chunks so 'q' feels responsive.
+        for (int i = 0; i < 10; i++) {
+            if (keyboard_has_key()) {
+                char c = keyboard_getchar();
+                if (c == 'q' || c == 'Q') {
+                    return;
+                }
+            }
+            int ret;
+            __asm__ volatile ("int $0x80" : "=a"(ret) : "a"((uint32_t)SYS_SLEEP), "b"(100u) : "memory");
+            (void)ret;
+        }
+    }
+}
+
+static void cmd_kill(const char* args) {
+    if (!args || args[0] == '\0') {
+        screen_println("Usage: kill <pid> [code]");
+        return;
+    }
+
+    int pid = atoi(args);
+    while (*args && *args != ' ') args++;
+    while (*args == ' ') args++;
+    int code = 0;
+    if (*args) {
+        code = atoi(args);
+    }
+
+    bool ok = tasking_kill((uint32_t)pid, (int32_t)code);
+    screen_println(ok ? "OK" : "Failed");
+}
+
+static void cmd_wait(const char* args) {
+    if (!args || args[0] == '\0') {
+        screen_println("Usage: wait <pid>");
+        return;
+    }
+
+    int pid = atoi(args);
+    int ret;
+    __asm__ volatile ("int $0x80" : "=a"(ret) : "a"((uint32_t)SYS_WAIT), "b"((uint32_t)pid) : "memory");
+
+    screen_print("exit_code=");
+    screen_print_dec((int32_t)ret);
+    screen_putchar('\n');
 }
 
 // BASIC interpreter command

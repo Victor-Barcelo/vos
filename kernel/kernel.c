@@ -80,11 +80,22 @@ static void try_start_init(void) {
 
     uint32_t entry = 0;
     uint32_t user_esp = 0;
-    if (!elf_load_user_image(data, size, &entry, &user_esp)) {
+    uint32_t brk = 0;
+    uint32_t* user_dir = paging_create_user_directory();
+    if (!user_dir) {
         return;
     }
 
-    if (!tasking_spawn_user(entry, user_esp)) {
+    uint32_t flags = irq_save();
+    paging_switch_directory(user_dir);
+    bool ok = elf_load_user_image(data, size, &entry, &user_esp, &brk);
+    paging_switch_directory(paging_kernel_directory());
+    irq_restore(flags);
+    if (!ok) {
+        return;
+    }
+
+    if (!tasking_spawn_user(entry, user_esp, user_dir, brk)) {
         return;
     }
 

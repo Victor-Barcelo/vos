@@ -3,6 +3,7 @@
 #include "panic.h"
 #include "syscall.h"
 #include "task.h"
+#include "screen.h"
 
 static irq_handler_t irq_handlers[16] = {0};
 
@@ -54,12 +55,66 @@ static const char* const exception_names[32] = {
     "Reserved",
 };
 
+static bool frame_from_user(const interrupt_frame_t* frame) {
+    if (!frame) {
+        return false;
+    }
+    return (frame->cs & 0x3u) == 0x3u;
+}
+
+static uint32_t read_cr2(void) {
+    uint32_t value;
+    __asm__ volatile ("mov %%cr2, %0" : "=r"(value));
+    return value;
+}
+
+static void print_page_fault_decode(uint32_t err_code) {
+    bool present = (err_code & 0x1u) != 0;
+    bool write = (err_code & 0x2u) != 0;
+    bool user = (err_code & 0x4u) != 0;
+    bool rsvd = (err_code & 0x8u) != 0;
+    bool instr = (err_code & 0x10u) != 0;
+
+    screen_print("  ");
+    screen_print(present ? "P=1" : "P=0");
+    screen_print(" ");
+    screen_print(write ? "W=1" : "W=0");
+    screen_print(" ");
+    screen_print(user ? "U=1" : "U=0");
+    if (rsvd) screen_print(" RSVD=1");
+    if (instr) screen_print(" I=1");
+    screen_putchar('\n');
+}
+
 interrupt_frame_t* interrupt_handler(interrupt_frame_t* frame) {
     if (!frame) {
         panic("interrupt_handler: NULL frame");
     }
 
     if (frame->int_no < 32) {
+        if (frame_from_user(frame)) {
+            screen_set_color(VGA_LIGHT_RED, VGA_BLUE);
+            screen_print("\n[USER EXCEPTION] ");
+            screen_set_color(VGA_WHITE, VGA_BLUE);
+            screen_println(exception_names[frame->int_no]);
+
+            if (frame->int_no == 14) {
+                screen_print("  cr2=");
+                screen_print_hex(read_cr2());
+                screen_putchar('\n');
+                print_page_fault_decode(frame->err_code);
+            }
+
+            screen_print("  eip=");
+            screen_print_hex(frame->eip);
+            screen_print(" err=");
+            screen_print_hex(frame->err_code);
+            screen_putchar('\n');
+
+            screen_println("  -> killing user task");
+            return tasking_exit(frame, -(int32_t)frame->int_no);
+        }
+
         panic_with_frame(exception_names[frame->int_no], frame);
     }
 

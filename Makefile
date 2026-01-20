@@ -47,8 +47,8 @@ USER_OBJECTS = $(USER_ASM_OBJECTS) $(USER_C_OBJECTS)
 USER_INIT = $(USER_BUILD_DIR)/init.elf
 
 # QEMU defaults
-QEMU_XRES ?= 1280
-QEMU_YRES ?= 800
+QEMU_XRES ?= 1920
+QEMU_YRES ?= 1080
 
 # Default target
 all: $(ISO)
@@ -101,7 +101,7 @@ $(ISO): $(KERNEL) $(USER_INIT)
 	echo 'insmod gfxterm' >> $(ISO_DIR)/boot/grub/grub.cfg
 	echo 'insmod font' >> $(ISO_DIR)/boot/grub/grub.cfg
 	echo 'loadfont /boot/grub/fonts/unicode.pf2' >> $(ISO_DIR)/boot/grub/grub.cfg
-	echo 'set gfxmode=1280x800,1280x720,1024x768,800x600,640x480,auto' >> $(ISO_DIR)/boot/grub/grub.cfg
+	echo "set gfxmode=$(QEMU_XRES)x$(QEMU_YRES),1920x1080,1600x900,1366x768,1280x800,1280x720,1024x768,800x600,640x480,auto" >> $(ISO_DIR)/boot/grub/grub.cfg
 	echo 'set gfxpayload=keep' >> $(ISO_DIR)/boot/grub/grub.cfg
 	echo 'terminal_output gfxterm' >> $(ISO_DIR)/boot/grub/grub.cfg
 	echo 'menuentry "VOS" {' >> $(ISO_DIR)/boot/grub/grub.cfg

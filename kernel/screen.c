@@ -743,3 +743,42 @@ void screen_cursor_set_enabled(bool enabled) {
 
     vga_hw_cursor_set_enabled(enabled);
 }
+
+bool screen_is_framebuffer(void) {
+    return backend == SCREEN_BACKEND_FRAMEBUFFER;
+}
+
+uint32_t screen_framebuffer_width(void) {
+    if (backend != SCREEN_BACKEND_FRAMEBUFFER) {
+        return 0;
+    }
+    return fb_width;
+}
+
+uint32_t screen_framebuffer_height(void) {
+    if (backend != SCREEN_BACKEND_FRAMEBUFFER) {
+        return 0;
+    }
+    return fb_height;
+}
+
+uint32_t screen_framebuffer_bpp(void) {
+    if (backend != SCREEN_BACKEND_FRAMEBUFFER) {
+        return 0;
+    }
+    return fb_bpp;
+}
+
+uint32_t screen_font_width(void) {
+    if (backend != SCREEN_BACKEND_FRAMEBUFFER) {
+        return 0;
+    }
+    return fb_font.width;
+}
+
+uint32_t screen_font_height(void) {
+    if (backend != SCREEN_BACKEND_FRAMEBUFFER) {
+        return 0;
+    }
+    return fb_font.height;
+}

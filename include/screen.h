@@ -76,4 +76,12 @@ void screen_fill_row(int y, char c, uint8_t color);
 // Enable/disable the VGA hardware cursor.
 void screen_cursor_set_enabled(bool enabled);
 
+// Framebuffer backend information (returns 0 when not in framebuffer mode).
+bool screen_is_framebuffer(void);
+uint32_t screen_framebuffer_width(void);
+uint32_t screen_framebuffer_height(void);
+uint32_t screen_framebuffer_bpp(void);
+uint32_t screen_font_width(void);
+uint32_t screen_font_height(void);
+
 #endif

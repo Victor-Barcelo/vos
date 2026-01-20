@@ -9,12 +9,14 @@
 #include "vfs.h"
 #include "elf.h"
 #include "task.h"
+#include "system.h"
 #include "ubasic.h"
 #include "basic_programs.h"
 #include "stdlib.h"
 
 #define MAX_COMMAND_LENGTH 256
 #define BASIC_PROGRAM_SIZE 4096
+#define VOS_VERSION "0.1.0"
 
 // Forward declarations for commands
 static void cmd_help(void);
@@ -32,6 +34,235 @@ static void cmd_setdate(const char* args);
 static void cmd_ls(void);
 static void cmd_cat(const char* args);
 static void cmd_run(const char* args);
+
+static void print_spaces(int count) {
+    for (int i = 0; i < count; i++) {
+        screen_putchar(' ');
+    }
+}
+
+static void print_banner_key(const char* key) {
+    screen_set_color(VGA_YELLOW, VGA_BLUE);
+    screen_print(key);
+    screen_set_color(VGA_WHITE, VGA_BLUE);
+}
+
+static void print_uptime_human(uint32_t uptime_ms) {
+    uint32_t seconds = uptime_ms / 1000u;
+    uint32_t days = seconds / 86400u;
+    seconds %= 86400u;
+    uint32_t hours = seconds / 3600u;
+    seconds %= 3600u;
+    uint32_t minutes = seconds / 60u;
+    seconds %= 60u;
+
+    bool printed = false;
+    if (days) {
+        screen_print_dec((int32_t)days);
+        screen_print("d ");
+        printed = true;
+    }
+    if (hours || printed) {
+        screen_print_dec((int32_t)hours);
+        screen_print("h ");
+        printed = true;
+    }
+    if (minutes || printed) {
+        screen_print_dec((int32_t)minutes);
+        screen_print("m ");
+    }
+    screen_print_dec((int32_t)seconds);
+    screen_print("s");
+}
+
+static void print_neofetch_like_banner(void) {
+    static const char* const logo[] = {
+        " _    __  ____   _____ ",
+        "| |  / / / __ \\ / ____|",
+        "| | / / | |  | | (___  ",
+        "| |/ /  | |  | |\\___ \\ ",
+        "|   <   | |__| |____) |",
+        "|_|\\_\\   \\____/|_____/ ",
+    };
+    const int logo_lines = (int)(sizeof(logo) / sizeof(logo[0]));
+
+    int logo_width = 0;
+    for (int i = 0; i < logo_lines; i++) {
+        int len = (int)strlen(logo[i]);
+        if (len > logo_width) {
+            logo_width = len;
+        }
+    }
+
+    const int info_lines = 12;
+    int lines = (logo_lines > info_lines) ? logo_lines : info_lines;
+
+    for (int line = 0; line < lines; line++) {
+        const char* l = (line < logo_lines) ? logo[line] : "";
+        int l_len = (int)strlen(l);
+
+        screen_set_color(VGA_LIGHT_CYAN, VGA_BLUE);
+        screen_print(l);
+        if (l_len < logo_width) {
+            print_spaces(logo_width - l_len);
+        }
+        screen_set_color(VGA_WHITE, VGA_BLUE);
+        print_spaces(2);
+
+        switch (line) {
+            case 0: {
+                screen_set_color(VGA_LIGHT_CYAN, VGA_BLUE);
+                screen_print("kernel@vos");
+                screen_set_color(VGA_WHITE, VGA_BLUE);
+                break;
+            }
+            case 1: {
+                screen_set_color(VGA_LIGHT_CYAN, VGA_BLUE);
+                screen_print("----------");
+                screen_set_color(VGA_WHITE, VGA_BLUE);
+                break;
+            }
+            case 2: {
+                print_banner_key("OS");
+                screen_print(": VOS ");
+                screen_print(VOS_VERSION);
+                screen_print(" (i386)");
+                break;
+            }
+            case 3: {
+                print_banner_key("Kernel");
+                screen_print(": VOS kernel (Multiboot1)");
+                break;
+            }
+            case 4: {
+                print_banner_key("Display");
+                screen_print(": ");
+                if (screen_is_framebuffer()) {
+                    uint32_t w = screen_framebuffer_width();
+                    uint32_t h = screen_framebuffer_height();
+                    uint32_t bpp = screen_framebuffer_bpp();
+                    screen_print_dec((int32_t)w);
+                    screen_putchar('x');
+                    screen_print_dec((int32_t)h);
+                    if (bpp) {
+                        screen_print("x");
+                        screen_print_dec((int32_t)bpp);
+                    }
+                    screen_print(" (");
+                    screen_print_dec((int32_t)screen_cols());
+                    screen_putchar('x');
+                    screen_print_dec((int32_t)screen_rows());
+                    screen_print(" cells)");
+                } else {
+                    screen_print("VGA text (");
+                    screen_print_dec((int32_t)screen_cols());
+                    screen_putchar('x');
+                    screen_print_dec((int32_t)screen_rows());
+                    screen_print(" cells)");
+                }
+                break;
+            }
+            case 5: {
+                print_banner_key("Font");
+                screen_print(": ");
+                if (screen_is_framebuffer()) {
+                    screen_print("PSF2 ");
+                    screen_print_dec((int32_t)screen_font_width());
+                    screen_putchar('x');
+                    screen_print_dec((int32_t)screen_font_height());
+                    screen_print(" px");
+                } else {
+                    screen_print("VGA text mode");
+                }
+                break;
+            }
+            case 6: {
+                print_banner_key("Uptime");
+                screen_print(": ");
+                print_uptime_human(timer_uptime_ms());
+                break;
+            }
+            case 7: {
+                print_banner_key("Memory");
+                screen_print(": ");
+                uint32_t kb = system_mem_total_kb();
+                if (kb) {
+                    screen_print_dec((int32_t)(kb / 1024u));
+                    screen_print(" MB");
+                } else {
+                    screen_print("unknown");
+                }
+                break;
+            }
+            case 8: {
+                print_banner_key("CPU");
+                screen_print(": ");
+                const char* cpu = system_cpu_brand();
+                if (!cpu || cpu[0] == '\0') {
+                    cpu = system_cpu_vendor();
+                }
+                while (cpu && (*cpu == ' ' || *cpu == '\t')) {
+                    cpu++;
+                }
+                if (cpu && cpu[0] != '\0') {
+                    screen_print(cpu);
+                } else {
+                    screen_print("unknown");
+                }
+                break;
+            }
+            case 9: {
+                print_banner_key("RTC");
+                screen_print(": ");
+                rtc_datetime_t dt;
+                if (rtc_read_datetime(&dt)) {
+                    screen_print_dec((int32_t)dt.year);
+                    screen_putchar('-');
+                    if (dt.month < 10) screen_putchar('0');
+                    screen_print_dec((int32_t)dt.month);
+                    screen_putchar('-');
+                    if (dt.day < 10) screen_putchar('0');
+                    screen_print_dec((int32_t)dt.day);
+                    screen_putchar(' ');
+                    if (dt.hour < 10) screen_putchar('0');
+                    screen_print_dec((int32_t)dt.hour);
+                    screen_putchar(':');
+                    if (dt.minute < 10) screen_putchar('0');
+                    screen_print_dec((int32_t)dt.minute);
+                    screen_putchar(':');
+                    if (dt.second < 10) screen_putchar('0');
+                    screen_print_dec((int32_t)dt.second);
+                } else {
+                    screen_print("unavailable");
+                }
+                break;
+            }
+            case 10: {
+                print_banner_key("initramfs");
+                screen_print(": ");
+                if (vfs_is_ready()) {
+                    screen_print_dec((int32_t)vfs_file_count());
+                    screen_print(" files");
+                } else {
+                    screen_print("not loaded");
+                }
+                break;
+            }
+            case 11: {
+                print_banner_key("Tasking");
+                screen_print(": ");
+                screen_print(tasking_is_enabled() ? "enabled" : "disabled");
+                break;
+            }
+            default:
+                break;
+        }
+
+        screen_putchar('\n');
+    }
+
+    screen_putchar('\n');
+}
 
 static void print_help_cmd(const char* cmd, const char* desc) {
     screen_set_color(VGA_YELLOW, VGA_BLUE);
@@ -589,6 +820,9 @@ void shell_run(void) {
 
     statusbar_init();
     keyboard_set_idle_hook(shell_idle_hook);
+
+    screen_set_color(VGA_WHITE, VGA_BLUE);
+    print_neofetch_like_banner();
 
     screen_set_color(VGA_LIGHT_CYAN, VGA_BLUE);
     screen_println("Welcome to VOS Shell!");

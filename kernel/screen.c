@@ -336,6 +336,15 @@ static void fb_scroll(void) {
         return;
     }
 
+    // The framebuffer cursor is an overlay drawn directly into pixel memory.
+    // If we scroll by memcpy-ing framebuffer rows, that overlay will get copied too,
+    // leaving "underscore trails" behind. Undraw it before copying any pixels.
+    if (cursor_drawn_x >= 0 && cursor_drawn_y >= 0) {
+        fb_render_cell(cursor_drawn_x, cursor_drawn_y);
+        cursor_drawn_x = -1;
+        cursor_drawn_y = -1;
+    }
+
     int cols = screen_cols_value;
     size_t row_bytes = (size_t)cols * sizeof(uint16_t);
     memcpy(&fb_cells[0], &fb_cells[cols], row_bytes * (size_t)(height - 1));

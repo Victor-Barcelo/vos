@@ -21,6 +21,8 @@ static bool altgr_pressed = false;
 static bool caps_lock = false;
 static bool extended_key = false;
 
+static void (*idle_hook)(void) = 0;
+
 // Spanish keyboard scancode to ASCII mapping (lowercase/unshifted)
 // Scancode index: 0x00-0x3F
 static const char scancode_to_ascii[] = {
@@ -199,9 +201,19 @@ bool keyboard_has_key(void) {
 }
 
 char keyboard_getchar(void) {
-    // Wait for a key (busy wait)
+    // Wait for a key.
+    if (!irq_are_enabled()) {
+        while (!keyboard_has_key()) {
+            __asm__ volatile ("pause");
+        }
+        return buffer_pop();
+    }
+
     while (!keyboard_has_key()) {
-        __asm__ volatile ("pause");  // Hint to CPU we're spinning
+        hlt();
+        if (idle_hook) {
+            idle_hook();
+        }
     }
     return buffer_pop();
 }
@@ -308,4 +320,8 @@ void keyboard_getline_history(char* buffer, size_t max_len) {
 // Legacy getline without history (for compatibility)
 void keyboard_getline(char* buffer, size_t max_len) {
     keyboard_getline_history(buffer, max_len);
+}
+
+void keyboard_set_idle_hook(void (*hook)(void)) {
+    idle_hook = hook;
 }

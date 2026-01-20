@@ -35,4 +35,7 @@ void keyboard_getline_history(char* buffer, size_t max_len);
 // Add a command to history manually
 void keyboard_history_add(const char* cmd);
 
+// Optional idle hook called while waiting for input (e.g. status bar refresh).
+void keyboard_set_idle_hook(void (*hook)(void));
+
 #endif

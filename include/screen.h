@@ -61,4 +61,12 @@ int screen_get_cursor_y(void);
 // Backspace - remove last character
 void screen_backspace(void);
 
+// Reserve bottom rows from scrolling/output (e.g. status bar).
+void screen_set_reserved_bottom_rows(int rows);
+
+// Write directly to the VGA buffer without moving the cursor or scrolling.
+void screen_write_char_at(int x, int y, char c, uint8_t color);
+void screen_write_string_at(int x, int y, const char* str, uint8_t color);
+void screen_fill_row(int y, char c, uint8_t color);
+
 #endif

@@ -5,6 +5,7 @@
 #include "io.h"
 #include "timer.h"
 #include "rtc.h"
+#include "statusbar.h"
 #include "ubasic.h"
 #include "basic_programs.h"
 #include "stdlib.h"
@@ -442,6 +443,9 @@ static void cmd_basic(void) {
 
 void shell_run(void) {
     char command_buffer[MAX_COMMAND_LENGTH];
+
+    statusbar_init();
+    keyboard_set_idle_hook(statusbar_tick);
 
     screen_set_color(VGA_LIGHT_CYAN, VGA_BLACK);
     screen_println("Welcome to VOS Shell!");

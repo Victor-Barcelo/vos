@@ -12,6 +12,16 @@ static int cursor_y = 0;
 // Current color attribute
 static uint8_t current_color = 0x0F; // White on black
 
+static int reserved_bottom_rows = 0;
+
+static int usable_height(void) {
+    int h = VGA_HEIGHT - reserved_bottom_rows;
+    if (h < 1) {
+        h = 1;
+    }
+    return h;
+}
+
 // Create a VGA entry
 static inline uint16_t vga_entry(char c, uint8_t color) {
     return (uint16_t)c | ((uint16_t)color << 8);
@@ -33,8 +43,10 @@ static void update_cursor(void) {
 
 // Scroll the screen up by one line
 static void screen_scroll(void) {
+    int height = usable_height();
+
     // Move all lines up by one
-    for (int y = 0; y < VGA_HEIGHT - 1; y++) {
+    for (int y = 0; y < height - 1; y++) {
         for (int x = 0; x < VGA_WIDTH; x++) {
             VGA_BUFFER[y * VGA_WIDTH + x] = VGA_BUFFER[(y + 1) * VGA_WIDTH + x];
         }
@@ -42,10 +54,10 @@ static void screen_scroll(void) {
 
     // Clear the last line
     for (int x = 0; x < VGA_WIDTH; x++) {
-        VGA_BUFFER[(VGA_HEIGHT - 1) * VGA_WIDTH + x] = vga_entry(' ', current_color);
+        VGA_BUFFER[(height - 1) * VGA_WIDTH + x] = vga_entry(' ', current_color);
     }
 
-    cursor_y = VGA_HEIGHT - 1;
+    cursor_y = height - 1;
 }
 
 void screen_init(void) {
@@ -65,6 +77,8 @@ void screen_clear(void) {
 }
 
 void screen_putchar(char c) {
+    int height = usable_height();
+
     if (c == '\n') {
         cursor_x = 0;
         cursor_y++;
@@ -89,7 +103,7 @@ void screen_putchar(char c) {
     }
 
     // Handle scrolling
-    if (cursor_y >= VGA_HEIGHT) {
+    if (cursor_y >= height) {
         screen_scroll();
     }
 
@@ -171,5 +185,51 @@ void screen_backspace(void) {
         cursor_x--;
         VGA_BUFFER[cursor_y * VGA_WIDTH + cursor_x] = vga_entry(' ', current_color);
         update_cursor();
+    }
+}
+
+void screen_set_reserved_bottom_rows(int rows) {
+    if (rows < 0) {
+        rows = 0;
+    }
+    if (rows >= VGA_HEIGHT) {
+        rows = VGA_HEIGHT - 1;
+    }
+    reserved_bottom_rows = rows;
+    if (cursor_y >= usable_height()) {
+        cursor_y = usable_height() - 1;
+        if (cursor_y < 0) cursor_y = 0;
+        if (cursor_x >= VGA_WIDTH) cursor_x = 0;
+        update_cursor();
+    }
+}
+
+void screen_write_char_at(int x, int y, char c, uint8_t color) {
+    if (x < 0 || x >= VGA_WIDTH || y < 0 || y >= VGA_HEIGHT) {
+        return;
+    }
+    VGA_BUFFER[y * VGA_WIDTH + x] = vga_entry(c, color);
+}
+
+void screen_write_string_at(int x, int y, const char* str, uint8_t color) {
+    if (!str || y < 0 || y >= VGA_HEIGHT) {
+        return;
+    }
+    int col = x;
+    while (*str && col < VGA_WIDTH) {
+        if (col >= 0) {
+            screen_write_char_at(col, y, *str, color);
+        }
+        col++;
+        str++;
+    }
+}
+
+void screen_fill_row(int y, char c, uint8_t color) {
+    if (y < 0 || y >= VGA_HEIGHT) {
+        return;
+    }
+    for (int x = 0; x < VGA_WIDTH; x++) {
+        screen_write_char_at(x, y, c, color);
     }
 }

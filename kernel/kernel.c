@@ -7,6 +7,7 @@
 #include "io.h"
 #include "interrupts.h"
 #include "timer.h"
+#include "system.h"
 
 // Multiboot magic number
 #define MULTIBOOT_MAGIC 0x2BADB002
@@ -18,8 +19,6 @@ static void keyboard_irq_handler(interrupt_frame_t* frame) {
 
 // Kernel main entry point
 void kernel_main(uint32_t magic, uint32_t* mboot_info) {
-    (void)mboot_info;  // Reserved for future use
-
     // Initialize serial early for logging/debugging (COM1).
     serial_init();
 
@@ -48,6 +47,8 @@ void kernel_main(uint32_t magic, uint32_t* mboot_info) {
         screen_print_hex(magic);
         screen_println("");
     }
+
+    system_init(magic, mboot_info);
 
     idt_init();
     screen_set_color(VGA_LIGHT_GREEN, VGA_BLACK);

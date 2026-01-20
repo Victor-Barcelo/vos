@@ -39,6 +39,7 @@ static void cmd_help(void);
 static void cmd_clear(void);
 static void cmd_echo(const char* args);
 static void cmd_info(void);
+static void cmd_fetch(void);
 static void cmd_reboot(void);
 static void cmd_halt(void);
 static void cmd_color(const char* args);
@@ -661,6 +662,8 @@ static void execute_command(char* input) {
         cmd_echo(args);
     } else if (strcmp(input, "info") == 0 || strcmp(input, "about") == 0) {
         cmd_info();
+    } else if (strcmp(input, "fetch") == 0 || strcmp(input, "neofetch") == 0) {
+        cmd_fetch();
     } else if (strcmp(input, "reboot") == 0) {
         cmd_reboot();
     } else if (strcmp(input, "halt") == 0 || strcmp(input, "shutdown") == 0) {
@@ -721,6 +724,7 @@ static void cmd_help(void) {
     print_help_cmd("clear, cls", "Clear the screen");
     print_help_cmd("echo <text>", "Print text to screen");
     print_help_cmd("info, about", "Show system information");
+    print_help_cmd("fetch, neofetch", "Show neofetch-like banner");
     print_help_cmd("uptime", "Show system uptime");
     print_help_cmd("sleep <ms>", "Sleep for N milliseconds");
     print_help_cmd("date", "Show RTC date/time");
@@ -772,6 +776,10 @@ static void cmd_info(void) {
     screen_println("  - Simple command shell");
     screen_println("");
     screen_println("This is a minimal educational OS.");
+}
+
+static void cmd_fetch(void) {
+    print_neofetch_like_banner();
 }
 
 // Reboot command

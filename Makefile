@@ -2,8 +2,19 @@
 
 # Tools
 AS = nasm
-CC = gcc
-LD = ld
+
+# Cross toolchain (built by tools/build_newlib_toolchain.sh)
+CROSS_PREFIX ?= $(CURDIR)/toolchain/opt/cross
+CROSS_TARGET ?= i686-elf
+CROSS_CC := $(CROSS_PREFIX)/bin/$(CROSS_TARGET)-gcc
+CROSS_LD := $(CROSS_PREFIX)/bin/$(CROSS_TARGET)-ld
+
+ifeq ($(wildcard $(CROSS_CC)),)
+$(error Missing cross toolchain at $(CROSS_CC). Run `./tools/build_newlib_toolchain.sh`)
+endif
+
+CC = $(CROSS_CC)
+LD = $(CROSS_LD)
 
 # Directories
 BOOT_DIR = boot
@@ -16,7 +27,7 @@ TOOLS_BUILD_DIR = $(BUILD_DIR)/tools
 
 # Flags
 ASFLAGS = -f elf32
-CFLAGS = -m32 -ffreestanding -fno-stack-protector -fno-pie -nostdlib \
+CFLAGS = -ffreestanding -fno-stack-protector -fno-pie -nostdlib \
          -Wall -Wextra -I$(INCLUDE_DIR) -O2 -c
 LDFLAGS = -m elf_i386 -T linker.ld -nostdlib
 
@@ -38,13 +49,13 @@ INITRAMFS_DIR = initramfs
 INITRAMFS_TAR = $(ISO_DIR)/boot/initramfs.tar
 INITRAMFS_ROOT = $(BUILD_DIR)/initramfs_root
 
-# Simple userland (ELF32)
+# Simple userland (ELF32 + newlib)
 USER_DIR = user
 USER_BUILD_DIR = $(BUILD_DIR)/user
 USER_ASM_SOURCES = $(USER_DIR)/crt0.asm
-USER_C_SOURCES = $(USER_DIR)/init.c
+USER_C_SOURCES = $(USER_DIR)/init.c $(USER_DIR)/newlib_syscalls.c
 USER_ASM_OBJECTS = $(USER_BUILD_DIR)/crt0.o
-USER_C_OBJECTS = $(USER_BUILD_DIR)/init.o
+USER_C_OBJECTS = $(patsubst $(USER_DIR)/%.c,$(USER_BUILD_DIR)/%.o,$(USER_C_SOURCES))
 USER_OBJECTS = $(USER_ASM_OBJECTS) $(USER_C_OBJECTS)
 USER_INIT = $(USER_BUILD_DIR)/init.elf
 
@@ -90,11 +101,11 @@ $(USER_BUILD_DIR)/%.o: $(USER_DIR)/%.asm | $(USER_BUILD_DIR)
 
 # Compile userland C
 $(USER_BUILD_DIR)/%.o: $(USER_DIR)/%.c | $(USER_BUILD_DIR)
-	$(CC) -m32 -ffreestanding -fno-stack-protector -fno-pie -nostdlib -Wall -Wextra -O2 -I$(USER_DIR) -c $< -o $@
+	$(CC) -ffreestanding -fno-stack-protector -fno-pie -Wall -Wextra -O2 -I$(USER_DIR) -c $< -o $@
 
 # Link userland init (static, freestanding)
 $(USER_INIT): $(USER_OBJECTS)
-	$(LD) -m elf_i386 -T $(USER_DIR)/linker.ld -nostdlib $(USER_OBJECTS) -o $@
+	$(CC) -nostartfiles -Wl,-T,$(USER_DIR)/linker.ld -Wl,--gc-sections -o $@ $(USER_OBJECTS) -lc -lgcc
 
 # Compile C files
 $(BUILD_DIR)/%.o: $(KERNEL_DIR)/%.c | $(BUILD_DIR)

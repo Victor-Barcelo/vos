@@ -1043,7 +1043,12 @@ static void cmd_ls(const char* args) {
             return;
         }
 
-        fatdisk_dirent_t dents[LS_MAX_ENTRIES];
+        fatdisk_dirent_t* dents = (fatdisk_dirent_t*)kmalloc(sizeof(fatdisk_dirent_t) * (size_t)LS_MAX_ENTRIES);
+        if (!dents) {
+            screen_println("ls: out of memory");
+            return;
+        }
+
         uint32_t n = fatdisk_list_dir(path, dents, (uint32_t)LS_MAX_ENTRIES);
         for (uint32_t i = 0; i < n; i++) {
             if (dents[i].is_dir) {
@@ -1058,6 +1063,7 @@ static void cmd_ls(const char* args) {
                 screen_println(dents[i].name);
             }
         }
+        kfree(dents);
         screen_set_color(VGA_WHITE, VGA_BLUE);
         return;
     }
@@ -1083,9 +1089,12 @@ static void cmd_ls(const char* args) {
     uint32_t dir_len = (uint32_t)strlen(dir_rel);
     bool is_root = (dir_len == 0);
 
-    ls_entry_t entries[LS_MAX_ENTRIES];
+    ls_entry_t* entries = (ls_entry_t*)kcalloc((size_t)LS_MAX_ENTRIES, sizeof(ls_entry_t));
+    if (!entries) {
+        screen_println("ls: out of memory");
+        return;
+    }
     int entry_count = 0;
-    memset(entries, 0, sizeof(entries));
 
     uint32_t count = vfs_file_count();
     for (uint32_t i = 0; i < count; i++) {
@@ -1166,22 +1175,25 @@ static void cmd_ls(const char* args) {
     }
 
     if (ramfs_is_dir(path)) {
-        ramfs_dirent_t rents[LS_MAX_ENTRIES];
-        uint32_t n = ramfs_list_dir(path, rents, (uint32_t)LS_MAX_ENTRIES);
-        for (uint32_t i = 0; i < n; i++) {
-            int idx = ls_find_entry(entries, entry_count, rents[i].name);
-            if (idx >= 0) {
-                entries[idx].is_dir = entries[idx].is_dir || rents[i].is_dir;
-                continue;
+        ramfs_dirent_t* rents = (ramfs_dirent_t*)kmalloc(sizeof(ramfs_dirent_t) * (size_t)LS_MAX_ENTRIES);
+        if (rents) {
+            uint32_t n = ramfs_list_dir(path, rents, (uint32_t)LS_MAX_ENTRIES);
+            for (uint32_t i = 0; i < n; i++) {
+                int idx = ls_find_entry(entries, entry_count, rents[i].name);
+                if (idx >= 0) {
+                    entries[idx].is_dir = entries[idx].is_dir || rents[i].is_dir;
+                    continue;
+                }
+                if (entry_count >= LS_MAX_ENTRIES) {
+                    break;
+                }
+                strncpy(entries[entry_count].name, rents[i].name, sizeof(entries[entry_count].name) - 1u);
+                entries[entry_count].name[sizeof(entries[entry_count].name) - 1u] = '\0';
+                entries[entry_count].is_dir = rents[i].is_dir;
+                entries[entry_count].size = rents[i].size;
+                entry_count++;
             }
-            if (entry_count >= LS_MAX_ENTRIES) {
-                break;
-            }
-            strncpy(entries[entry_count].name, rents[i].name, sizeof(entries[entry_count].name) - 1u);
-            entries[entry_count].name[sizeof(entries[entry_count].name) - 1u] = '\0';
-            entries[entry_count].is_dir = rents[i].is_dir;
-            entries[entry_count].size = rents[i].size;
-            entry_count++;
+            kfree(rents);
         }
     }
 
@@ -1204,6 +1216,7 @@ static void cmd_ls(const char* args) {
             }
         }
     }
+    kfree(entries);
     screen_set_color(VGA_WHITE, VGA_BLUE);
 }
 

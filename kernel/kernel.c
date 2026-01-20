@@ -17,6 +17,7 @@
 #include "gdt.h"
 #include "task.h"
 #include "elf.h"
+#include "fatdisk.h"
 
 // Multiboot magic number
 #define MULTIBOOT_MAGIC 0x2BADB002
@@ -122,6 +123,7 @@ void kernel_main(uint32_t magic, uint32_t* mboot_info) {
     pmm_init(magic, (const multiboot_info_t*)mboot_info, kernel_end);
     kheap_init();
     vfs_init((const multiboot_info_t*)mboot_info);
+    (void)fatdisk_init();
 
     // Display boot message
     screen_set_color(VGA_LIGHT_CYAN, VGA_BLUE);

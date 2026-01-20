@@ -16,6 +16,7 @@ iso/boot/fat.img
 # Runtime artifacts
 vos-serial*.log
 qemu.pid
+vos-disk.img
 
 # Local cross toolchain (not checked in)
 toolchain/

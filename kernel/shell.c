@@ -18,6 +18,8 @@
 #include "ramfs.h"
 #include "editor.h"
 #include "microrl.h"
+#include "fatdisk.h"
+#include "kheap.h"
 
 #define MAX_COMMAND_LENGTH 256
 #define BASIC_PROGRAM_SIZE 4096
@@ -186,6 +188,9 @@ static bool ci_starts_with(const char* s, const char* prefix) {
     return true;
 }
 
+static bool is_ram_path_abs(const char* abs_path);
+static bool is_disk_path_abs(const char* abs_path);
+
 static bool resolve_path(const char* cwd, const char* in, char* out, uint32_t out_cap) {
     if (!out || out_cap == 0) {
         return false;
@@ -283,6 +288,10 @@ static bool vfs_dir_exists(const char* abs_path) {
         return true;
     }
 
+    if (is_disk_path_abs(abs_path)) {
+        return fatdisk_is_dir(abs_path);
+    }
+
     uint32_t count = vfs_file_count();
     for (uint32_t i = 0; i < count; i++) {
         const char* name = vfs_file_name(i);
@@ -302,6 +311,9 @@ static bool vfs_dir_exists(const char* abs_path) {
 }
 
 static bool vfs_file_exists(const char* abs_path) {
+    if (is_disk_path_abs(abs_path)) {
+        return fatdisk_is_file(abs_path);
+    }
     const uint8_t* data = NULL;
     uint32_t size = 0;
     return vfs_read_file(abs_path, &data, &size) && data != NULL;
@@ -334,6 +346,17 @@ static bool is_ram_path_abs(const char* abs_path) {
         return true;
     }
     return ci_starts_with(rel, "ram/");
+}
+
+static bool is_disk_path_abs(const char* abs_path) {
+    if (!abs_path || abs_path[0] != '/') {
+        return false;
+    }
+    const char* rel = skip_slashes(abs_path);
+    if (ci_eq(rel, "disk")) {
+        return true;
+    }
+    return ci_starts_with(rel, "disk/");
 }
 
 static const char* path_basename(const char* abs_path) {
@@ -734,10 +757,10 @@ static void cmd_help(void) {
     print_help_cmd("ls [path]", "List directory contents");
     print_help_cmd("cat <file>", "Print a file");
     print_help_cmd("run <elf>", "Run a user-mode ELF (foreground)");
-    print_help_cmd("mkdir <dir>", "Create directory (ramfs)");
-    print_help_cmd("cp <src> <dst>", "Copy file (to ramfs)");
-    print_help_cmd("mv <src> <dst>", "Move/rename (ramfs)");
-    print_help_cmd("nano <file>", "Edit a file (saved under /ram)");
+    print_help_cmd("mkdir <dir>", "Create directory (/ram or /disk)");
+    print_help_cmd("cp <src> <dst>", "Copy file (/ram or /disk)");
+    print_help_cmd("mv <src> <dst>", "Move/rename (within /ram or /disk)");
+    print_help_cmd("nano <file>", "Edit a file (/ram or /disk)");
     print_help_cmd("ps", "List running tasks");
     print_help_cmd("top", "Live task view (press q)");
     print_help_cmd("kill <pid> [code]", "Kill a task");
@@ -998,6 +1021,47 @@ static void cmd_ls(const char* args) {
         return;
     }
 
+    if (is_disk_path_abs(path)) {
+        if (!fatdisk_is_ready()) {
+            screen_println("disk: not mounted");
+            return;
+        }
+
+        bool is_dir = false;
+        uint32_t size = 0;
+        if (!fatdisk_stat(path, &is_dir, &size)) {
+            screen_println("No such file or directory.");
+            return;
+        }
+
+        if (!is_dir) {
+            screen_set_color(VGA_YELLOW, VGA_BLUE);
+            screen_print_dec((int32_t)size);
+            screen_set_color(VGA_WHITE, VGA_BLUE);
+            screen_print("  ");
+            screen_println(path);
+            return;
+        }
+
+        fatdisk_dirent_t dents[LS_MAX_ENTRIES];
+        uint32_t n = fatdisk_list_dir(path, dents, (uint32_t)LS_MAX_ENTRIES);
+        for (uint32_t i = 0; i < n; i++) {
+            if (dents[i].is_dir) {
+                screen_set_color(VGA_LIGHT_CYAN, VGA_BLUE);
+                screen_print(dents[i].name);
+                screen_println("/");
+            } else {
+                screen_set_color(VGA_YELLOW, VGA_BLUE);
+                screen_print_dec((int32_t)dents[i].size);
+                screen_set_color(VGA_WHITE, VGA_BLUE);
+                screen_print("  ");
+                screen_println(dents[i].name);
+            }
+        }
+        screen_set_color(VGA_WHITE, VGA_BLUE);
+        return;
+    }
+
     if (vfs_file_exists(path)) {
         const uint8_t* data = NULL;
         uint32_t size = 0;
@@ -1086,6 +1150,19 @@ static void cmd_ls(const char* args) {
         } else if (idx >= 0) {
             entries[idx].is_dir = true;
         }
+
+        if (fatdisk_is_ready()) {
+            idx = ls_find_entry(entries, entry_count, "disk");
+            if (idx < 0 && entry_count < LS_MAX_ENTRIES) {
+                strncpy(entries[entry_count].name, "disk", sizeof(entries[entry_count].name) - 1u);
+                entries[entry_count].name[sizeof(entries[entry_count].name) - 1u] = '\0';
+                entries[entry_count].is_dir = true;
+                entries[entry_count].size = 0;
+                entry_count++;
+            } else if (idx >= 0) {
+                entries[idx].is_dir = true;
+            }
+        }
     }
 
     if (ramfs_is_dir(path)) {
@@ -1142,14 +1219,21 @@ static void cmd_mkdir(const char* args) {
         return;
     }
 
-    if (!is_ram_path_abs(path)) {
-        screen_println("mkdir: only supported under /ram");
+    if (is_ram_path_abs(path)) {
+        if (!ramfs_mkdir(path)) {
+            screen_println("mkdir failed.");
+        }
         return;
     }
 
-    if (!ramfs_mkdir(path)) {
-        screen_println("mkdir failed.");
+    if (is_disk_path_abs(path)) {
+        if (!fatdisk_mkdir(path)) {
+            screen_println("mkdir failed.");
+        }
+        return;
     }
+
+    screen_println("mkdir: only supported under /ram or /disk");
 }
 
 static void cmd_cp(const char* args) {
@@ -1190,19 +1274,41 @@ static void cmd_cp(const char* args) {
         dst_file[sizeof(dst_file) - 1u] = '\0';
     }
 
-    if (!is_ram_path_abs(dst_file)) {
-        screen_println("cp: destination must be under /ram");
+    bool dst_ram = is_ram_path_abs(dst_file);
+    bool dst_disk = is_disk_path_abs(dst_file);
+    if (!dst_ram && !dst_disk) {
+        screen_println("cp: destination must be under /ram or /disk");
         return;
     }
 
+    uint8_t* disk_buf = NULL;
     const uint8_t* data = NULL;
     uint32_t size = 0;
-    if (!vfs_read_file(src, &data, &size) || !data) {
-        screen_println("cp: source not found.");
-        return;
+    if (is_disk_path_abs(src)) {
+        if (!fatdisk_read_file_alloc(src, &disk_buf, &size) || !disk_buf) {
+            screen_println("cp: source not found.");
+            return;
+        }
+        data = disk_buf;
+    } else {
+        if (!vfs_read_file(src, &data, &size) || !data) {
+            screen_println("cp: source not found.");
+            return;
+        }
     }
 
-    if (!ramfs_write_file(dst_file, data, size, false)) {
+    bool ok = false;
+    if (dst_ram) {
+        ok = ramfs_write_file(dst_file, data, size, false);
+    } else {
+        ok = fatdisk_write_file(dst_file, data, size, false);
+    }
+
+    if (disk_buf) {
+        kfree(disk_buf);
+    }
+
+    if (!ok) {
         screen_println("cp failed (exists? out of space?).");
         return;
     }
@@ -1228,8 +1334,10 @@ static void cmd_mv(const char* args) {
         return;
     }
 
-    if (!is_ram_path_abs(src) || !ramfs_is_file(src)) {
-        screen_println("mv: only supported for existing /ram files");
+    bool src_ram = is_ram_path_abs(src);
+    bool src_disk = is_disk_path_abs(src);
+    if (!src_ram && !src_disk) {
+        screen_println("mv: only supported under /ram or /disk");
         return;
     }
 
@@ -1251,12 +1359,35 @@ static void cmd_mv(const char* args) {
         dst_file[sizeof(dst_file) - 1u] = '\0';
     }
 
-    if (!is_ram_path_abs(dst_file)) {
-        screen_println("mv: destination must be under /ram");
+    bool dst_ram = is_ram_path_abs(dst_file);
+    bool dst_disk = is_disk_path_abs(dst_file);
+    if (!dst_ram && !dst_disk) {
+        screen_println("mv: destination must be under /ram or /disk");
+        return;
+    }
+    if ((src_ram && !dst_ram) || (src_disk && !dst_disk)) {
+        screen_println("mv: cross-filesystem move not supported (use cp)");
         return;
     }
 
-    if (!ramfs_rename(src, dst_file)) {
+    bool ok = false;
+    if (src_ram) {
+        if (!ramfs_is_file(src)) {
+            screen_println("mv: source not found.");
+            return;
+        }
+        ok = ramfs_rename(src, dst_file);
+    } else {
+        bool is_dir = false;
+        uint32_t sz = 0;
+        if (!fatdisk_stat(src, &is_dir, &sz) || is_dir) {
+            screen_println("mv: source not found.");
+            return;
+        }
+        ok = fatdisk_rename(src, dst_file);
+    }
+
+    if (!ok) {
         screen_println("mv failed.");
         return;
     }
@@ -1280,38 +1411,80 @@ static void cmd_nano(const char* args) {
         return;
     }
 
-    char dst[SHELL_PATH_MAX];
-    if (is_ram_path_abs(src)) {
-        strncpy(dst, src, sizeof(dst) - 1u);
-        dst[sizeof(dst) - 1u] = '\0';
-    } else {
+    if (is_disk_path_abs(src)) {
         const char* base = path_basename(src);
         if (!base || base[0] == '\0') {
             base = "untitled.txt";
         }
-        if (!path_join(dst, sizeof(dst), "/ram", base)) {
-            screen_println("nano: destination too long");
+
+        char tmp_name[96];
+        strcpy(tmp_name, "__diskedit_");
+        strncat(tmp_name, base, sizeof(tmp_name) - strlen(tmp_name) - 1u);
+
+        char tmp_path[SHELL_PATH_MAX];
+        if (!path_join(tmp_path, sizeof(tmp_path), "/ram", tmp_name)) {
+            screen_println("nano: temp path too long");
             return;
         }
 
-        // If the source exists and destination doesn't, seed it.
-        if (!ramfs_is_file(dst)) {
-            const uint8_t* data = NULL;
-            uint32_t size = 0;
-            if (vfs_read_file(src, &data, &size) && data) {
-                (void)ramfs_write_file(dst, data, size, false);
-            } else {
-                (void)ramfs_write_file(dst, NULL, 0, false);
+        uint8_t* disk_data = NULL;
+        uint32_t disk_size = 0;
+        if (fatdisk_is_file(src)) {
+            if (!fatdisk_read_file_alloc(src, &disk_data, &disk_size) || !disk_data) {
+                screen_println("nano: read failed");
+                return;
             }
         }
-    }
 
-    if (ramfs_is_dir(dst) && !ramfs_is_file(dst)) {
-        screen_println("nano: is a directory");
-        return;
-    }
+        (void)ramfs_write_file(tmp_path, disk_data, disk_size, true);
+        if (disk_data) {
+            kfree(disk_data);
+        }
 
-    (void)editor_nano(dst);
+        bool saved = editor_nano(tmp_path);
+        if (saved) {
+            const uint8_t* buf = NULL;
+            uint32_t sz = 0;
+            if (ramfs_read_file(tmp_path, &buf, &sz) && buf) {
+                if (!fatdisk_write_file(src, buf, sz, true)) {
+                    screen_println("nano: write to /disk failed");
+                }
+            }
+        }
+    } else {
+        char dst[SHELL_PATH_MAX];
+        if (is_ram_path_abs(src)) {
+            strncpy(dst, src, sizeof(dst) - 1u);
+            dst[sizeof(dst) - 1u] = '\0';
+        } else {
+            const char* base = path_basename(src);
+            if (!base || base[0] == '\0') {
+                base = "untitled.txt";
+            }
+            if (!path_join(dst, sizeof(dst), "/ram", base)) {
+                screen_println("nano: destination too long");
+                return;
+            }
+
+            // If the source exists and destination doesn't, seed it.
+            if (!ramfs_is_file(dst)) {
+                const uint8_t* data = NULL;
+                uint32_t size = 0;
+                if (vfs_read_file(src, &data, &size) && data) {
+                    (void)ramfs_write_file(dst, data, size, false);
+                } else {
+                    (void)ramfs_write_file(dst, NULL, 0, false);
+                }
+            }
+        }
+
+        if (ramfs_is_dir(dst) && !ramfs_is_file(dst)) {
+            screen_println("nano: is a directory");
+            return;
+        }
+
+        (void)editor_nano(dst);
+    }
 
     screen_set_color(VGA_WHITE, VGA_BLUE);
     screen_clear();
@@ -1331,6 +1504,36 @@ static void cmd_cat(const char* args) {
     char path[SHELL_PATH_MAX];
     if (!resolve_path(shell_cwd, args, path, sizeof(path))) {
         screen_println("Invalid path.");
+        return;
+    }
+
+    if (is_disk_path_abs(path)) {
+        if (!fatdisk_is_ready()) {
+            screen_println("disk: not mounted");
+            return;
+        }
+
+        uint8_t* buf = NULL;
+        uint32_t sz = 0;
+        if (!fatdisk_read_file_alloc(path, &buf, &sz) || !buf) {
+            screen_println("File not found.");
+            return;
+        }
+
+        uint32_t max = sz;
+        if (max > 4096u) {
+            max = 4096u;
+        }
+        for (uint32_t i = 0; i < max; i++) {
+            screen_putchar((char)buf[i]);
+        }
+        if (max != 0 && buf[max - 1] != '\n') {
+            screen_putchar('\n');
+        }
+        if (sz > max) {
+            screen_println("[...truncated...]");
+        }
+        kfree(buf);
         return;
     }
 
@@ -1372,11 +1575,24 @@ static void cmd_run(const char* args) {
         return;
     }
 
+    uint8_t* disk_buf = NULL;
     const uint8_t* data = NULL;
     uint32_t size = 0;
-    if (!vfs_read_file(path, &data, &size) || !data || size == 0) {
-        screen_println("File not found.");
-        return;
+    if (is_disk_path_abs(path)) {
+        if (!fatdisk_is_ready()) {
+            screen_println("disk: not mounted");
+            return;
+        }
+        if (!fatdisk_read_file_alloc(path, &disk_buf, &size) || !disk_buf || size == 0) {
+            screen_println("File not found.");
+            return;
+        }
+        data = disk_buf;
+    } else {
+        if (!vfs_read_file(path, &data, &size) || !data || size == 0) {
+            screen_println("File not found.");
+            return;
+        }
     }
 
     uint32_t entry = 0;
@@ -1394,12 +1610,14 @@ static void cmd_run(const char* args) {
     paging_switch_directory(paging_kernel_directory());
     irq_restore(flags);
     if (!ok) {
+        if (disk_buf) kfree(disk_buf);
         screen_println("ELF load failed.");
         return;
     }
 
     uint32_t pid = tasking_spawn_user_pid(entry, user_esp, user_dir, brk);
     if (pid == 0) {
+        if (disk_buf) kfree(disk_buf);
         screen_println("Failed to spawn task.");
         return;
     }
@@ -1407,6 +1625,7 @@ static void cmd_run(const char* args) {
     // Foreground: wait for exit so output/input doesn't race the shell.
     int exit_code = 0;
     __asm__ volatile ("int $0x80" : "=a"(exit_code) : "a"((uint32_t)SYS_WAIT), "b"(pid) : "memory");
+    if (disk_buf) kfree(disk_buf);
     screen_print("Program exited with code ");
     screen_print_dec(exit_code);
     screen_putchar('\n');

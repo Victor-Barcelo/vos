@@ -28,7 +28,11 @@ enum vga_color {
 #define VGA_HEIGHT 25
 
 // Initialize the screen
-void screen_init(void);
+void screen_init(uint32_t multiboot_magic, uint32_t* mboot_info);
+
+// Current screen text dimensions (in character cells)
+int screen_cols(void);
+int screen_rows(void);
 
 // Clear the screen
 void screen_clear(void);

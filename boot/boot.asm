@@ -1,7 +1,8 @@
 ; Multiboot header constants
 MBALIGN  equ 1 << 0                 ; Align loaded modules on page boundaries
 MEMINFO  equ 1 << 1                 ; Provide memory map
-FLAGS    equ MBALIGN | MEMINFO      ; Multiboot flags
+VIDMODE  equ 1 << 2                 ; Request a video mode (graphics)
+FLAGS    equ MBALIGN | MEMINFO | VIDMODE ; Multiboot flags
 MAGIC    equ 0x1BADB002             ; Magic number for bootloader
 CHECKSUM equ -(MAGIC + FLAGS)       ; Checksum to prove we are multiboot
 
@@ -11,6 +12,10 @@ align 4
     dd MAGIC
     dd FLAGS
     dd CHECKSUM
+    dd 0                            ; mode_type: 0=graphics, 1=text
+    dd 640                          ; width
+    dd 480                          ; height
+    dd 32                           ; depth (bits per pixel)
 
 ; Stack setup
 section .bss

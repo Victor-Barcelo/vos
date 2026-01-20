@@ -22,8 +22,8 @@ void kernel_main(uint32_t magic, uint32_t* mboot_info) {
     // Initialize serial early for logging/debugging (COM1).
     serial_init();
 
-    // Initialize the screen
-    screen_init();
+    // Initialize the screen (VGA text or Multiboot framebuffer).
+    screen_init(magic, mboot_info);
 
     // Display boot message
     screen_set_color(VGA_LIGHT_CYAN, VGA_BLACK);

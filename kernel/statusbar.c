@@ -45,40 +45,46 @@ static void append_2d(char* buf, int* pos, int max, uint32_t v) {
 }
 
 static void draw_statusbar(void) {
-    char line[VGA_WIDTH + 1];
-    for (int i = 0; i < VGA_WIDTH; i++) {
+    int cols = screen_cols();
+    int rows = screen_rows();
+    if (cols < 1) cols = 1;
+    if (rows < 1) rows = 1;
+    if (cols > 255) cols = 255;
+
+    char line[256];
+    for (int i = 0; i < cols; i++) {
         line[i] = ' ';
     }
-    line[VGA_WIDTH] = '\0';
+    line[cols] = '\0';
 
     int pos = 0;
 
     rtc_datetime_t dt;
     if (rtc_read_datetime(&dt)) {
-        append_u32_dec(line, &pos, VGA_WIDTH, (uint32_t)dt.year);
-        append_char(line, &pos, VGA_WIDTH, '-');
-        append_2d(line, &pos, VGA_WIDTH, dt.month);
-        append_char(line, &pos, VGA_WIDTH, '-');
-        append_2d(line, &pos, VGA_WIDTH, dt.day);
-        append_char(line, &pos, VGA_WIDTH, ' ');
-        append_2d(line, &pos, VGA_WIDTH, dt.hour);
-        append_char(line, &pos, VGA_WIDTH, ':');
-        append_2d(line, &pos, VGA_WIDTH, dt.minute);
+        append_u32_dec(line, &pos, cols, (uint32_t)dt.year);
+        append_char(line, &pos, cols, '-');
+        append_2d(line, &pos, cols, dt.month);
+        append_char(line, &pos, cols, '-');
+        append_2d(line, &pos, cols, dt.day);
+        append_char(line, &pos, cols, ' ');
+        append_2d(line, &pos, cols, dt.hour);
+        append_char(line, &pos, cols, ':');
+        append_2d(line, &pos, cols, dt.minute);
     } else {
-        append_str(line, &pos, VGA_WIDTH, "RTC ?");
+        append_str(line, &pos, cols, "RTC ?");
     }
 
     uint32_t up_ms = timer_uptime_ms();
     uint32_t up_min = up_ms / 60000u;
-    append_str(line, &pos, VGA_WIDTH, " | up ");
-    append_u32_dec(line, &pos, VGA_WIDTH, up_min);
-    append_char(line, &pos, VGA_WIDTH, 'm');
+    append_str(line, &pos, cols, " | up ");
+    append_u32_dec(line, &pos, cols, up_min);
+    append_char(line, &pos, cols, 'm');
 
     uint32_t mem_kb = system_mem_total_kb();
     if (mem_kb != 0) {
-        append_str(line, &pos, VGA_WIDTH, " | mem ");
-        append_u32_dec(line, &pos, VGA_WIDTH, mem_kb / 1024u);
-        append_str(line, &pos, VGA_WIDTH, "MB");
+        append_str(line, &pos, cols, " | mem ");
+        append_u32_dec(line, &pos, cols, mem_kb / 1024u);
+        append_str(line, &pos, cols, "MB");
     }
 
     const char* cpu = system_cpu_brand();
@@ -89,13 +95,13 @@ static void draw_statusbar(void) {
         cpu++;
     }
     if (cpu && cpu[0] != '\0') {
-        append_str(line, &pos, VGA_WIDTH, " | CPU ");
-        append_str(line, &pos, VGA_WIDTH, cpu);
+        append_str(line, &pos, cols, " | CPU ");
+        append_str(line, &pos, cols, cpu);
     }
 
     uint8_t color = status_color();
-    screen_fill_row(VGA_HEIGHT - 1, ' ', color);
-    screen_write_string_at(0, VGA_HEIGHT - 1, line, color);
+    screen_fill_row(rows - 1, ' ', color);
+    screen_write_string_at(0, rows - 1, line, color);
 }
 
 void statusbar_init(void) {

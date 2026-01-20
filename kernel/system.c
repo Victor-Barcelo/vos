@@ -1,14 +1,6 @@
 #include "system.h"
+#include "multiboot.h"
 #include "string.h"
-
-// Multiboot magic passed by GRUB to the kernel entry point.
-#define MULTIBOOT_BOOTLOADER_MAGIC 0x2BADB002u
-
-typedef struct multiboot_info {
-    uint32_t flags;
-    uint32_t mem_lower;
-    uint32_t mem_upper;
-} multiboot_info_t;
 
 static uint32_t mem_total_kb = 0;
 static char cpu_vendor[13] = "unknown";

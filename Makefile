@@ -56,6 +56,13 @@ $(ISO): $(KERNEL)
 	cp $(KERNEL) $(ISO_DIR)/boot/kernel.bin
 	echo 'set timeout=0' > $(ISO_DIR)/boot/grub/grub.cfg
 	echo 'set default=0' >> $(ISO_DIR)/boot/grub/grub.cfg
+	echo 'insmod all_video' >> $(ISO_DIR)/boot/grub/grub.cfg
+	echo 'insmod gfxterm' >> $(ISO_DIR)/boot/grub/grub.cfg
+	echo 'insmod font' >> $(ISO_DIR)/boot/grub/grub.cfg
+	echo 'loadfont /boot/grub/fonts/unicode.pf2' >> $(ISO_DIR)/boot/grub/grub.cfg
+	echo 'set gfxmode=640x480x32,640x480' >> $(ISO_DIR)/boot/grub/grub.cfg
+	echo 'set gfxpayload=keep' >> $(ISO_DIR)/boot/grub/grub.cfg
+	echo 'terminal_output gfxterm' >> $(ISO_DIR)/boot/grub/grub.cfg
 	echo 'menuentry "VOS" {' >> $(ISO_DIR)/boot/grub/grub.cfg
 	echo '    multiboot /boot/kernel.bin' >> $(ISO_DIR)/boot/grub/grub.cfg
 	echo '}' >> $(ISO_DIR)/boot/grub/grub.cfg

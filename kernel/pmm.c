@@ -9,6 +9,7 @@ static uint8_t* frame_bitmap = NULL;
 static uint32_t frame_bitmap_bytes = 0;
 static uint32_t frames_total = 0;
 static uint32_t frames_free = 0;
+static uint32_t early_reserved_end = 0;
 
 static bool bitmap_test(uint32_t frame) {
     uint32_t byte = frame / 8u;
@@ -185,6 +186,7 @@ void pmm_init(uint32_t multiboot_magic, const multiboot_info_t* mbi, uint32_t ke
     if (early_end > early_base) {
         mark_region_used(early_base, early_end - early_base);
     }
+    early_reserved_end = early_end;
 
     serial_write_string("[PMM] frames total=");
     serial_write_dec((int32_t)frames_total);
@@ -193,7 +195,22 @@ void pmm_init(uint32_t multiboot_magic, const multiboot_info_t* mbi, uint32_t ke
     serial_write_char('\n');
 }
 
+static void pmm_reserve_new_early_alloc(void) {
+    uint32_t cur = early_alloc_current();
+    if (early_reserved_end == 0) {
+        early_reserved_end = early_alloc_start();
+    }
+    if (cur > early_reserved_end) {
+        mark_region_used(early_reserved_end, cur - early_reserved_end);
+        early_reserved_end = cur;
+    }
+}
+
 uint32_t pmm_alloc_frame(void) {
+    // Page tables and other boot-time structures may still come from early_alloc()
+    // after pmm_init(). Make sure those frames stay reserved.
+    pmm_reserve_new_early_alloc();
+
     for (uint32_t frame = 0; frame < frames_total; frame++) {
         if (!bitmap_test(frame)) {
             mark_frame_used(frame);

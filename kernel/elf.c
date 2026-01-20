@@ -102,6 +102,8 @@ static bool map_user_stack(uint32_t* out_user_esp) {
     uint32_t stack_top = USER_STACK_TOP;
     uint32_t stack_bottom = USER_STACK_TOP - USER_STACK_PAGES * PAGE_SIZE;
 
+    paging_prepare_range(stack_bottom, USER_STACK_PAGES * PAGE_SIZE, PAGE_PRESENT | PAGE_RW | PAGE_USER);
+
     for (uint32_t va = stack_bottom; va < stack_top; va += PAGE_SIZE) {
         uint32_t frame = pmm_alloc_frame();
         if (frame == 0) {
@@ -166,6 +168,9 @@ bool elf_load_user_image(const uint8_t* image, uint32_t size, uint32_t* out_entr
 
         uint32_t map_start = align_down(seg_start, PAGE_SIZE);
         uint32_t map_end = align_up(seg_end, PAGE_SIZE);
+
+        paging_prepare_range(map_start, map_end - map_start, map_flags);
+
         for (uint32_t va = map_start; va < map_end; va += PAGE_SIZE) {
             uint32_t frame = pmm_alloc_frame();
             if (frame == 0) {
@@ -208,4 +213,3 @@ bool elf_load_user_image(const uint8_t* image, uint32_t size, uint32_t* out_entr
 
     return true;
 }
-

@@ -13,6 +13,22 @@ static inline uint32_t page_align_up(uint32_t addr) {
     return (addr + PAGE_SIZE - 1u) & ~(PAGE_SIZE - 1u);
 }
 
+static uint32_t* ensure_page_table(uint32_t dir_index, uint32_t map_flags);
+
+void paging_prepare_range(uint32_t vaddr, uint32_t size, uint32_t flags) {
+    if (size == 0) {
+        return;
+    }
+
+    uint32_t start_v = page_align_down(vaddr);
+    uint32_t end_v = page_align_up(vaddr + size);
+
+    for (uint32_t va = start_v; va < end_v; va += PAGE_SIZE) {
+        uint32_t dir_index = (va >> 22) & 0x3FFu;
+        (void)ensure_page_table(dir_index, flags);
+    }
+}
+
 static uint32_t* ensure_page_table(uint32_t dir_index, uint32_t map_flags) {
     uint32_t entry = page_directory[dir_index];
     if (entry & PAGE_PRESENT) {

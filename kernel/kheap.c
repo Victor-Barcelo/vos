@@ -12,6 +12,11 @@ static uint32_t align_up(uint32_t v, uint32_t a) {
 
 static void map_more(uint32_t new_end) {
     uint32_t target = align_up(new_end, PAGE_SIZE);
+
+    // Allocate any required page tables first so the physical frames backing those
+    // tables are not accidentally allocated for heap pages.
+    paging_prepare_range(heap_mapped_end, target - heap_mapped_end, PAGE_PRESENT | PAGE_RW);
+
     while (heap_mapped_end < target) {
         uint32_t frame = pmm_alloc_frame();
         if (frame == 0) {
@@ -78,4 +83,3 @@ void kfree(void* ptr) {
     (void)ptr;
     // TODO: real free list / coalescing allocator.
 }
-

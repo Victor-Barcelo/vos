@@ -14,8 +14,8 @@ void paging_init(const multiboot_info_t* mbi);
 
 void paging_map_page(uint32_t vaddr, uint32_t paddr, uint32_t flags);
 void paging_map_range(uint32_t vaddr, uint32_t paddr, uint32_t size, uint32_t flags);
+void paging_prepare_range(uint32_t vaddr, uint32_t size, uint32_t flags);
 
 uint32_t paging_get_cr3(void);
 
 #endif
-

@@ -35,10 +35,12 @@ typedef struct multiboot_info {
     uint32_t framebuffer_height;
     uint8_t framebuffer_bpp;
     uint8_t framebuffer_type;
+    uint16_t framebuffer_reserved;
     union {
         struct {
             uint32_t framebuffer_palette_addr;
             uint16_t framebuffer_palette_num_colors;
+            uint16_t framebuffer_palette_reserved;
         } __attribute__((packed));
         struct {
             uint8_t framebuffer_red_field_position;

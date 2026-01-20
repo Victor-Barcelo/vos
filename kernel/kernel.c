@@ -26,23 +26,23 @@ void kernel_main(uint32_t magic, uint32_t* mboot_info) {
     screen_init(magic, mboot_info);
 
     // Display boot message
-    screen_set_color(VGA_LIGHT_CYAN, VGA_BLACK);
+    screen_set_color(VGA_WHITE, VGA_BLUE);
     screen_println("========================================");
     screen_println("          VOS - Minimal Kernel          ");
     screen_println("========================================");
-    screen_set_color(VGA_WHITE, VGA_BLACK);
+    screen_set_color(VGA_WHITE, VGA_BLUE);
     screen_println("");
 
     // Verify multiboot
     if (magic == MULTIBOOT_MAGIC) {
-        screen_set_color(VGA_LIGHT_GREEN, VGA_BLACK);
+        screen_set_color(VGA_WHITE, VGA_BLUE);
         screen_print("[OK] ");
-        screen_set_color(VGA_WHITE, VGA_BLACK);
+        screen_set_color(VGA_WHITE, VGA_BLUE);
         screen_println("Multiboot verified");
     } else {
-        screen_set_color(VGA_LIGHT_RED, VGA_BLACK);
+        screen_set_color(VGA_LIGHT_RED, VGA_BLUE);
         screen_print("[WARN] ");
-        screen_set_color(VGA_WHITE, VGA_BLACK);
+        screen_set_color(VGA_WHITE, VGA_BLUE);
         screen_print("Unexpected boot magic: ");
         screen_print_hex(magic);
         screen_println("");
@@ -51,15 +51,15 @@ void kernel_main(uint32_t magic, uint32_t* mboot_info) {
     system_init(magic, mboot_info);
 
     idt_init();
-    screen_set_color(VGA_LIGHT_GREEN, VGA_BLACK);
+    screen_set_color(VGA_WHITE, VGA_BLUE);
     screen_print("[OK] ");
-    screen_set_color(VGA_WHITE, VGA_BLACK);
+    screen_set_color(VGA_WHITE, VGA_BLUE);
     screen_println("IDT initialized");
 
     timer_init(1000);
-    screen_set_color(VGA_LIGHT_GREEN, VGA_BLACK);
+    screen_set_color(VGA_WHITE, VGA_BLUE);
     screen_print("[OK] ");
-    screen_set_color(VGA_WHITE, VGA_BLACK);
+    screen_set_color(VGA_WHITE, VGA_BLUE);
     screen_println("Timer initialized");
 
     // Route IRQ1 (keyboard) through the common IRQ handler.
@@ -67,16 +67,16 @@ void kernel_main(uint32_t magic, uint32_t* mboot_info) {
 
     // Initialize keyboard (flush controller)
     keyboard_init();
-    screen_set_color(VGA_LIGHT_GREEN, VGA_BLACK);
+    screen_set_color(VGA_WHITE, VGA_BLUE);
     screen_print("[OK] ");
-    screen_set_color(VGA_WHITE, VGA_BLACK);
+    screen_set_color(VGA_WHITE, VGA_BLUE);
     screen_println("Keyboard initialized");
 
     // Enable interrupts
     sti();
-    screen_set_color(VGA_LIGHT_GREEN, VGA_BLACK);
+    screen_set_color(VGA_WHITE, VGA_BLUE);
     screen_print("[OK] ");
-    screen_set_color(VGA_WHITE, VGA_BLACK);
+    screen_set_color(VGA_WHITE, VGA_BLUE);
     screen_println("Interrupts enabled");
 
     screen_println("");

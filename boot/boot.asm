@@ -13,8 +13,8 @@ align 4
     dd FLAGS
     dd CHECKSUM
     dd 0                            ; mode_type: 0=graphics, 1=text
-    dd 640                          ; width
-    dd 480                          ; height
+    dd 1280                         ; width
+    dd 800                          ; height
     dd 32                           ; depth (bits per pixel)
 
 ; Stack setup

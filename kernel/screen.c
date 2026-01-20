@@ -5,6 +5,7 @@
 #include "multiboot.h"
 #include "font.h"
 #include "font_terminus_psf2.h"
+#include "font_vga_psf2.h"
 
 typedef enum {
     SCREEN_BACKEND_VGA_TEXT = 0,
@@ -358,7 +359,7 @@ void screen_clear(void) {
 }
 
 void screen_init(uint32_t multiboot_magic, uint32_t* mboot_info) {
-    current_color = vga_color(VGA_WHITE, VGA_BLACK);
+    current_color = vga_color(VGA_WHITE, VGA_BLUE);
     reserved_bottom_rows = 0;
     cursor_x = 0;
     cursor_y = 0;
@@ -407,18 +408,20 @@ void screen_init(uint32_t multiboot_magic, uint32_t* mboot_info) {
                     fb_b_pos = mbi->framebuffer_blue_field_position;
                     fb_b_size = mbi->framebuffer_blue_mask_size;
 
-                    const uint8_t* font_data = font_terminus24x12_psf2;
-                    uint32_t font_len = font_terminus24x12_psf2_len;
+                    const uint8_t* font_data = font_vga28x16_psf2;
+                    uint32_t font_len = font_vga28x16_psf2_len;
+                    const uint8_t* fallback_font_data = font_terminus24x12_psf2;
+                    uint32_t fallback_font_len = font_terminus24x12_psf2_len;
                     if (fb_width >= 1024 && fb_height >= 768) {
-                        font_data = font_terminus32x16_psf2;
-                        font_len = font_terminus32x16_psf2_len;
+                        font_data = font_vga32x16_psf2;
+                        font_len = font_vga32x16_psf2_len;
+                        fallback_font_data = font_terminus32x16_psf2;
+                        fallback_font_len = font_terminus32x16_psf2_len;
                     }
 
                     bool font_ok = font_psf2_parse(font_data, font_len, &fb_font);
                     if (!font_ok) {
-                        font_data = font_terminus24x12_psf2;
-                        font_len = font_terminus24x12_psf2_len;
-                        font_ok = font_psf2_parse(font_data, font_len, &fb_font);
+                        font_ok = font_psf2_parse(fallback_font_data, fallback_font_len, &fb_font);
                     }
 
                     if (!font_ok || fb_font.width == 0 || fb_font.height == 0) {
@@ -440,23 +443,35 @@ void screen_init(uint32_t multiboot_magic, uint32_t* mboot_info) {
 
                         screen_cols_value = cols;
                         screen_rows_value = rows;
-                        backend = SCREEN_BACKEND_FRAMEBUFFER;
+                    backend = SCREEN_BACKEND_FRAMEBUFFER;
 
-                        serial_write_string("[OK] Framebuffer ");
-                        serial_write_dec((int32_t)fb_width);
-                        serial_write_char('x');
-                        serial_write_dec((int32_t)fb_height);
-                        serial_write_string("x");
-                        serial_write_dec((int32_t)fb_bpp);
-                        serial_write_string(" font ");
-                        serial_write_dec((int32_t)fb_font.width);
-                        serial_write_char('x');
-                        serial_write_dec((int32_t)fb_font.height);
-                        serial_write_char('\n');
-                    }
+                    serial_write_string("[OK] Framebuffer ");
+                    serial_write_dec((int32_t)fb_width);
+                    serial_write_char('x');
+                    serial_write_dec((int32_t)fb_height);
+                    serial_write_string("x");
+                    serial_write_dec((int32_t)fb_bpp);
+                    serial_write_string(" font ");
+                    serial_write_dec((int32_t)fb_font.width);
+                    serial_write_char('x');
+                    serial_write_dec((int32_t)fb_font.height);
+                    serial_write_string(" rgb ");
+                    serial_write_dec((int32_t)fb_r_pos);
+                    serial_write_char('/');
+                    serial_write_dec((int32_t)fb_r_size);
+                    serial_write_char(' ');
+                    serial_write_dec((int32_t)fb_g_pos);
+                    serial_write_char('/');
+                    serial_write_dec((int32_t)fb_g_size);
+                    serial_write_char(' ');
+                    serial_write_dec((int32_t)fb_b_pos);
+                    serial_write_char('/');
+                    serial_write_dec((int32_t)fb_b_size);
+                    serial_write_char('\n');
                 }
             }
         }
+    }
     }
 
     screen_clear();

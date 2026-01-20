@@ -51,11 +51,11 @@ void basic_printf(const char* fmt, ...) {
 
 // Exit function - halt the system with error message
 void exit(int status) {
-    screen_set_color(VGA_LIGHT_RED, VGA_BLACK);
+    screen_set_color(VGA_LIGHT_RED, VGA_BLUE);
     screen_print("\nBASIC Error (exit code: ");
     screen_print_dec(status);
     screen_println(")");
-    screen_set_color(VGA_WHITE, VGA_BLACK);
+    screen_set_color(VGA_WHITE, VGA_BLUE);
 
     // Don't actually halt - just return to let shell continue
     // The BASIC interpreter will check ubasic_finished()

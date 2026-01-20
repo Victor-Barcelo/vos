@@ -55,9 +55,9 @@ static void shell_idle_hook(void) {
 
 // Print the shell prompt
 static void print_prompt(void) {
-    screen_set_color(VGA_LIGHT_GREEN, VGA_BLACK);
+    screen_set_color(VGA_WHITE, VGA_BLUE);
     screen_print("vos");
-    screen_set_color(VGA_WHITE, VGA_BLACK);
+    screen_set_color(VGA_WHITE, VGA_BLUE);
     screen_print("> ");
 }
 
@@ -107,19 +107,19 @@ static void execute_command(char* input) {
     } else if (strcmp(input, "setdate") == 0) {
         cmd_setdate(args);
     } else {
-        screen_set_color(VGA_LIGHT_RED, VGA_BLACK);
+        screen_set_color(VGA_LIGHT_RED, VGA_BLUE);
         screen_print("Unknown command: ");
         screen_println(input);
-        screen_set_color(VGA_WHITE, VGA_BLACK);
+        screen_set_color(VGA_WHITE, VGA_BLUE);
         screen_println("Type 'help' for available commands.");
     }
 }
 
 // Help command
 static void cmd_help(void) {
-    screen_set_color(VGA_LIGHT_CYAN, VGA_BLACK);
+    screen_set_color(VGA_WHITE, VGA_BLUE);
     screen_println("Available commands:");
-    screen_set_color(VGA_WHITE, VGA_BLACK);
+    screen_set_color(VGA_WHITE, VGA_BLUE);
     screen_println("  help          - Show this help message");
     screen_println("  clear, cls    - Clear the screen");
     screen_println("  echo <text>   - Print text to screen");
@@ -137,6 +137,7 @@ static void cmd_help(void) {
 // Clear screen command
 static void cmd_clear(void) {
     screen_clear();
+    statusbar_refresh();
 }
 
 // Echo command
@@ -146,9 +147,9 @@ static void cmd_echo(const char* args) {
 
 // System info command
 static void cmd_info(void) {
-    screen_set_color(VGA_LIGHT_CYAN, VGA_BLACK);
+    screen_set_color(VGA_WHITE, VGA_BLUE);
     screen_println("=== VOS - Victor's Operating System ===");
-    screen_set_color(VGA_WHITE, VGA_BLACK);
+    screen_set_color(VGA_WHITE, VGA_BLUE);
     screen_println("Version: 0.1.0");
     screen_println("Architecture: i386 (x86 32-bit)");
     screen_println("Features:");
@@ -205,7 +206,7 @@ static void cmd_color(const char* args) {
     }
 
     if (color >= 0 && color <= 15) {
-        screen_set_color(color, VGA_BLACK);
+        screen_set_color(color, VGA_BLUE);
         screen_println("Color changed.");
     } else {
         screen_println("Invalid color. Use 0-15.");
@@ -217,9 +218,9 @@ static void cmd_uptime(void) {
     uint32_t seconds = uptime_ms / 1000u;
     uint32_t ms = uptime_ms % 1000u;
 
-    screen_set_color(VGA_LIGHT_CYAN, VGA_BLACK);
+    screen_set_color(VGA_WHITE, VGA_BLUE);
     screen_print("Uptime: ");
-    screen_set_color(VGA_WHITE, VGA_BLACK);
+    screen_set_color(VGA_WHITE, VGA_BLUE);
     screen_print_dec((int32_t)seconds);
     screen_print(".");
     if (ms < 100) screen_putchar('0');
@@ -328,17 +329,17 @@ static char basic_program[BASIC_PROGRAM_SIZE];
 
 // Show list of demo programs
 static void basic_show_demos(void) {
-    screen_set_color(VGA_LIGHT_CYAN, VGA_BLACK);
+    screen_set_color(VGA_WHITE, VGA_BLUE);
     screen_println("=== Available Demo Programs ===");
-    screen_set_color(VGA_WHITE, VGA_BLACK);
+    screen_set_color(VGA_WHITE, VGA_BLUE);
 
     for (int i = 1; i <= BASIC_NUM_PROGRAMS; i++) {
-        screen_set_color(VGA_YELLOW, VGA_BLACK);
+        screen_set_color(VGA_WHITE, VGA_BLUE);
         screen_print_dec(i);
         screen_print(". ");
-        screen_set_color(VGA_LIGHT_GREEN, VGA_BLACK);
+        screen_set_color(VGA_WHITE, VGA_BLUE);
         screen_print(basic_get_program_name(i));
-        screen_set_color(VGA_WHITE, VGA_BLACK);
+        screen_set_color(VGA_WHITE, VGA_BLUE);
         screen_print(" - ");
         screen_println(basic_get_program_description(i));
     }
@@ -350,9 +351,9 @@ static void basic_show_demos(void) {
 static int basic_load_demo(int num, int* program_pos) {
     const char* prog = basic_get_program(num);
     if (prog == 0) {
-        screen_set_color(VGA_LIGHT_RED, VGA_BLACK);
+        screen_set_color(VGA_LIGHT_RED, VGA_BLUE);
         screen_println("Invalid program number. Use 1-10.");
-        screen_set_color(VGA_WHITE, VGA_BLACK);
+        screen_set_color(VGA_WHITE, VGA_BLUE);
         return 0;
     }
 
@@ -366,10 +367,10 @@ static int basic_load_demo(int num, int* program_pos) {
     basic_program[len] = '\0';
     *program_pos = len;
 
-    screen_set_color(VGA_LIGHT_GREEN, VGA_BLACK);
+    screen_set_color(VGA_WHITE, VGA_BLUE);
     screen_print("Loaded: ");
     screen_println(basic_get_program_name(num));
-    screen_set_color(VGA_WHITE, VGA_BLACK);
+    screen_set_color(VGA_WHITE, VGA_BLUE);
     screen_print("  ");
     screen_println(basic_get_program_description(num));
     screen_println("Type LIST to view, RUN to execute.");
@@ -380,9 +381,9 @@ static void cmd_basic(void) {
     char line_buffer[MAX_COMMAND_LENGTH];
     int program_pos = 0;
 
-    screen_set_color(VGA_LIGHT_CYAN, VGA_BLACK);
+    screen_set_color(VGA_WHITE, VGA_BLUE);
     screen_println("=== uBASIC Interpreter ===");
-    screen_set_color(VGA_WHITE, VGA_BLACK);
+    screen_set_color(VGA_WHITE, VGA_BLUE);
     screen_println("Commands:");
     screen_println("  RUN        - Execute the program");
     screen_println("  LIST       - Show current program");
@@ -391,9 +392,9 @@ static void cmd_basic(void) {
     screen_println("  LOAD <1-10> - Load an example program");
     screen_println("  EXIT       - Return to shell");
     screen_println("");
-    screen_set_color(VGA_YELLOW, VGA_BLACK);
+    screen_set_color(VGA_WHITE, VGA_BLUE);
     screen_println("Tip: Type DEMOS to see 10 example programs!");
-    screen_set_color(VGA_WHITE, VGA_BLACK);
+    screen_set_color(VGA_WHITE, VGA_BLUE);
     screen_println("");
 
     // Clear program buffer
@@ -401,9 +402,9 @@ static void cmd_basic(void) {
     program_pos = 0;
 
     while (1) {
-        screen_set_color(VGA_LIGHT_GREEN, VGA_BLACK);
+        screen_set_color(VGA_WHITE, VGA_BLUE);
         screen_print("BASIC> ");
-        screen_set_color(VGA_WHITE, VGA_BLACK);
+        screen_set_color(VGA_WHITE, VGA_BLUE);
         keyboard_getline(line_buffer, MAX_COMMAND_LENGTH);
 
         // Check for commands (case insensitive)
@@ -415,21 +416,21 @@ static void cmd_basic(void) {
                 screen_println("No program to run. Use DEMOS to see examples.");
             } else {
                 screen_println("--- Running program ---");
-                screen_set_color(VGA_LIGHT_CYAN, VGA_BLACK);
+                screen_set_color(VGA_WHITE, VGA_BLUE);
                 ubasic_init(basic_program);
                 while (!ubasic_finished()) {
                     ubasic_run();
                 }
-                screen_set_color(VGA_WHITE, VGA_BLACK);
+                screen_set_color(VGA_WHITE, VGA_BLUE);
                 screen_println("--- Program ended ---");
             }
         } else if (strcmp(line_buffer, "LIST") == 0 || strcmp(line_buffer, "list") == 0) {
             if (program_pos == 0) {
                 screen_println("No program loaded. Use DEMOS to see examples.");
             } else {
-                screen_set_color(VGA_YELLOW, VGA_BLACK);
+                screen_set_color(VGA_WHITE, VGA_BLUE);
                 screen_println(basic_program);
-                screen_set_color(VGA_WHITE, VGA_BLACK);
+                screen_set_color(VGA_WHITE, VGA_BLUE);
             }
         } else if (strcmp(line_buffer, "NEW") == 0 || strcmp(line_buffer, "new") == 0) {
             memset(basic_program, 0, BASIC_PROGRAM_SIZE);
@@ -460,9 +461,9 @@ static void cmd_basic(void) {
                 basic_program[program_pos++] = '\n';
                 basic_program[program_pos] = '\0';
             } else {
-                screen_set_color(VGA_LIGHT_RED, VGA_BLACK);
+                screen_set_color(VGA_LIGHT_RED, VGA_BLUE);
                 screen_println("Program too large!");
-                screen_set_color(VGA_WHITE, VGA_BLACK);
+                screen_set_color(VGA_WHITE, VGA_BLUE);
             }
         }
     }
@@ -474,9 +475,9 @@ void shell_run(void) {
     statusbar_init();
     keyboard_set_idle_hook(shell_idle_hook);
 
-    screen_set_color(VGA_LIGHT_CYAN, VGA_BLACK);
+    screen_set_color(VGA_WHITE, VGA_BLUE);
     screen_println("Welcome to VOS Shell!");
-    screen_set_color(VGA_WHITE, VGA_BLACK);
+    screen_set_color(VGA_WHITE, VGA_BLUE);
     screen_println("Type 'help' for available commands.\n");
 
     while (1) {

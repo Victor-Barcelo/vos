@@ -333,6 +333,22 @@ static bool fat_is_eoc(const fat_view_t* fs, uint16_t cluster) {
     return true;
 }
 
+static bool fat_name_is_dot(const char* name) {
+    if (!name || name[0] == '\0') {
+        return false;
+    }
+    if (name[0] == '.' && name[1] == '\0') {
+        return true;
+    }
+    if (name[0] == '.' && name[1] == '.' && name[2] == '\0') {
+        return true;
+    }
+    return false;
+}
+
+static void fat_make_name(const uint8_t* e, char* out, uint32_t out_len);
+static uint32_t fat_count_dir_chain_files(const fat_view_t* fs, uint16_t start_cluster, uint32_t depth);
+
 static uint32_t fat_count_root_files(const fat_view_t* fs) {
     if (!fs || fs->kind == FAT_KIND_NONE) {
         return 0;
@@ -356,16 +372,92 @@ static uint32_t fat_count_root_files(const fat_view_t* fs) {
         if (attr & 0x08u) {
             continue;
         }
-        if (attr & 0x10u) {
-            continue;
-        }
-        if (e[0] == '.') {
-            continue;
-        }
         if (e[0] == ' ') {
             continue;
         }
+
+        char name[32];
+        fat_make_name(e, name, sizeof(name));
+        if (name[0] == '\0' || fat_name_is_dot(name)) {
+            continue;
+        }
+
+        if (attr & 0x10u) {
+            uint16_t first_cluster = read_le16(e + 26);
+            count += fat_count_dir_chain_files(fs, first_cluster, 1u);
+            continue;
+        }
+
         count++;
+    }
+
+    return count;
+}
+
+static uint32_t fat_count_dir_chain_files(const fat_view_t* fs, uint16_t start_cluster, uint32_t depth) {
+    if (!fs || fs->kind == FAT_KIND_NONE) {
+        return 0;
+    }
+    if (start_cluster < 2u) {
+        return 0;
+    }
+    if (depth >= 8u) {
+        return 0;
+    }
+
+    uint32_t count = 0;
+    uint16_t cluster = start_cluster;
+    uint32_t max_steps = fs->cluster_count + 4u;
+
+    for (uint32_t step = 0; step < max_steps; step++) {
+        if (cluster < 2u || cluster >= (uint16_t)(fs->cluster_count + 2u)) {
+            break;
+        }
+
+        uint32_t cl_off = fs->data_offset_bytes + (uint32_t)(cluster - 2u) * fs->cluster_size_bytes;
+        if (cl_off + fs->cluster_size_bytes > fs->img_len) {
+            break;
+        }
+
+        const uint8_t* dir = fs->img + cl_off;
+        for (uint32_t off = 0; off + 32u <= fs->cluster_size_bytes; off += 32u) {
+            const uint8_t* e = dir + off;
+            if (e[0] == 0x00) {
+                return count;
+            }
+            if (e[0] == 0xE5) {
+                continue;
+            }
+            uint8_t attr = e[11];
+            if (attr == 0x0F) {
+                continue;
+            }
+            if (attr & 0x08u) {
+                continue;
+            }
+            if (e[0] == ' ') {
+                continue;
+            }
+
+            char name[32];
+            fat_make_name(e, name, sizeof(name));
+            if (name[0] == '\0' || fat_name_is_dot(name)) {
+                continue;
+            }
+
+            if (attr & 0x10u) {
+                uint16_t first_cluster = read_le16(e + 26);
+                count += fat_count_dir_chain_files(fs, first_cluster, depth + 1u);
+            } else {
+                count++;
+            }
+        }
+
+        uint16_t next = fat_next_cluster(fs, cluster);
+        if (fat_is_eoc(fs, next)) {
+            break;
+        }
+        cluster = next;
     }
 
     return count;
@@ -478,6 +570,92 @@ static bool fat_read_file_alloc(const fat_view_t* fs, uint16_t start_cluster, ui
     return true;
 }
 
+static uint32_t fat_fill_dir_chain_files(vfs_file_t* out_files, uint32_t start_idx, uint32_t max_files, const fat_view_t* fs, const char* prefix, uint16_t start_cluster, uint32_t depth) {
+    if (!out_files || !fs || fs->kind == FAT_KIND_NONE || !prefix) {
+        return 0;
+    }
+    if (start_cluster < 2u) {
+        return 0;
+    }
+    if (depth >= 8u) {
+        return 0;
+    }
+
+    uint32_t idx = start_idx;
+    uint16_t cluster = start_cluster;
+    uint32_t max_steps = fs->cluster_count + 4u;
+
+    for (uint32_t step = 0; step < max_steps && idx < max_files; step++) {
+        if (cluster < 2u || cluster >= (uint16_t)(fs->cluster_count + 2u)) {
+            break;
+        }
+
+        uint32_t cl_off = fs->data_offset_bytes + (uint32_t)(cluster - 2u) * fs->cluster_size_bytes;
+        if (cl_off + fs->cluster_size_bytes > fs->img_len) {
+            break;
+        }
+
+        const uint8_t* dir = fs->img + cl_off;
+        for (uint32_t off = 0; off + 32u <= fs->cluster_size_bytes && idx < max_files; off += 32u) {
+            const uint8_t* e = dir + off;
+            if (e[0] == 0x00) {
+                return idx - start_idx;
+            }
+            if (e[0] == 0xE5) {
+                continue;
+            }
+            uint8_t attr = e[11];
+            if (attr == 0x0F) {
+                continue;
+            }
+            if (attr & 0x08u) {
+                continue;
+            }
+            if (e[0] == ' ') {
+                continue;
+            }
+
+            char name[32];
+            fat_make_name(e, name, sizeof(name));
+            if (name[0] == '\0' || fat_name_is_dot(name)) {
+                continue;
+            }
+
+            if (attr & 0x10u) {
+                uint16_t first_cluster = read_le16(e + 26);
+                char* new_prefix = dup_path(prefix, name);
+                if (!new_prefix) {
+                    continue;
+                }
+                idx += fat_fill_dir_chain_files(out_files, idx, max_files, fs, new_prefix, first_cluster, depth + 1u);
+                kfree(new_prefix);
+                continue;
+            }
+
+            uint16_t first_cluster = read_le16(e + 26);
+            uint32_t size = read_le32(e + 28);
+
+            uint8_t* data = NULL;
+            if (!fat_read_file_alloc(fs, first_cluster, size, &data)) {
+                continue;
+            }
+
+            out_files[idx].name = dup_path(prefix, name);
+            out_files[idx].data = data;
+            out_files[idx].size = size;
+            idx++;
+        }
+
+        uint16_t next = fat_next_cluster(fs, cluster);
+        if (fat_is_eoc(fs, next)) {
+            break;
+        }
+        cluster = next;
+    }
+
+    return idx - start_idx;
+}
+
 static uint32_t fat_fill_root_files(vfs_file_t* out_files, uint32_t start_idx, uint32_t max_files, const fat_view_t* fs) {
     if (!out_files || !fs || fs->kind == FAT_KIND_NONE) {
         return 0;
@@ -501,16 +679,24 @@ static uint32_t fat_fill_root_files(vfs_file_t* out_files, uint32_t start_idx, u
         if (attr & 0x08u) {
             continue;
         }
-        if (attr & 0x10u) {
-            continue;
-        }
-        if (e[0] == '.') {
+        if (e[0] == ' ') {
             continue;
         }
 
         char name[32];
         fat_make_name(e, name, sizeof(name));
-        if (name[0] == '\0') {
+        if (name[0] == '\0' || fat_name_is_dot(name)) {
+            continue;
+        }
+
+        if (attr & 0x10u) {
+            uint16_t first_cluster = read_le16(e + 26);
+            char* prefix = dup_path("fat", name);
+            if (!prefix) {
+                continue;
+            }
+            idx += fat_fill_dir_chain_files(out_files, idx, max_files, fs, prefix, first_cluster, 1u);
+            kfree(prefix);
             continue;
         }
 

@@ -13,6 +13,9 @@ enum {
     SYS_KILL  = 5,
     SYS_SBRK  = 6,
     SYS_READFILE = 7,
+    SYS_OPEN = 8,
+    SYS_READ = 9,
+    SYS_CLOSE = 10,
 };
 
 static inline int sys_write(const char* buf, uint32_t len) {
@@ -85,6 +88,39 @@ static inline int sys_readfile(const char* path, void* buf, uint32_t buf_len, ui
         "int $0x80"
         : "=a"(ret)
         : "a"(SYS_READFILE), "b"(path), "c"(buf), "d"(buf_len), "S"(offset)
+        : "memory"
+    );
+    return ret;
+}
+
+static inline int sys_open(const char* path, uint32_t flags) {
+    int ret;
+    __asm__ volatile (
+        "int $0x80"
+        : "=a"(ret)
+        : "a"(SYS_OPEN), "b"(path), "c"(flags)
+        : "memory"
+    );
+    return ret;
+}
+
+static inline int sys_read(int fd, void* buf, uint32_t len) {
+    int ret;
+    __asm__ volatile (
+        "int $0x80"
+        : "=a"(ret)
+        : "a"(SYS_READ), "b"(fd), "c"(buf), "d"(len)
+        : "memory"
+    );
+    return ret;
+}
+
+static inline int sys_close(int fd) {
+    int ret;
+    __asm__ volatile (
+        "int $0x80"
+        : "=a"(ret)
+        : "a"(SYS_CLOSE), "b"(fd)
         : "memory"
     );
     return ret;

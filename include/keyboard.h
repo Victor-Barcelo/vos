@@ -26,6 +26,10 @@ bool keyboard_has_key(void);
 // Get the next key from the buffer (blocking)
 char keyboard_getchar(void);
 
+// Try to get the next key from the buffer (non-blocking).
+// Returns true and stores the key in *out on success.
+bool keyboard_try_getchar(char* out);
+
 // Get a line of input with command history (blocking)
 void keyboard_getline(char* buffer, size_t max_len);
 

@@ -6,11 +6,30 @@
 #include "io.h"
 #include "paging.h"
 #include "pmm.h"
+#include "usercopy.h"
+#include "vfs.h"
+#include "keyboard.h"
 
 #define KSTACK_SIZE (16u * 1024u)
 #define TASK_NAME_LEN 15
 #define TASK_MAX_SCAN 256
 #define KSTACK_REGION_BASE 0xF0000000u
+#define TASK_MAX_FDS 16
+
+typedef enum {
+    FD_KIND_FREE = 0,
+    FD_KIND_STDIN = 1,
+    FD_KIND_STDOUT = 2,
+    FD_KIND_STDERR = 3,
+    FD_KIND_VFS_FILE = 4,
+} fd_kind_t;
+
+typedef struct fd_entry {
+    fd_kind_t kind;
+    const uint8_t* data;
+    uint32_t size;
+    uint32_t off;
+} fd_entry_t;
 
 typedef struct task {
     uint32_t id;
@@ -20,6 +39,7 @@ typedef struct task {
     bool user;
     uint32_t user_brk;
     uint32_t user_brk_min;
+    fd_entry_t fds[TASK_MAX_FDS];
     task_state_t state;
     uint32_t wake_tick;
     uint32_t wait_pid;
@@ -41,6 +61,16 @@ static uint32_t* push32(uint32_t* sp, uint32_t v) {
     sp--;
     *sp = v;
     return sp;
+}
+
+static void fd_init(task_t* t) {
+    if (!t) {
+        return;
+    }
+    memset(t->fds, 0, sizeof(t->fds));
+    if (TASK_MAX_FDS > 0) t->fds[0].kind = FD_KIND_STDIN;
+    if (TASK_MAX_FDS > 1) t->fds[1].kind = FD_KIND_STDOUT;
+    if (TASK_MAX_FDS > 2) t->fds[2].kind = FD_KIND_STDERR;
 }
 
 static void task_set_name(task_t* t, const char* name) {
@@ -135,6 +165,7 @@ static task_t* task_create_kernel(void (*entry)(void), const char* name) {
     t->user = false;
     t->user_brk = 0;
     t->user_brk_min = 0;
+    fd_init(t);
     t->state = TASK_STATE_RUNNABLE;
     t->wake_tick = 0;
     t->wait_pid = 0;
@@ -192,6 +223,7 @@ static task_t* task_create_user(uint32_t entry, uint32_t user_esp, uint32_t* pag
     t->user = true;
     t->user_brk = user_brk;
     t->user_brk_min = user_brk;
+    fd_init(t);
     t->state = TASK_STATE_RUNNABLE;
     t->wake_tick = 0;
     t->wait_pid = 0;
@@ -371,6 +403,7 @@ void tasking_init(void) {
     boot->user = false;
     boot->user_brk = 0;
     boot->user_brk_min = 0;
+    fd_init(boot);
     boot->state = TASK_STATE_RUNNABLE;
     boot->wake_tick = 0;
     boot->wait_pid = 0;
@@ -645,4 +678,139 @@ bool tasking_spawn_user(uint32_t entry, uint32_t user_esp, uint32_t* page_direct
     }
     task_append(t);
     return true;
+}
+
+int32_t tasking_fd_open(const char* path, uint32_t flags) {
+    (void)flags;
+    if (!current_task || !path) {
+        return -1;
+    }
+
+    const uint8_t* data = NULL;
+    uint32_t size = 0;
+    if (!vfs_read_file(path, &data, &size) || !data) {
+        return -1;
+    }
+
+    uint32_t irq_flags = irq_save();
+    for (int32_t fd = 3; fd < (int32_t)TASK_MAX_FDS; fd++) {
+        if (current_task->fds[fd].kind == FD_KIND_FREE) {
+            current_task->fds[fd].kind = FD_KIND_VFS_FILE;
+            current_task->fds[fd].data = data;
+            current_task->fds[fd].size = size;
+            current_task->fds[fd].off = 0;
+            irq_restore(irq_flags);
+            return fd;
+        }
+    }
+    irq_restore(irq_flags);
+    return -1;
+}
+
+int32_t tasking_fd_close(int32_t fd) {
+    if (!current_task) {
+        return -1;
+    }
+    if (fd < 0 || fd >= (int32_t)TASK_MAX_FDS) {
+        return -1;
+    }
+
+    uint32_t irq_flags = irq_save();
+    if (current_task->fds[fd].kind == FD_KIND_FREE) {
+        irq_restore(irq_flags);
+        return -1;
+    }
+    current_task->fds[fd].kind = FD_KIND_FREE;
+    current_task->fds[fd].data = NULL;
+    current_task->fds[fd].size = 0;
+    current_task->fds[fd].off = 0;
+    irq_restore(irq_flags);
+    return 0;
+}
+
+int32_t tasking_fd_read(int32_t fd, void* dst_user, uint32_t len) {
+    if (!current_task || !dst_user) {
+        return -1;
+    }
+    if (fd < 0 || fd >= (int32_t)TASK_MAX_FDS) {
+        return -1;
+    }
+    if (len == 0) {
+        return 0;
+    }
+
+    uint32_t irq_flags = irq_save();
+    fd_entry_t ent = current_task->fds[fd];
+
+    if (ent.kind == FD_KIND_STDIN) {
+        irq_restore(irq_flags);
+
+        uint8_t* dst = (uint8_t*)dst_user;
+        uint32_t read = 0;
+
+        // Block until we can return at least 1 byte.
+        char c = keyboard_getchar();
+        if (!copy_to_user(dst, &c, 1u)) {
+            return -1;
+        }
+        dst++;
+        read++;
+
+        while (read < len) {
+            char next = 0;
+            if (!keyboard_try_getchar(&next)) {
+                break;
+            }
+            if (!copy_to_user(dst, &next, 1u)) {
+                return -1;
+            }
+            dst++;
+            read++;
+        }
+
+        return (int32_t)read;
+    }
+
+    if (ent.kind != FD_KIND_VFS_FILE) {
+        irq_restore(irq_flags);
+        return -1;
+    }
+    if (!ent.data) {
+        irq_restore(irq_flags);
+        return -1;
+    }
+
+    uint32_t off = ent.off;
+    uint32_t size = ent.size;
+    const uint8_t* src_data = ent.data;
+
+    if (off >= size) {
+        irq_restore(irq_flags);
+        return 0;
+    }
+
+    uint32_t avail = size - off;
+    uint32_t to_copy = len;
+    if (to_copy > avail) {
+        to_copy = avail;
+    }
+    current_task->fds[fd].off = off + to_copy;
+    irq_restore(irq_flags);
+
+    uint32_t remaining = to_copy;
+    const uint8_t* src = src_data + off;
+    uint8_t* dst = (uint8_t*)dst_user;
+    while (remaining) {
+        uint32_t chunk = remaining;
+        if (chunk > 256u) {
+            chunk = 256u;
+        }
+        if (!copy_to_user(dst, src, chunk)) {
+            return -1;
+        }
+        dst += chunk;
+        src += chunk;
+        remaining -= chunk;
+    }
+    return (int32_t)to_copy;
 }

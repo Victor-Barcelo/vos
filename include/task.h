@@ -53,4 +53,9 @@ bool tasking_kill(uint32_t pid, int32_t exit_code);
 // Adjust the user heap break (sbrk-style). Returns previous brk in EAX or -1.
 interrupt_frame_t* tasking_sbrk(interrupt_frame_t* frame, int32_t increment);
 
+// Minimal fd-based API for syscalls (per-task).
+int32_t tasking_fd_open(const char* path, uint32_t flags);
+int32_t tasking_fd_close(int32_t fd);
+int32_t tasking_fd_read(int32_t fd, void* dst_user, uint32_t len);
+
 #endif

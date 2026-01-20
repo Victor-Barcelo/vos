@@ -200,25 +200,44 @@ bool keyboard_has_key(void) {
     return buffer_start != buffer_end;
 }
 
+bool keyboard_try_getchar(char* out) {
+    if (!out) {
+        return false;
+    }
+
+    uint32_t flags = irq_save();
+    if (buffer_start == buffer_end) {
+        irq_restore(flags);
+        return false;
+    }
+    *out = buffer_pop();
+    irq_restore(flags);
+    return true;
+}
+
 char keyboard_getchar(void) {
     // Wait for a key.
     screen_cursor_set_enabled(true);
 
-    if (!irq_are_enabled()) {
-        while (!keyboard_has_key()) {
-            __asm__ volatile ("pause");
-        }
-        return buffer_pop();
+    bool were_enabled = irq_are_enabled();
+    if (!were_enabled) {
+        sti();
     }
 
-    while (!keyboard_has_key()) {
+    char c = 0;
+    while (!keyboard_try_getchar(&c)) {
         hlt();
         if (idle_hook) {
             idle_hook();
         }
     }
+
+    if (!were_enabled) {
+        cli();
+    }
+
     screen_cursor_set_enabled(true);
-    return buffer_pop();
+    return c;
 }
 
 // Command history

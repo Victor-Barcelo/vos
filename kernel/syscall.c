@@ -14,6 +14,9 @@ enum {
     SYS_KILL  = 5,
     SYS_SBRK  = 6,
     SYS_READFILE = 7,
+    SYS_OPEN = 8,
+    SYS_READ = 9,
+    SYS_CLOSE = 10,
 };
 
 static bool copy_user_cstring(char* dst, uint32_t dst_cap, const char* src_user) {
@@ -172,6 +175,34 @@ interrupt_frame_t* syscall_handle(interrupt_frame_t* frame) {
             }
 
             frame->eax = to_copy;
+            return frame;
+        }
+        case SYS_OPEN: {
+            const char* path_user = (const char*)frame->ebx;
+            uint32_t flags = frame->ecx;
+
+            char path[128];
+            if (!copy_user_cstring(path, sizeof(path), path_user)) {
+                frame->eax = (uint32_t)-1;
+                return frame;
+            }
+
+            int32_t fd = tasking_fd_open(path, flags);
+            frame->eax = (uint32_t)fd;
+            return frame;
+        }
+        case SYS_READ: {
+            int32_t fd = (int32_t)frame->ebx;
+            void* dst_user = (void*)frame->ecx;
+            uint32_t len = frame->edx;
+            int32_t n = tasking_fd_read(fd, dst_user, len);
+            frame->eax = (uint32_t)n;
+            return frame;
+        }
+        case SYS_CLOSE: {
+            int32_t fd = (int32_t)frame->ebx;
+            int32_t rc = tasking_fd_close(fd);
+            frame->eax = (uint32_t)rc;
             return frame;
         }
         default:

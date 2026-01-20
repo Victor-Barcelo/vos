@@ -15,15 +15,10 @@ static void write_le32(uint8_t* p, uint32_t v) {
     p[3] = (uint8_t)((v >> 24) & 0xFFu);
 }
 
-static void fat12_set(uint8_t* fat, uint16_t cluster, uint16_t value) {
-    uint32_t offset = (uint32_t)cluster + (uint32_t)(cluster / 2u);
-    if ((cluster & 1u) == 0) {
-        fat[offset + 0] = (uint8_t)(value & 0xFFu);
-        fat[offset + 1] = (uint8_t)((fat[offset + 1] & 0xF0u) | ((value >> 8) & 0x0Fu));
-    } else {
-        fat[offset + 0] = (uint8_t)((fat[offset + 0] & 0x0Fu) | ((value << 4) & 0xF0u));
-        fat[offset + 1] = (uint8_t)((value >> 4) & 0xFFu);
-    }
+static void fat16_set(uint8_t* fat, uint16_t cluster, uint16_t value) {
+    uint32_t offset = (uint32_t)cluster * 2u;
+    fat[offset + 0] = (uint8_t)(value & 0xFFu);
+    fat[offset + 1] = (uint8_t)((value >> 8) & 0xFFu);
 }
 
 static void dir_write_entry(uint8_t* entry, const char* name8, const char* ext3, uint8_t attr, uint16_t first_cluster, uint32_t size) {
@@ -67,12 +62,12 @@ int main(int argc, char** argv) {
     const uint8_t sectors_per_cluster = 1;
     const uint16_t reserved_sectors = 1;
     const uint8_t num_fats = 2;
-    const uint16_t root_entries = 224;
-    const uint16_t total_sectors16 = 2880;
-    const uint8_t media = 0xF0;
-    const uint16_t fat_sectors = 9;
-    const uint16_t sectors_per_track = 18;
-    const uint16_t heads = 2;
+    const uint16_t root_entries = 512;
+    const uint16_t total_sectors16 = 8192; // 4MiB
+    const uint8_t media = 0xF8;
+    const uint16_t fat_sectors = 32;
+    const uint16_t sectors_per_track = 32;
+    const uint16_t heads = 64;
 
     const uint32_t root_dir_sectors = ((uint32_t)root_entries * 32u + (bytes_per_sector - 1u)) / bytes_per_sector;
     const uint32_t first_root_sector = (uint32_t)reserved_sectors + (uint32_t)num_fats * (uint32_t)fat_sectors;
@@ -108,8 +103,8 @@ int main(int argc, char** argv) {
     bs[37] = 0x00;
     bs[38] = 0x29;
     write_le32(bs + 39, 0x12345678u);
-    memcpy(bs + 43, "VOS FAT12  ", 11);
-    memcpy(bs + 54, "FAT12   ", 8);
+    memcpy(bs + 43, "VOS FAT16  ", 11);
+    memcpy(bs + 54, "FAT16   ", 8);
     bs[510] = 0x55;
     bs[511] = 0xAA;
 
@@ -119,14 +114,16 @@ int main(int argc, char** argv) {
     fat1[0] = media;
     fat1[1] = 0xFF;
     fat1[2] = 0xFF;
+    fat1[3] = 0xFF;
 
     // Root directory
     uint8_t* root = image + first_root_sector * bytes_per_sector;
 
-    const char hello_text[] = "Hello from FAT12 on VOS!\r\n";
+    const char hello_text[] = "Hello from FAT16 on VOS!\r\n";
+    const char nested_text[] = "Hello from fat/dir/nested.txt on VOS!\r\n";
     const char big_text[] =
         "This is a larger file stored in multiple clusters.\r\n"
-        "It exists to validate FAT12 cluster chaining in VOS.\r\n"
+        "It exists to validate FAT16 cluster chaining in VOS.\r\n"
         "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\r\n"
         "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\r\n"
         "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\r\n"
@@ -134,17 +131,48 @@ int main(int argc, char** argv) {
 
     uint16_t next_cluster = 2;
 
+    // DIR/ (directory with one file)
+    {
+        uint16_t dir_cluster = next_cluster++;
+        fat16_set(fat1, dir_cluster, 0xFFFFu);
+
+        char n[8], e[3];
+        pad_83(n, "DIR");
+        pad_3(e, "");
+        dir_write_entry(root + 0 * 32, n, e, 0x10, dir_cluster, 0);
+
+        uint32_t dir_off = (first_data_sector + (uint32_t)(dir_cluster - 2u) * sectors_per_cluster) * bytes_per_sector;
+        uint8_t* dir = image + dir_off;
+
+        pad_83(n, ".");
+        pad_3(e, "");
+        dir_write_entry(dir + 0 * 32, n, e, 0x10, dir_cluster, 0);
+
+        pad_83(n, "..");
+        pad_3(e, "");
+        dir_write_entry(dir + 1 * 32, n, e, 0x10, 0, 0);
+
+        uint16_t nested_cluster = next_cluster++;
+        fat16_set(fat1, nested_cluster, 0xFFFFu);
+        uint32_t nested_off = (first_data_sector + (uint32_t)(nested_cluster - 2u) * sectors_per_cluster) * bytes_per_sector;
+        memcpy(image + nested_off, nested_text, sizeof(nested_text) - 1u);
+
+        pad_83(n, "NESTED");
+        pad_3(e, "TXT");
+        dir_write_entry(dir + 2 * 32, n, e, 0x20, nested_cluster, (uint32_t)(sizeof(nested_text) - 1u));
+    }
+
     // HELLO.TXT (1 cluster)
     {
         uint16_t start = next_cluster++;
-        fat12_set(fat1, start, 0xFFFu);
-        uint32_t data_off = (first_data_sector + (uint32_t)(start - 2u)) * bytes_per_sector;
+        fat16_set(fat1, start, 0xFFFFu);
+        uint32_t data_off = (first_data_sector + (uint32_t)(start - 2u) * sectors_per_cluster) * bytes_per_sector;
         memcpy(image + data_off, hello_text, sizeof(hello_text) - 1u);
 
         char n[8], e[3];
         pad_83(n, "HELLO");
         pad_3(e, "TXT");
-        dir_write_entry(root + 0 * 32, n, e, 0x20, start, (uint32_t)(sizeof(hello_text) - 1u));
+        dir_write_entry(root + 1 * 32, n, e, 0x20, start, (uint32_t)(sizeof(hello_text) - 1u));
     }
 
     // BIG.TXT (multiple clusters)
@@ -155,27 +183,28 @@ int main(int argc, char** argv) {
         uint16_t start = next_cluster;
         uint16_t prev = 0;
         uint32_t pos = 0;
+        const uint32_t cluster_bytes = (uint32_t)bytes_per_sector * sectors_per_cluster;
 
         while (remaining) {
             uint16_t cl = next_cluster++;
             if (prev) {
-                fat12_set(fat1, prev, cl);
+                fat16_set(fat1, prev, cl);
             }
             prev = cl;
 
-            uint32_t data_off = (first_data_sector + (uint32_t)(cl - 2u)) * bytes_per_sector;
+            uint32_t data_off = (first_data_sector + (uint32_t)(cl - 2u) * sectors_per_cluster) * bytes_per_sector;
             uint32_t chunk = remaining;
-            if (chunk > bytes_per_sector) chunk = bytes_per_sector;
+            if (chunk > cluster_bytes) chunk = cluster_bytes;
             memcpy(image + data_off, big_text + pos, chunk);
             pos += chunk;
             remaining -= chunk;
         }
-        fat12_set(fat1, prev, 0xFFFu);
+        fat16_set(fat1, prev, 0xFFFFu);
 
         char n[8], e[3];
         pad_83(n, "BIG");
         pad_3(e, "TXT");
-        dir_write_entry(root + 1 * 32, n, e, 0x20, start, size);
+        dir_write_entry(root + 2 * 32, n, e, 0x20, start, size);
     }
 
     memcpy(fat2, fat1, fat_bytes);

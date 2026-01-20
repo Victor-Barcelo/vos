@@ -39,6 +39,10 @@ static bool g_present = false;
 static uint32_t g_total_sectors = 0;
 static char g_model[41];
 
+static inline void cpu_pause(void) {
+    __asm__ volatile ("pause");
+}
+
 static inline uint8_t ata_inb(uint16_t reg) {
     return inb((uint16_t)(ATA_PRIMARY_IO + reg));
 }
@@ -47,27 +51,34 @@ static inline void ata_outb(uint16_t reg, uint8_t v) {
     outb((uint16_t)(ATA_PRIMARY_IO + reg), v);
 }
 
+static inline uint8_t ata_alt_status(void) {
+    return inb(ATA_PRIMARY_CTRL);
+}
+
 static void ata_delay_400ns(void) {
-    (void)inb(ATA_PRIMARY_CTRL);
-    (void)inb(ATA_PRIMARY_CTRL);
-    (void)inb(ATA_PRIMARY_CTRL);
-    (void)inb(ATA_PRIMARY_CTRL);
+    (void)ata_alt_status();
+    (void)ata_alt_status();
+    (void)ata_alt_status();
+    (void)ata_alt_status();
 }
 
 static bool ata_wait_not_busy(uint32_t timeout) {
     for (uint32_t i = 0; i < timeout; i++) {
-        uint8_t st = ata_inb(ATA_REG_STATUS);
+        uint8_t st = ata_alt_status();
         if ((st & ATA_SR_BSY) == 0) {
             return true;
         }
-        io_wait();
+        if ((i & 0xFFu) == 0) {
+            ata_delay_400ns();
+        }
+        cpu_pause();
     }
     return false;
 }
 
 static bool ata_wait_drq(uint32_t timeout) {
     for (uint32_t i = 0; i < timeout; i++) {
-        uint8_t st = ata_inb(ATA_REG_STATUS);
+        uint8_t st = ata_alt_status();
         if (st & ATA_SR_ERR) {
             return false;
         }
@@ -77,7 +88,10 @@ static bool ata_wait_drq(uint32_t timeout) {
         if ((st & ATA_SR_BSY) == 0 && (st & ATA_SR_DRQ) != 0) {
             return true;
         }
-        io_wait();
+        if ((i & 0xFFu) == 0) {
+            ata_delay_400ns();
+        }
+        cpu_pause();
     }
     return false;
 }
@@ -136,7 +150,7 @@ bool ata_init(void) {
     ata_outb(ATA_REG_COMMAND, ATA_CMD_IDENTIFY);
     ata_delay_400ns();
 
-    uint8_t st = ata_inb(ATA_REG_STATUS);
+    uint8_t st = ata_alt_status();
     if (st == 0) {
         irq_restore(irq_flags);
         return false; // no device
@@ -217,6 +231,11 @@ bool ata_read_sector(uint32_t lba, uint8_t* out512) {
     uint16_t* dst = (uint16_t*)out512;
     for (uint32_t i = 0; i < 256; i++) {
         dst[i] = inw(ATA_PRIMARY_IO + ATA_REG_DATA);
+    }
+
+    if (!ata_wait_not_busy(100000u) || ((ata_alt_status() & (ATA_SR_ERR | ATA_SR_DF)) != 0)) {
+        irq_restore(irq_flags);
+        return false;
     }
 
     irq_restore(irq_flags);

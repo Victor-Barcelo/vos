@@ -38,6 +38,8 @@ SECTIONS
         *(.bss)
     }
 
+    __kernel_end = .;
+
     /* Discard unnecessary sections */
     /DISCARD/ :
     {

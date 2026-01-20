@@ -5,6 +5,11 @@
 
 #define MULTIBOOT_BOOTLOADER_MAGIC 0x2BADB002u
 
+#define MULTIBOOT_INFO_MEM       (1u << 0)
+#define MULTIBOOT_INFO_MODS      (1u << 3)
+#define MULTIBOOT_INFO_MMAP      (1u << 6)
+#define MULTIBOOT_INFO_FRAMEBUFFER (1u << 12)
+
 typedef struct multiboot_info {
     uint32_t flags;
     uint32_t mem_lower;
@@ -52,5 +57,19 @@ typedef struct multiboot_info {
         } __attribute__((packed));
     } __attribute__((packed));
 } __attribute__((packed)) multiboot_info_t;
+
+typedef struct multiboot_module {
+    uint32_t mod_start;
+    uint32_t mod_end;
+    uint32_t string;
+    uint32_t reserved;
+} __attribute__((packed)) multiboot_module_t;
+
+typedef struct multiboot_mmap_entry {
+    uint32_t size;
+    uint64_t addr;
+    uint64_t len;
+    uint32_t type;
+} __attribute__((packed)) multiboot_mmap_entry_t;
 
 #endif

@@ -3,6 +3,7 @@ build/
 *.o
 *.bin
 *.iso
+iso/boot/initramfs.tar
 
 # IDE files
 .vscode/

@@ -31,6 +31,10 @@ OBJECTS = $(ASM_OBJECTS) $(C_OBJECTS)
 KERNEL = $(BUILD_DIR)/kernel.bin
 ISO = vos.iso
 
+# Initramfs (multiboot module)
+INITRAMFS_DIR = initramfs
+INITRAMFS_TAR = $(ISO_DIR)/boot/initramfs.tar
+
 # QEMU defaults
 QEMU_XRES ?= 1280
 QEMU_YRES ?= 800
@@ -58,6 +62,7 @@ $(KERNEL): $(OBJECTS)
 $(ISO): $(KERNEL)
 	mkdir -p $(ISO_DIR)/boot/grub
 	cp $(KERNEL) $(ISO_DIR)/boot/kernel.bin
+	if [ -d "$(INITRAMFS_DIR)" ]; then tar -C $(INITRAMFS_DIR) -cf $(INITRAMFS_TAR) . ; fi
 	echo 'set timeout=0' > $(ISO_DIR)/boot/grub/grub.cfg
 	echo 'set default=0' >> $(ISO_DIR)/boot/grub/grub.cfg
 	echo 'insmod all_video' >> $(ISO_DIR)/boot/grub/grub.cfg
@@ -69,6 +74,7 @@ $(ISO): $(KERNEL)
 	echo 'terminal_output gfxterm' >> $(ISO_DIR)/boot/grub/grub.cfg
 	echo 'menuentry "VOS" {' >> $(ISO_DIR)/boot/grub/grub.cfg
 	echo '    multiboot /boot/kernel.bin' >> $(ISO_DIR)/boot/grub/grub.cfg
+	if [ -f "$(INITRAMFS_TAR)" ]; then echo '    module /boot/initramfs.tar' >> $(ISO_DIR)/boot/grub/grub.cfg ; fi
 	echo '}' >> $(ISO_DIR)/boot/grub/grub.cfg
 	grub-mkrescue -o $(ISO) $(ISO_DIR)
 
@@ -76,6 +82,7 @@ $(ISO): $(KERNEL)
 clean:
 	rm -rf $(BUILD_DIR)
 	rm -rf $(ISO_DIR)/boot/kernel.bin
+	rm -rf $(INITRAMFS_TAR)
 	rm -rf $(ISO_DIR)/boot/grub/grub.cfg
 	rm -f $(ISO)
 

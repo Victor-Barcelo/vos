@@ -1,0 +1,6 @@
+Hello from VOS initramfs!
+
+Try:
+  ls
+  cat hello.txt
+

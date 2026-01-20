@@ -8,9 +8,55 @@
 #include "interrupts.h"
 #include "timer.h"
 #include "system.h"
+#include "early_alloc.h"
+#include "pmm.h"
+#include "multiboot.h"
+#include "paging.h"
+#include "kheap.h"
+#include "vfs.h"
 
 // Multiboot magic number
 #define MULTIBOOT_MAGIC 0x2BADB002
+
+extern uint8_t __kernel_end;
+
+static uint32_t align_up_u32(uint32_t v, uint32_t a) {
+    return (v + a - 1u) & ~(a - 1u);
+}
+
+static uint32_t compute_early_start(uint32_t kernel_end, const multiboot_info_t* mbi) {
+    uint32_t high = kernel_end;
+    if (!mbi) {
+        return align_up_u32(high, 0x1000u);
+    }
+
+    uint32_t mbi_end = (uint32_t)mbi + (uint32_t)sizeof(*mbi);
+    if (mbi_end > high) {
+        high = mbi_end;
+    }
+
+    if ((mbi->flags & MULTIBOOT_INFO_MMAP) && mbi->mmap_addr && mbi->mmap_length) {
+        uint32_t mmap_end = mbi->mmap_addr + mbi->mmap_length;
+        if (mmap_end > high) {
+            high = mmap_end;
+        }
+    }
+
+    if ((mbi->flags & MULTIBOOT_INFO_MODS) && mbi->mods_addr && mbi->mods_count) {
+        uint32_t mods_end = mbi->mods_addr + mbi->mods_count * (uint32_t)sizeof(multiboot_module_t);
+        if (mods_end > high) {
+            high = mods_end;
+        }
+        const multiboot_module_t* mods = (const multiboot_module_t*)mbi->mods_addr;
+        for (uint32_t i = 0; i < mbi->mods_count; i++) {
+            if (mods[i].mod_end > high) {
+                high = mods[i].mod_end;
+            }
+        }
+    }
+
+    return align_up_u32(high, 0x1000u);
+}
 
 static void keyboard_irq_handler(interrupt_frame_t* frame) {
     (void)frame;
@@ -24,6 +70,14 @@ void kernel_main(uint32_t magic, uint32_t* mboot_info) {
 
     // Initialize the screen (VGA text or Multiboot framebuffer).
     screen_init(magic, mboot_info);
+
+    uint32_t kernel_end = (uint32_t)&__kernel_end;
+    uint32_t early_start = compute_early_start(kernel_end, (const multiboot_info_t*)mboot_info);
+    early_alloc_init(early_start);
+    paging_init((const multiboot_info_t*)mboot_info);
+    pmm_init(magic, (const multiboot_info_t*)mboot_info, kernel_end);
+    kheap_init();
+    vfs_init((const multiboot_info_t*)mboot_info);
 
     // Display boot message
     screen_set_color(VGA_LIGHT_CYAN, VGA_BLUE);

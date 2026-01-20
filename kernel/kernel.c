@@ -6,6 +6,7 @@
 #include "shell.h"
 #include "io.h"
 #include "interrupts.h"
+#include "timer.h"
 
 // Multiboot magic number
 #define MULTIBOOT_MAGIC 0x2BADB002
@@ -53,6 +54,12 @@ void kernel_main(uint32_t magic, uint32_t* mboot_info) {
     screen_print("[OK] ");
     screen_set_color(VGA_WHITE, VGA_BLACK);
     screen_println("IDT initialized");
+
+    timer_init(1000);
+    screen_set_color(VGA_LIGHT_GREEN, VGA_BLACK);
+    screen_print("[OK] ");
+    screen_set_color(VGA_WHITE, VGA_BLACK);
+    screen_println("Timer initialized");
 
     // Route IRQ1 (keyboard) through the common IRQ handler.
     irq_register_handler(1, keyboard_irq_handler);

@@ -78,9 +78,9 @@ void idt_init(void) {
         idt_set_gate((uint8_t)(32 + i), irq_stub_table[i], code_selector, 0x8E);
     }
 
-    // Mask all IRQs except keyboard (IRQ1)
-    // Master PIC: unmask IRQ1 (keyboard) and IRQ2 (cascade)
-    outb(0x21, 0xF9);
+    // Mask all IRQs except timer (IRQ0) and keyboard (IRQ1).
+    // Master PIC: unmask IRQ0 (timer), IRQ1 (keyboard), IRQ2 (cascade)
+    outb(0x21, 0xF8);
     // Slave PIC: mask all by default
     outb(0xA1, 0xFF);
 

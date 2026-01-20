@@ -47,4 +47,41 @@ static inline void hlt(void) {
     __asm__ volatile ("hlt");
 }
 
+// Save EFLAGS and disable interrupts
+static inline uint32_t irq_save(void) {
+    uint32_t flags;
+    __asm__ volatile (
+        "pushf\n\t"
+        "pop %0\n\t"
+        "cli"
+        : "=r"(flags)
+        :
+        : "memory"
+    );
+    return flags;
+}
+
+// Restore EFLAGS
+static inline void irq_restore(uint32_t flags) {
+    __asm__ volatile (
+        "push %0\n\t"
+        "popf"
+        :
+        : "r"(flags)
+        : "memory", "cc"
+    );
+}
+
+static inline bool irq_are_enabled(void) {
+    uint32_t flags;
+    __asm__ volatile (
+        "pushf\n\t"
+        "pop %0"
+        : "=r"(flags)
+        :
+        : "memory"
+    );
+    return (flags & (1u << 9)) != 0;
+}
+
 #endif

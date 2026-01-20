@@ -3,8 +3,11 @@
 #include "keyboard.h"
 #include "string.h"
 #include "io.h"
+#include "timer.h"
+#include "rtc.h"
 #include "ubasic.h"
 #include "basic_programs.h"
+#include "stdlib.h"
 
 #define MAX_COMMAND_LENGTH 256
 #define BASIC_PROGRAM_SIZE 4096
@@ -18,6 +21,10 @@ static void cmd_reboot(void);
 static void cmd_halt(void);
 static void cmd_color(const char* args);
 static void cmd_basic(void);
+static void cmd_uptime(void);
+static void cmd_sleep(const char* args);
+static void cmd_date(void);
+static void cmd_setdate(const char* args);
 
 // Print the shell prompt
 static void print_prompt(void) {
@@ -64,6 +71,14 @@ static void execute_command(char* input) {
         cmd_color(args);
     } else if (strcmp(input, "basic") == 0) {
         cmd_basic();
+    } else if (strcmp(input, "uptime") == 0) {
+        cmd_uptime();
+    } else if (strcmp(input, "sleep") == 0) {
+        cmd_sleep(args);
+    } else if (strcmp(input, "date") == 0) {
+        cmd_date();
+    } else if (strcmp(input, "setdate") == 0) {
+        cmd_setdate(args);
     } else {
         screen_set_color(VGA_LIGHT_RED, VGA_BLACK);
         screen_print("Unknown command: ");
@@ -82,6 +97,10 @@ static void cmd_help(void) {
     screen_println("  clear, cls    - Clear the screen");
     screen_println("  echo <text>   - Print text to screen");
     screen_println("  info, about   - Show system information");
+    screen_println("  uptime        - Show system uptime");
+    screen_println("  sleep <ms>    - Sleep for N milliseconds");
+    screen_println("  date          - Show RTC date/time");
+    screen_println("  setdate <YYYY-MM-DD HH:MM:SS> - Set RTC date/time");
     screen_println("  color <0-15>  - Change text color");
     screen_println("  basic         - Start BASIC interpreter");
     screen_println("  reboot        - Reboot the system");
@@ -108,6 +127,8 @@ static void cmd_info(void) {
     screen_println("Features:");
     screen_println("  - VGA text mode display (80x25)");
     screen_println("  - PS/2 keyboard input");
+    screen_println("  - PIT timer + uptime");
+    screen_println("  - CMOS RTC date/time");
     screen_println("  - Simple command shell");
     screen_println("");
     screen_println("This is a minimal educational OS.");
@@ -162,6 +183,116 @@ static void cmd_color(const char* args) {
     } else {
         screen_println("Invalid color. Use 0-15.");
     }
+}
+
+static void cmd_uptime(void) {
+    uint32_t uptime_ms = timer_uptime_ms();
+    uint32_t seconds = uptime_ms / 1000u;
+    uint32_t ms = uptime_ms % 1000u;
+
+    screen_set_color(VGA_LIGHT_CYAN, VGA_BLACK);
+    screen_print("Uptime: ");
+    screen_set_color(VGA_WHITE, VGA_BLACK);
+    screen_print_dec((int32_t)seconds);
+    screen_print(".");
+    if (ms < 100) screen_putchar('0');
+    if (ms < 10) screen_putchar('0');
+    screen_print_dec((int32_t)ms);
+    screen_println("s");
+}
+
+static void cmd_sleep(const char* args) {
+    if (*args == '\0') {
+        screen_println("Usage: sleep <ms>");
+        return;
+    }
+
+    int ms = atoi(args);
+    if (ms <= 0) {
+        screen_println("Usage: sleep <ms>");
+        return;
+    }
+
+    timer_sleep_ms((uint32_t)ms);
+}
+
+static void print_2d(uint8_t v) {
+    if (v < 10) screen_putchar('0');
+    screen_print_dec((int32_t)v);
+}
+
+static void cmd_date(void) {
+    rtc_datetime_t dt;
+    if (!rtc_read_datetime(&dt)) {
+        screen_println("RTC read failed.");
+        return;
+    }
+
+    screen_print_dec((int32_t)dt.year);
+    screen_putchar('-');
+    print_2d(dt.month);
+    screen_putchar('-');
+    print_2d(dt.day);
+    screen_putchar(' ');
+    print_2d(dt.hour);
+    screen_putchar(':');
+    print_2d(dt.minute);
+    screen_putchar(':');
+    print_2d(dt.second);
+    screen_putchar('\n');
+}
+
+static void skip_spaces(const char** p) {
+    while (**p == ' ' || **p == '\t') (*p)++;
+}
+
+static bool parse_n_digits(const char** p, int n, int* out) {
+    int value = 0;
+    for (int i = 0; i < n; i++) {
+        char c = (*p)[i];
+        if (c < '0' || c > '9') {
+            return false;
+        }
+        value = value * 10 + (c - '0');
+    }
+    *p += n;
+    *out = value;
+    return true;
+}
+
+static void cmd_setdate(const char* args) {
+    const char* p = args;
+    skip_spaces(&p);
+
+    int year, month, day, hour, minute, second;
+    if (!parse_n_digits(&p, 4, &year) || *p++ != '-' ||
+        !parse_n_digits(&p, 2, &month) || *p++ != '-' ||
+        !parse_n_digits(&p, 2, &day) || (*p != ' ' && *p != 'T')) {
+        screen_println("Usage: setdate <YYYY-MM-DD HH:MM:SS>");
+        return;
+    }
+    p++;
+    if (!parse_n_digits(&p, 2, &hour) || *p++ != ':' ||
+        !parse_n_digits(&p, 2, &minute) || *p++ != ':' ||
+        !parse_n_digits(&p, 2, &second)) {
+        screen_println("Usage: setdate <YYYY-MM-DD HH:MM:SS>");
+        return;
+    }
+
+    rtc_datetime_t dt;
+    dt.year = (uint16_t)year;
+    dt.month = (uint8_t)month;
+    dt.day = (uint8_t)day;
+    dt.hour = (uint8_t)hour;
+    dt.minute = (uint8_t)minute;
+    dt.second = (uint8_t)second;
+
+    if (!rtc_set_datetime(&dt)) {
+        screen_println("RTC set failed (invalid time or unsupported year).");
+        return;
+    }
+
+    screen_println("RTC updated.");
 }
 
 // BASIC interpreter command

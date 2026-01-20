@@ -618,7 +618,7 @@ static void cmd_setdate(const char* args) {
 
 static void cmd_ls(void) {
     if (!vfs_is_ready()) {
-        screen_println("initramfs not loaded.");
+        screen_println("VFS not ready.");
         return;
     }
 
@@ -626,6 +626,11 @@ static void cmd_ls(void) {
     for (uint32_t i = 0; i < count; i++) {
         const char* name = vfs_file_name(i);
         if (name) {
+            uint32_t size = vfs_file_size(i);
+            screen_set_color(VGA_YELLOW, VGA_BLUE);
+            screen_print_dec((int32_t)size);
+            screen_set_color(VGA_WHITE, VGA_BLUE);
+            screen_print("  ");
             screen_println(name);
         }
     }
@@ -633,7 +638,7 @@ static void cmd_ls(void) {
 
 static void cmd_cat(const char* args) {
     if (!vfs_is_ready()) {
-        screen_println("initramfs not loaded.");
+        screen_println("VFS not ready.");
         return;
     }
     if (!args || args[0] == '\0') {
@@ -665,7 +670,7 @@ static void cmd_cat(const char* args) {
 
 static void cmd_run(const char* args) {
     if (!vfs_is_ready()) {
-        screen_println("initramfs not loaded.");
+        screen_println("VFS not ready.");
         return;
     }
     if (!args || args[0] == '\0') {

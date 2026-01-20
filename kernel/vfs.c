@@ -611,6 +611,13 @@ const char* vfs_file_name(uint32_t idx) {
     return files[idx].name;
 }
 
+uint32_t vfs_file_size(uint32_t idx) {
+    if (idx >= file_count) {
+        return 0;
+    }
+    return files[idx].size;
+}
+
 static bool path_equals_ci(const char* a, const char* b) {
     for (;;) {
         char ca = *a++;

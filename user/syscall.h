@@ -12,6 +12,7 @@ enum {
     SYS_WAIT  = 4,
     SYS_KILL  = 5,
     SYS_SBRK  = 6,
+    SYS_READFILE = 7,
 };
 
 static inline int sys_write(const char* buf, uint32_t len) {
@@ -73,6 +74,17 @@ static inline void* sys_sbrk(int32_t increment) {
         "int $0x80"
         : "=a"(ret)
         : "a"(SYS_SBRK), "b"(increment)
+        : "memory"
+    );
+    return ret;
+}
+
+static inline int sys_readfile(const char* path, void* buf, uint32_t buf_len, uint32_t offset) {
+    int ret;
+    __asm__ volatile (
+        "int $0x80"
+        : "=a"(ret)
+        : "a"(SYS_READFILE), "b"(path), "c"(buf), "d"(buf_len), "S"(offset)
         : "memory"
     );
     return ret;

@@ -3,6 +3,7 @@
 #include "ctype.h"
 #include "string.h"
 #include "serial.h"
+#include "ramfs.h"
 
 typedef struct tar_header {
     char name[100];
@@ -722,8 +723,11 @@ void vfs_init(const multiboot_info_t* mbi) {
     file_count = 0;
     files = NULL;
 
+    ramfs_init();
+
     if (!mbi || (mbi->flags & MULTIBOOT_INFO_MODS) == 0 || mbi->mods_count == 0 || mbi->mods_addr == 0) {
         serial_write_string("[VFS] no multiboot modules\n");
+        ready = true;
         return;
     }
 
@@ -752,6 +756,7 @@ void vfs_init(const multiboot_info_t* mbi) {
 
     if (file_count == 0) {
         serial_write_string("[VFS] no files\n");
+        ready = true;
         return;
     }
 
@@ -771,7 +776,7 @@ void vfs_init(const multiboot_info_t* mbi) {
     }
 
     file_count = idx;
-    ready = (file_count != 0);
+    ready = true;
 
     serial_write_string("[VFS] initramfs files=");
     serial_write_dec((int32_t)tar_count);
@@ -825,6 +830,10 @@ bool vfs_read_file(const char* path, const uint8_t** out_data, uint32_t* out_siz
     // Accept both "foo" and "/foo" paths.
     while (*path == '/') {
         path++;
+    }
+
+    if (ramfs_read_file(path, out_data, out_size)) {
+        return true;
     }
 
     for (uint32_t i = 0; i < file_count; i++) {

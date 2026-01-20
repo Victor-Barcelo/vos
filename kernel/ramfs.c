@@ -1,0 +1,535 @@
+#include "ramfs.h"
+#include "kheap.h"
+#include "string.h"
+#include "ctype.h"
+
+#define RAMFS_MAX_FILES 128
+#define RAMFS_MAX_DIRS  128
+
+typedef struct ramfs_file {
+    char* path;       // canonical, no leading '/'
+    uint8_t* data;    // owned
+    uint32_t size;
+} ramfs_file_t;
+
+typedef struct ramfs_dir {
+    char* path;       // canonical, no leading '/'
+} ramfs_dir_t;
+
+static ramfs_file_t files[RAMFS_MAX_FILES];
+static ramfs_dir_t dirs[RAMFS_MAX_DIRS];
+static bool ready = false;
+
+static bool ci_eq(const char* a, const char* b) {
+    if (!a || !b) {
+        return false;
+    }
+    for (;;) {
+        char ca = *a++;
+        char cb = *b++;
+        if (tolower((unsigned char)ca) != tolower((unsigned char)cb)) {
+            return false;
+        }
+        if (ca == '\0') {
+            return true;
+        }
+    }
+}
+
+static bool ci_starts_with(const char* s, const char* prefix) {
+    if (!s || !prefix) {
+        return false;
+    }
+    while (*prefix) {
+        char cs = *s++;
+        char cp = *prefix++;
+        if (tolower((unsigned char)cs) != tolower((unsigned char)cp)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static char* dup_str(const char* s) {
+    if (!s) {
+        s = "";
+    }
+    uint32_t len = (uint32_t)strlen(s);
+    char* out = (char*)kmalloc(len + 1u);
+    if (!out) {
+        return NULL;
+    }
+    memcpy(out, s, len);
+    out[len] = '\0';
+    return out;
+}
+
+static bool normalize_path(const char* in, char* out, uint32_t out_cap) {
+    if (!out || out_cap == 0) {
+        return false;
+    }
+    if (!in) {
+        in = "";
+    }
+
+    // Build a canonical path without leading '/'.
+    uint32_t out_len = 0;
+    uint32_t saved[32];
+    uint32_t depth = 0;
+
+    const char* p = in;
+    while (*p == '/') p++;
+
+    while (*p) {
+        while (*p == '/') p++;
+        if (*p == '\0') break;
+
+        const char* seg = p;
+        uint32_t seg_len = 0;
+        while (p[seg_len] && p[seg_len] != '/') seg_len++;
+        p += seg_len;
+
+        if (seg_len == 1 && seg[0] == '.') {
+            continue;
+        }
+        if (seg_len == 2 && seg[0] == '.' && seg[1] == '.') {
+            if (depth) {
+                out_len = saved[--depth];
+            }
+            continue;
+        }
+
+        if (depth >= (uint32_t)(sizeof(saved) / sizeof(saved[0]))) {
+            return false;
+        }
+        saved[depth++] = out_len;
+
+        uint32_t need = seg_len + ((out_len > 0u) ? 1u : 0u) + 1u;
+        if (out_len + need > out_cap) {
+            return false;
+        }
+
+        if (out_len > 0u) {
+            out[out_len++] = '/';
+        }
+        for (uint32_t i = 0; i < seg_len; i++) {
+            out[out_len++] = seg[i];
+        }
+    }
+
+    if (out_len >= out_cap) {
+        return false;
+    }
+    out[out_len] = '\0';
+    return true;
+}
+
+static bool is_ram_path(const char* rel) {
+    if (!rel || rel[0] == '\0') {
+        return false;
+    }
+    if (ci_eq(rel, "ram")) {
+        return true;
+    }
+    return ci_starts_with(rel, "ram/");
+}
+
+static bool dir_exists_rel(const char* rel) {
+    if (!is_ram_path(rel)) {
+        return false;
+    }
+    if (ci_eq(rel, "ram")) {
+        return true;
+    }
+
+    for (int i = 0; i < RAMFS_MAX_DIRS; i++) {
+        if (dirs[i].path && ci_eq(dirs[i].path, rel)) {
+            return true;
+        }
+    }
+    // Implicit directory: any file/dir under it.
+    uint32_t rel_len = (uint32_t)strlen(rel);
+    for (int i = 0; i < RAMFS_MAX_DIRS; i++) {
+        if (dirs[i].path && ci_starts_with(dirs[i].path, rel) && dirs[i].path[rel_len] == '/') {
+            return true;
+        }
+    }
+    for (int i = 0; i < RAMFS_MAX_FILES; i++) {
+        if (files[i].path && ci_starts_with(files[i].path, rel) && files[i].path[rel_len] == '/') {
+            return true;
+        }
+    }
+    return false;
+}
+
+static int find_file_rel(const char* rel) {
+    for (int i = 0; i < RAMFS_MAX_FILES; i++) {
+        if (files[i].path && ci_eq(files[i].path, rel)) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+static int alloc_dir_slot(void) {
+    for (int i = 0; i < RAMFS_MAX_DIRS; i++) {
+        if (!dirs[i].path) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+static int alloc_file_slot(void) {
+    for (int i = 0; i < RAMFS_MAX_FILES; i++) {
+        if (!files[i].path) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+void ramfs_init(void) {
+    for (int i = 0; i < RAMFS_MAX_FILES; i++) {
+        if (files[i].path) {
+            kfree(files[i].path);
+            files[i].path = NULL;
+        }
+        if (files[i].data) {
+            kfree(files[i].data);
+            files[i].data = NULL;
+        }
+        files[i].size = 0;
+    }
+    for (int i = 0; i < RAMFS_MAX_DIRS; i++) {
+        if (dirs[i].path) {
+            kfree(dirs[i].path);
+            dirs[i].path = NULL;
+        }
+    }
+    ready = true;
+}
+
+bool ramfs_is_dir(const char* path) {
+    if (!ready) {
+        return false;
+    }
+    char rel[128];
+    if (!normalize_path(path, rel, sizeof(rel))) {
+        return false;
+    }
+    if (rel[0] == '\0') {
+        return false;
+    }
+    return dir_exists_rel(rel);
+}
+
+bool ramfs_is_file(const char* path) {
+    if (!ready) {
+        return false;
+    }
+    char rel[128];
+    if (!normalize_path(path, rel, sizeof(rel))) {
+        return false;
+    }
+    if (!is_ram_path(rel) || ci_eq(rel, "ram")) {
+        return false;
+    }
+    return find_file_rel(rel) >= 0;
+}
+
+bool ramfs_mkdir(const char* path) {
+    if (!ready) {
+        return false;
+    }
+    char rel[128];
+    if (!normalize_path(path, rel, sizeof(rel))) {
+        return false;
+    }
+    if (!is_ram_path(rel)) {
+        return false;
+    }
+    if (ci_eq(rel, "ram")) {
+        return true;
+    }
+
+    // Create each intermediate directory: ram/<a>/<b>/...
+    // Split by '/', building up prefixes.
+    char cur[128];
+    cur[0] = '\0';
+
+    const char* p = rel;
+    uint32_t cur_len = 0;
+    while (*p) {
+        const char* seg = p;
+        uint32_t seg_len = 0;
+        while (p[seg_len] && p[seg_len] != '/') seg_len++;
+        p += seg_len;
+        if (*p == '/') p++;
+
+        if (seg_len == 0) {
+            continue;
+        }
+
+        uint32_t need = seg_len + ((cur_len > 0u) ? 1u : 0u) + 1u;
+        if (cur_len + need > sizeof(cur)) {
+            return false;
+        }
+        if (cur_len > 0u) {
+            cur[cur_len++] = '/';
+        }
+        memcpy(cur + cur_len, seg, seg_len);
+        cur_len += seg_len;
+        cur[cur_len] = '\0';
+
+        if (!is_ram_path(cur)) {
+            return false;
+        }
+        if (ci_eq(cur, "ram")) {
+            continue;
+        }
+        if (dir_exists_rel(cur)) {
+            continue;
+        }
+        if (find_file_rel(cur) >= 0) {
+            return false;
+        }
+
+        int slot = alloc_dir_slot();
+        if (slot < 0) {
+            return false;
+        }
+        dirs[slot].path = dup_str(cur);
+        if (!dirs[slot].path) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+bool ramfs_write_file(const char* path, const uint8_t* data, uint32_t size, bool overwrite) {
+    if (!ready) {
+        return false;
+    }
+    if (!data && size != 0) {
+        return false;
+    }
+
+    char rel[128];
+    if (!normalize_path(path, rel, sizeof(rel))) {
+        return false;
+    }
+    if (!is_ram_path(rel) || ci_eq(rel, "ram")) {
+        return false;
+    }
+
+    // Ensure parent directory exists.
+    char parent[128];
+    strncpy(parent, rel, sizeof(parent) - 1u);
+    parent[sizeof(parent) - 1u] = '\0';
+    char* last_slash = strrchr(parent, '/');
+    if (last_slash) {
+        *last_slash = '\0';
+        if (!ramfs_mkdir(parent)) {
+            return false;
+        }
+    } else {
+        // parent is "ram"
+    }
+
+    int idx = find_file_rel(rel);
+    if (idx >= 0 && !overwrite) {
+        return false;
+    }
+    if (idx < 0) {
+        idx = alloc_file_slot();
+        if (idx < 0) {
+            return false;
+        }
+        files[idx].path = dup_str(rel);
+        if (!files[idx].path) {
+            return false;
+        }
+    } else {
+        if (files[idx].data) {
+            kfree(files[idx].data);
+            files[idx].data = NULL;
+        }
+        files[idx].size = 0;
+    }
+
+    uint32_t alloc_size = size ? size : 1u;
+    uint8_t* buf = (uint8_t*)kmalloc(alloc_size);
+    if (!buf) {
+        if (idx >= 0 && files[idx].data == NULL && files[idx].size == 0) {
+            // keep path allocated
+        }
+        return false;
+    }
+    if (size) {
+        memcpy(buf, data, size);
+    } else {
+        buf[0] = 0;
+    }
+
+    files[idx].data = buf;
+    files[idx].size = size;
+    return true;
+}
+
+bool ramfs_rename(const char* old_path, const char* new_path) {
+    if (!ready) {
+        return false;
+    }
+
+    char old_rel[128];
+    char new_rel[128];
+    if (!normalize_path(old_path, old_rel, sizeof(old_rel)) || !normalize_path(new_path, new_rel, sizeof(new_rel))) {
+        return false;
+    }
+    if (!is_ram_path(old_rel) || !is_ram_path(new_rel)) {
+        return false;
+    }
+    if (ci_eq(old_rel, "ram") || ci_eq(new_rel, "ram")) {
+        return false;
+    }
+
+    int idx = find_file_rel(old_rel);
+    if (idx < 0) {
+        return false;
+    }
+    if (find_file_rel(new_rel) >= 0) {
+        return false;
+    }
+
+    // Ensure parent directory exists.
+    char parent[128];
+    strncpy(parent, new_rel, sizeof(parent) - 1u);
+    parent[sizeof(parent) - 1u] = '\0';
+    char* last_slash = strrchr(parent, '/');
+    if (last_slash) {
+        *last_slash = '\0';
+        if (!ramfs_mkdir(parent)) {
+            return false;
+        }
+    }
+
+    char* dup = dup_str(new_rel);
+    if (!dup) {
+        return false;
+    }
+    kfree(files[idx].path);
+    files[idx].path = dup;
+    return true;
+}
+
+bool ramfs_read_file(const char* path, const uint8_t** out_data, uint32_t* out_size) {
+    if (!ready) {
+        return false;
+    }
+    char rel[128];
+    if (!normalize_path(path, rel, sizeof(rel))) {
+        return false;
+    }
+    if (!is_ram_path(rel) || ci_eq(rel, "ram")) {
+        return false;
+    }
+
+    int idx = find_file_rel(rel);
+    if (idx < 0) {
+        return false;
+    }
+    if (out_data) *out_data = files[idx].data;
+    if (out_size) *out_size = files[idx].size;
+    return files[idx].data != NULL;
+}
+
+static bool add_unique(ramfs_dirent_t* out, uint32_t* count, uint32_t max, const char* name, bool is_dir, uint32_t size) {
+    if (!out || !count || !name || name[0] == '\0') {
+        return false;
+    }
+    for (uint32_t i = 0; i < *count; i++) {
+        if (ci_eq(out[i].name, name)) {
+            out[i].is_dir = out[i].is_dir || is_dir;
+            return true;
+        }
+    }
+    if (*count >= max) {
+        return false;
+    }
+    strncpy(out[*count].name, name, sizeof(out[*count].name) - 1u);
+    out[*count].name[sizeof(out[*count].name) - 1u] = '\0';
+    out[*count].is_dir = is_dir;
+    out[*count].size = size;
+    (*count)++;
+    return true;
+}
+
+uint32_t ramfs_list_dir(const char* path, ramfs_dirent_t* out, uint32_t max) {
+    if (!ready || !out || max == 0) {
+        return 0;
+    }
+
+    char rel[128];
+    if (!normalize_path(path, rel, sizeof(rel))) {
+        return 0;
+    }
+    if (!is_ram_path(rel)) {
+        return 0;
+    }
+    if (!dir_exists_rel(rel)) {
+        return 0;
+    }
+
+    uint32_t prefix_len = (uint32_t)strlen(rel);
+    uint32_t count = 0;
+
+    for (int i = 0; i < RAMFS_MAX_DIRS; i++) {
+        if (!dirs[i].path) {
+            continue;
+        }
+        const char* d = dirs[i].path;
+        if (!ci_starts_with(d, rel) || d[prefix_len] != '/') {
+            continue;
+        }
+        const char* rem = d + prefix_len + 1u;
+        if (rem[0] == '\0') {
+            continue;
+        }
+        char seg[64];
+        uint32_t seg_len = 0;
+        while (rem[seg_len] && rem[seg_len] != '/' && seg_len + 1u < sizeof(seg)) {
+            seg[seg_len] = rem[seg_len];
+            seg_len++;
+        }
+        seg[seg_len] = '\0';
+        add_unique(out, &count, max, seg, true, 0);
+    }
+
+    for (int i = 0; i < RAMFS_MAX_FILES; i++) {
+        if (!files[i].path) {
+            continue;
+        }
+        const char* f = files[i].path;
+        if (!ci_starts_with(f, rel) || f[prefix_len] != '/') {
+            continue;
+        }
+        const char* rem = f + prefix_len + 1u;
+        if (rem[0] == '\0') {
+            continue;
+        }
+        char seg[64];
+        uint32_t seg_len = 0;
+        while (rem[seg_len] && rem[seg_len] != '/' && seg_len + 1u < sizeof(seg)) {
+            seg[seg_len] = rem[seg_len];
+            seg_len++;
+        }
+        seg[seg_len] = '\0';
+        bool is_dir = rem[seg_len] == '/';
+        add_unique(out, &count, max, seg, is_dir, is_dir ? 0u : files[i].size);
+    }
+
+    return count;
+}
+

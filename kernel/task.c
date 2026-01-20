@@ -664,20 +664,24 @@ interrupt_frame_t* tasking_sbrk(interrupt_frame_t* frame, int32_t increment) {
     return frame;
 }
 
-bool tasking_spawn_user(uint32_t entry, uint32_t user_esp, uint32_t* page_directory, uint32_t user_brk) {
+uint32_t tasking_spawn_user_pid(uint32_t entry, uint32_t user_esp, uint32_t* page_directory, uint32_t user_brk) {
     if (!current_task) {
-        return false;
+        return 0;
     }
     if (!page_directory) {
-        return false;
+        return 0;
     }
 
     task_t* t = task_create_user(entry, user_esp, page_directory, user_brk, "user");
     if (!t) {
-        return false;
+        return 0;
     }
     task_append(t);
-    return true;
+    return t->id;
+}
+
+bool tasking_spawn_user(uint32_t entry, uint32_t user_esp, uint32_t* page_directory, uint32_t user_brk) {
+    return tasking_spawn_user_pid(entry, user_esp, page_directory, user_brk) != 0;
 }
 
 int32_t tasking_fd_open(const char* path, uint32_t flags) {

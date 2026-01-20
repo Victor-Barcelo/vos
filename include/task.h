@@ -17,6 +17,9 @@ interrupt_frame_t* tasking_exit(interrupt_frame_t* frame, int32_t exit_code);
 // Create a user-mode task that starts at `entry` with user stack pointer `user_esp`.
 bool tasking_spawn_user(uint32_t entry, uint32_t user_esp, uint32_t* page_directory, uint32_t user_brk);
 
+// Create a user-mode task and return its pid (0 on failure).
+uint32_t tasking_spawn_user_pid(uint32_t entry, uint32_t user_esp, uint32_t* page_directory, uint32_t user_brk);
+
 typedef enum {
     TASK_STATE_RUNNABLE = 0,
     TASK_STATE_SLEEPING = 1,

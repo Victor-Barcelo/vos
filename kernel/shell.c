@@ -11,13 +11,18 @@
 #include "paging.h"
 #include "task.h"
 #include "system.h"
+#include "ctype.h"
 #include "ubasic.h"
 #include "basic_programs.h"
 #include "stdlib.h"
+#include "ramfs.h"
+#include "editor.h"
 
 #define MAX_COMMAND_LENGTH 256
 #define BASIC_PROGRAM_SIZE 4096
 #define VOS_VERSION "0.1.0"
+#define SHELL_PATH_MAX 128
+#define LS_MAX_ENTRIES 128
 
 enum {
     SYS_WRITE = 0,
@@ -41,18 +46,245 @@ static void cmd_uptime(void);
 static void cmd_sleep(const char* args);
 static void cmd_date(void);
 static void cmd_setdate(const char* args);
-static void cmd_ls(void);
+static void cmd_ls(const char* args);
 static void cmd_cat(const char* args);
 static void cmd_run(const char* args);
 static void cmd_ps(void);
 static void cmd_top(void);
 static void cmd_kill(const char* args);
 static void cmd_wait(const char* args);
+static void cmd_pwd(void);
+static void cmd_cd(const char* args);
+static void cmd_mkdir(const char* args);
+static void cmd_cp(const char* args);
+static void cmd_mv(const char* args);
+static void cmd_nano(const char* args);
+
+static char shell_cwd[SHELL_PATH_MAX] = "/";
 
 static void print_spaces(int count) {
     for (int i = 0; i < count; i++) {
         screen_putchar(' ');
     }
+}
+
+static const char* skip_slashes(const char* p) {
+    while (p && *p == '/') {
+        p++;
+    }
+    return p ? p : "";
+}
+
+static bool ci_eq(const char* a, const char* b) {
+    if (!a || !b) {
+        return false;
+    }
+    for (;;) {
+        char ca = *a++;
+        char cb = *b++;
+        if (tolower((unsigned char)ca) != tolower((unsigned char)cb)) {
+            return false;
+        }
+        if (ca == '\0') {
+            return true;
+        }
+    }
+}
+
+static bool ci_starts_with(const char* s, const char* prefix) {
+    if (!s || !prefix) {
+        return false;
+    }
+    while (*prefix) {
+        char cs = *s++;
+        char cp = *prefix++;
+        if (tolower((unsigned char)cs) != tolower((unsigned char)cp)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static bool resolve_path(const char* cwd, const char* in, char* out, uint32_t out_cap) {
+    if (!out || out_cap == 0) {
+        return false;
+    }
+    if (!cwd || cwd[0] != '/') {
+        cwd = "/";
+    }
+    if (!in || in[0] == '\0') {
+        in = ".";
+    }
+
+    char tmp[SHELL_PATH_MAX];
+    tmp[0] = '\0';
+
+    if (in[0] == '/') {
+        strncpy(tmp, in, sizeof(tmp) - 1u);
+        tmp[sizeof(tmp) - 1u] = '\0';
+    } else {
+        if (strcmp(cwd, "/") == 0) {
+            strncpy(tmp, "/", sizeof(tmp) - 1u);
+            tmp[sizeof(tmp) - 1u] = '\0';
+        } else {
+            strncpy(tmp, cwd, sizeof(tmp) - 1u);
+            tmp[sizeof(tmp) - 1u] = '\0';
+        }
+        if (strlen(tmp) + 1u < sizeof(tmp)) {
+            if (tmp[strlen(tmp) - 1u] != '/') {
+                strncat(tmp, "/", sizeof(tmp) - strlen(tmp) - 1u);
+            }
+        }
+        strncat(tmp, in, sizeof(tmp) - strlen(tmp) - 1u);
+    }
+
+    uint32_t out_len = 0;
+    out[out_len++] = '/';
+
+    uint32_t saved[32];
+    uint32_t depth = 0;
+
+    const char* p = tmp;
+    while (*p) {
+        while (*p == '/') p++;
+        if (*p == '\0') break;
+
+        const char* seg = p;
+        uint32_t seg_len = 0;
+        while (p[seg_len] && p[seg_len] != '/') seg_len++;
+        p += seg_len;
+
+        if (seg_len == 1 && seg[0] == '.') {
+            continue;
+        }
+        if (seg_len == 2 && seg[0] == '.' && seg[1] == '.') {
+            if (depth) {
+                out_len = saved[--depth];
+            }
+            continue;
+        }
+
+        if (depth >= (uint32_t)(sizeof(saved) / sizeof(saved[0]))) {
+            return false;
+        }
+        saved[depth++] = out_len;
+
+        uint32_t need = seg_len + ((out_len > 1u) ? 1u : 0u) + 1u;
+        if (out_len + need > out_cap) {
+            return false;
+        }
+
+        if (out_len > 1u) {
+            out[out_len++] = '/';
+        }
+        for (uint32_t i = 0; i < seg_len; i++) {
+            out[out_len++] = seg[i];
+        }
+    }
+
+    if (out_len >= out_cap) {
+        return false;
+    }
+    out[out_len] = '\0';
+    return true;
+}
+
+static bool vfs_dir_exists(const char* abs_path) {
+    if (!abs_path || abs_path[0] != '/') {
+        return false;
+    }
+    const char* rel = skip_slashes(abs_path);
+    if (rel[0] == '\0') {
+        return true; // root
+    }
+
+    if (ramfs_is_dir(abs_path)) {
+        return true;
+    }
+
+    uint32_t count = vfs_file_count();
+    for (uint32_t i = 0; i < count; i++) {
+        const char* name = vfs_file_name(i);
+        if (!name) {
+            continue;
+        }
+        const char* n = skip_slashes(name);
+        if (!ci_starts_with(n, rel)) {
+            continue;
+        }
+        uint32_t rel_len = (uint32_t)strlen(rel);
+        if (n[rel_len] == '/') {
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool vfs_file_exists(const char* abs_path) {
+    const uint8_t* data = NULL;
+    uint32_t size = 0;
+    return vfs_read_file(abs_path, &data, &size) && data != NULL;
+}
+
+static int split_args_inplace(char* s, char* argv[], int max) {
+    if (!s || !argv || max <= 0) {
+        return 0;
+    }
+
+    int argc = 0;
+    while (*s && argc < max) {
+        while (*s == ' ' || *s == '\t') s++;
+        if (!*s) break;
+        argv[argc++] = s;
+        while (*s && *s != ' ' && *s != '\t') s++;
+        if (*s) {
+            *s++ = '\0';
+        }
+    }
+    return argc;
+}
+
+static bool is_ram_path_abs(const char* abs_path) {
+    if (!abs_path || abs_path[0] != '/') {
+        return false;
+    }
+    const char* rel = skip_slashes(abs_path);
+    if (ci_eq(rel, "ram")) {
+        return true;
+    }
+    return ci_starts_with(rel, "ram/");
+}
+
+static const char* path_basename(const char* abs_path) {
+    if (!abs_path) {
+        return "";
+    }
+    const char* last = strrchr(abs_path, '/');
+    return last ? last + 1 : abs_path;
+}
+
+static bool path_join(char* out, uint32_t out_cap, const char* a, const char* b) {
+    if (!out || out_cap == 0 || !a || !b) {
+        return false;
+    }
+    uint32_t alen = (uint32_t)strlen(a);
+    uint32_t blen = (uint32_t)strlen(b);
+    bool need_slash = true;
+    if (alen == 0 || a[alen - 1u] == '/') {
+        need_slash = false;
+    }
+    uint32_t need = alen + (need_slash ? 1u : 0u) + blen + 1u;
+    if (need > out_cap) {
+        return false;
+    }
+    memcpy(out, a, alen);
+    uint32_t pos = alen;
+    if (need_slash) {
+        out[pos++] = '/';
+    }
+    memcpy(out + pos, b, blen);
+    out[pos + blen] = '\0';
+    return true;
 }
 
 static void print_banner_key(const char* key) {
@@ -323,9 +555,12 @@ static void shell_idle_hook(void) {
 // Print the shell prompt
 static void print_prompt(void) {
     screen_set_color(VGA_LIGHT_CYAN, VGA_BLUE);
-    screen_print("vos");
+    screen_print("vos:");
     screen_set_color(VGA_WHITE, VGA_BLUE);
+    screen_print(shell_cwd);
+    screen_set_color(VGA_LIGHT_CYAN, VGA_BLUE);
     screen_print("> ");
+    screen_set_color(VGA_WHITE, VGA_BLUE);
 }
 
 // Parse and execute a command
@@ -373,8 +608,12 @@ static void execute_command(char* input) {
         cmd_date();
     } else if (strcmp(input, "setdate") == 0) {
         cmd_setdate(args);
+    } else if (strcmp(input, "pwd") == 0) {
+        cmd_pwd();
+    } else if (strcmp(input, "cd") == 0) {
+        cmd_cd(args);
     } else if (strcmp(input, "ls") == 0) {
-        cmd_ls();
+        cmd_ls(args);
     } else if (strcmp(input, "cat") == 0) {
         cmd_cat(args);
     } else if (strcmp(input, "run") == 0) {
@@ -387,6 +626,14 @@ static void execute_command(char* input) {
         cmd_kill(args);
     } else if (strcmp(input, "wait") == 0) {
         cmd_wait(args);
+    } else if (strcmp(input, "mkdir") == 0) {
+        cmd_mkdir(args);
+    } else if (strcmp(input, "cp") == 0) {
+        cmd_cp(args);
+    } else if (strcmp(input, "mv") == 0) {
+        cmd_mv(args);
+    } else if (strcmp(input, "nano") == 0 || strcmp(input, "edit") == 0) {
+        cmd_nano(args);
     } else {
         screen_set_color(VGA_LIGHT_RED, VGA_BLUE);
         screen_print("Unknown command: ");
@@ -409,9 +656,15 @@ static void cmd_help(void) {
     print_help_cmd("sleep <ms>", "Sleep for N milliseconds");
     print_help_cmd("date", "Show RTC date/time");
     print_help_cmd("setdate", "Set RTC date/time (YYYY-MM-DD HH:MM:SS)");
-    print_help_cmd("ls", "List initramfs files");
-    print_help_cmd("cat <file>", "Print a file from initramfs");
-    print_help_cmd("run <elf>", "Run a user-mode ELF from initramfs");
+    print_help_cmd("pwd", "Print current directory");
+    print_help_cmd("cd <dir>", "Change directory");
+    print_help_cmd("ls [path]", "List directory contents");
+    print_help_cmd("cat <file>", "Print a file");
+    print_help_cmd("run <elf>", "Run a user-mode ELF (foreground)");
+    print_help_cmd("mkdir <dir>", "Create directory (ramfs)");
+    print_help_cmd("cp <src> <dst>", "Copy file (to ramfs)");
+    print_help_cmd("mv <src> <dst>", "Move/rename (ramfs)");
+    print_help_cmd("nano <file>", "Edit a file (saved under /ram)");
     print_help_cmd("ps", "List running tasks");
     print_help_cmd("top", "Live task view (press q)");
     print_help_cmd("kill <pid> [code]", "Kill a task");
@@ -616,24 +869,376 @@ static void cmd_setdate(const char* args) {
     statusbar_refresh();
 }
 
-static void cmd_ls(void) {
+static void cmd_pwd(void) {
+    screen_println(shell_cwd);
+}
+
+static void cmd_cd(const char* args) {
+    const char* target = args;
+    if (!target || target[0] == '\0') {
+        target = "/";
+    }
+
+    char path[SHELL_PATH_MAX];
+    if (!resolve_path(shell_cwd, target, path, sizeof(path))) {
+        screen_println("Invalid path.");
+        return;
+    }
+
+    if (!vfs_dir_exists(path)) {
+        screen_println("No such directory.");
+        return;
+    }
+
+    strncpy(shell_cwd, path, sizeof(shell_cwd) - 1u);
+    shell_cwd[sizeof(shell_cwd) - 1u] = '\0';
+}
+
+typedef struct {
+    char name[64];
+    bool is_dir;
+    uint32_t size;
+} ls_entry_t;
+
+static int ls_find_entry(ls_entry_t* entries, int n, const char* name) {
+    for (int i = 0; i < n; i++) {
+        if (ci_eq(entries[i].name, name)) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+static void cmd_ls(const char* args) {
     if (!vfs_is_ready()) {
         screen_println("VFS not ready.");
         return;
     }
 
+    char path[SHELL_PATH_MAX];
+    if (!resolve_path(shell_cwd, args && args[0] ? args : ".", path, sizeof(path))) {
+        screen_println("Invalid path.");
+        return;
+    }
+
+    if (vfs_file_exists(path)) {
+        const uint8_t* data = NULL;
+        uint32_t size = 0;
+        vfs_read_file(path, &data, &size);
+        screen_set_color(VGA_YELLOW, VGA_BLUE);
+        screen_print_dec((int32_t)size);
+        screen_set_color(VGA_WHITE, VGA_BLUE);
+        screen_print("  ");
+        screen_println(path);
+        return;
+    }
+
+    if (!vfs_dir_exists(path)) {
+        screen_println("No such directory.");
+        return;
+    }
+
+    const char* dir_rel = skip_slashes(path);
+    uint32_t dir_len = (uint32_t)strlen(dir_rel);
+    bool is_root = (dir_len == 0);
+
+    ls_entry_t entries[LS_MAX_ENTRIES];
+    int entry_count = 0;
+    memset(entries, 0, sizeof(entries));
+
     uint32_t count = vfs_file_count();
     for (uint32_t i = 0; i < count; i++) {
-        const char* name = vfs_file_name(i);
-        if (name) {
-            uint32_t size = vfs_file_size(i);
-            screen_set_color(VGA_YELLOW, VGA_BLUE);
-            screen_print_dec((int32_t)size);
-            screen_set_color(VGA_WHITE, VGA_BLUE);
-            screen_print("  ");
-            screen_println(name);
+        const char* full = vfs_file_name(i);
+        if (!full) {
+            continue;
+        }
+        const char* n = skip_slashes(full);
+
+        const char* rem = NULL;
+        if (is_root) {
+            rem = n;
+        } else {
+            if (!ci_starts_with(n, dir_rel) || n[dir_len] != '/') {
+                continue;
+            }
+            rem = n + dir_len + 1u;
+        }
+
+        if (rem[0] == '\0') {
+            continue;
+        }
+
+        char seg[64];
+        uint32_t seg_len = 0;
+        while (rem[seg_len] && rem[seg_len] != '/' && seg_len + 1u < sizeof(seg)) {
+            seg[seg_len] = rem[seg_len];
+            seg_len++;
+        }
+        seg[seg_len] = '\0';
+        if (seg[0] == '\0') {
+            continue;
+        }
+
+        bool is_dir = rem[seg_len] == '/';
+        uint32_t size = is_dir ? 0u : vfs_file_size(i);
+
+        int idx = ls_find_entry(entries, entry_count, seg);
+        if (idx >= 0) {
+            entries[idx].is_dir = entries[idx].is_dir || is_dir;
+            continue;
+        }
+        if (entry_count >= LS_MAX_ENTRIES) {
+            continue;
+        }
+        strncpy(entries[entry_count].name, seg, sizeof(entries[entry_count].name) - 1u);
+        entries[entry_count].name[sizeof(entries[entry_count].name) - 1u] = '\0';
+        entries[entry_count].is_dir = is_dir;
+        entries[entry_count].size = size;
+        entry_count++;
+    }
+
+    if (is_root) {
+        // Mount point for writable storage.
+        int idx = ls_find_entry(entries, entry_count, "ram");
+        if (idx < 0 && entry_count < LS_MAX_ENTRIES) {
+            strncpy(entries[entry_count].name, "ram", sizeof(entries[entry_count].name) - 1u);
+            entries[entry_count].name[sizeof(entries[entry_count].name) - 1u] = '\0';
+            entries[entry_count].is_dir = true;
+            entries[entry_count].size = 0;
+            entry_count++;
+        } else if (idx >= 0) {
+            entries[idx].is_dir = true;
         }
     }
+
+    if (ramfs_is_dir(path)) {
+        ramfs_dirent_t rents[LS_MAX_ENTRIES];
+        uint32_t n = ramfs_list_dir(path, rents, (uint32_t)LS_MAX_ENTRIES);
+        for (uint32_t i = 0; i < n; i++) {
+            int idx = ls_find_entry(entries, entry_count, rents[i].name);
+            if (idx >= 0) {
+                entries[idx].is_dir = entries[idx].is_dir || rents[i].is_dir;
+                continue;
+            }
+            if (entry_count >= LS_MAX_ENTRIES) {
+                break;
+            }
+            strncpy(entries[entry_count].name, rents[i].name, sizeof(entries[entry_count].name) - 1u);
+            entries[entry_count].name[sizeof(entries[entry_count].name) - 1u] = '\0';
+            entries[entry_count].is_dir = rents[i].is_dir;
+            entries[entry_count].size = rents[i].size;
+            entry_count++;
+        }
+    }
+
+    // Print directories first, then files.
+    for (int pass = 0; pass < 2; pass++) {
+        for (int i = 0; i < entry_count; i++) {
+            if ((pass == 0) != entries[i].is_dir) {
+                continue;
+            }
+            if (entries[i].is_dir) {
+                screen_set_color(VGA_LIGHT_CYAN, VGA_BLUE);
+                screen_print(entries[i].name);
+                screen_println("/");
+            } else {
+                screen_set_color(VGA_YELLOW, VGA_BLUE);
+                screen_print_dec((int32_t)entries[i].size);
+                screen_set_color(VGA_WHITE, VGA_BLUE);
+                screen_print("  ");
+                screen_println(entries[i].name);
+            }
+        }
+    }
+    screen_set_color(VGA_WHITE, VGA_BLUE);
+}
+
+static void cmd_mkdir(const char* args) {
+    if (!args || args[0] == '\0') {
+        screen_println("Usage: mkdir <dir>");
+        return;
+    }
+
+    char path[SHELL_PATH_MAX];
+    if (!resolve_path(shell_cwd, args, path, sizeof(path))) {
+        screen_println("Invalid path.");
+        return;
+    }
+
+    if (!is_ram_path_abs(path)) {
+        screen_println("mkdir: only supported under /ram");
+        return;
+    }
+
+    if (!ramfs_mkdir(path)) {
+        screen_println("mkdir failed.");
+    }
+}
+
+static void cmd_cp(const char* args) {
+    if (!args || args[0] == '\0') {
+        screen_println("Usage: cp <src> <dst>");
+        return;
+    }
+
+    char* argv[3] = {0};
+    int argc = split_args_inplace((char*)args, argv, 3);
+    if (argc != 2) {
+        screen_println("Usage: cp <src> <dst>");
+        return;
+    }
+
+    char src[SHELL_PATH_MAX];
+    char dst[SHELL_PATH_MAX];
+    if (!resolve_path(shell_cwd, argv[0], src, sizeof(src)) || !resolve_path(shell_cwd, argv[1], dst, sizeof(dst))) {
+        screen_println("Invalid path.");
+        return;
+    }
+
+    bool dst_dir_hint = false;
+    uint32_t dst_token_len = (uint32_t)strlen(argv[1]);
+    if (dst_token_len && argv[1][dst_token_len - 1u] == '/') {
+        dst_dir_hint = true;
+    }
+
+    char dst_file[SHELL_PATH_MAX];
+    if (dst_dir_hint || vfs_dir_exists(dst)) {
+        const char* base = path_basename(src);
+        if (!path_join(dst_file, sizeof(dst_file), dst, base)) {
+            screen_println("Destination too long.");
+            return;
+        }
+    } else {
+        strncpy(dst_file, dst, sizeof(dst_file) - 1u);
+        dst_file[sizeof(dst_file) - 1u] = '\0';
+    }
+
+    if (!is_ram_path_abs(dst_file)) {
+        screen_println("cp: destination must be under /ram");
+        return;
+    }
+
+    const uint8_t* data = NULL;
+    uint32_t size = 0;
+    if (!vfs_read_file(src, &data, &size) || !data) {
+        screen_println("cp: source not found.");
+        return;
+    }
+
+    if (!ramfs_write_file(dst_file, data, size, false)) {
+        screen_println("cp failed (exists? out of space?).");
+        return;
+    }
+}
+
+static void cmd_mv(const char* args) {
+    if (!args || args[0] == '\0') {
+        screen_println("Usage: mv <src> <dst>");
+        return;
+    }
+
+    char* argv[3] = {0};
+    int argc = split_args_inplace((char*)args, argv, 3);
+    if (argc != 2) {
+        screen_println("Usage: mv <src> <dst>");
+        return;
+    }
+
+    char src[SHELL_PATH_MAX];
+    char dst[SHELL_PATH_MAX];
+    if (!resolve_path(shell_cwd, argv[0], src, sizeof(src)) || !resolve_path(shell_cwd, argv[1], dst, sizeof(dst))) {
+        screen_println("Invalid path.");
+        return;
+    }
+
+    if (!is_ram_path_abs(src) || !ramfs_is_file(src)) {
+        screen_println("mv: only supported for existing /ram files");
+        return;
+    }
+
+    bool dst_dir_hint = false;
+    uint32_t dst_token_len = (uint32_t)strlen(argv[1]);
+    if (dst_token_len && argv[1][dst_token_len - 1u] == '/') {
+        dst_dir_hint = true;
+    }
+
+    char dst_file[SHELL_PATH_MAX];
+    if (dst_dir_hint || vfs_dir_exists(dst)) {
+        const char* base = path_basename(src);
+        if (!path_join(dst_file, sizeof(dst_file), dst, base)) {
+            screen_println("Destination too long.");
+            return;
+        }
+    } else {
+        strncpy(dst_file, dst, sizeof(dst_file) - 1u);
+        dst_file[sizeof(dst_file) - 1u] = '\0';
+    }
+
+    if (!is_ram_path_abs(dst_file)) {
+        screen_println("mv: destination must be under /ram");
+        return;
+    }
+
+    if (!ramfs_rename(src, dst_file)) {
+        screen_println("mv failed.");
+        return;
+    }
+}
+
+static void cmd_nano(const char* args) {
+    if (!args || args[0] == '\0') {
+        screen_println("Usage: nano <file>");
+        return;
+    }
+
+    char src[SHELL_PATH_MAX];
+    if (!resolve_path(shell_cwd, args, src, sizeof(src))) {
+        screen_println("Invalid path.");
+        return;
+    }
+
+    // If the user asked to edit a directory, refuse.
+    if (!vfs_file_exists(src) && vfs_dir_exists(src)) {
+        screen_println("nano: is a directory");
+        return;
+    }
+
+    char dst[SHELL_PATH_MAX];
+    if (is_ram_path_abs(src)) {
+        strncpy(dst, src, sizeof(dst) - 1u);
+        dst[sizeof(dst) - 1u] = '\0';
+    } else {
+        const char* base = path_basename(src);
+        if (!base || base[0] == '\0') {
+            base = "untitled.txt";
+        }
+        if (!path_join(dst, sizeof(dst), "/ram", base)) {
+            screen_println("nano: destination too long");
+            return;
+        }
+
+        // If the source exists and destination doesn't, seed it.
+        if (!ramfs_is_file(dst)) {
+            const uint8_t* data = NULL;
+            uint32_t size = 0;
+            if (vfs_read_file(src, &data, &size) && data) {
+                (void)ramfs_write_file(dst, data, size, false);
+            } else {
+                (void)ramfs_write_file(dst, NULL, 0, false);
+            }
+        }
+    }
+
+    if (ramfs_is_dir(dst) && !ramfs_is_file(dst)) {
+        screen_println("nano: is a directory");
+        return;
+    }
+
+    (void)editor_nano(dst);
+
+    screen_set_color(VGA_WHITE, VGA_BLUE);
+    screen_clear();
+    statusbar_refresh();
 }
 
 static void cmd_cat(const char* args) {
@@ -646,9 +1251,15 @@ static void cmd_cat(const char* args) {
         return;
     }
 
+    char path[SHELL_PATH_MAX];
+    if (!resolve_path(shell_cwd, args, path, sizeof(path))) {
+        screen_println("Invalid path.");
+        return;
+    }
+
     const uint8_t* data = NULL;
     uint32_t size = 0;
-    if (!vfs_read_file(args, &data, &size) || !data) {
+    if (!vfs_read_file(path, &data, &size) || !data) {
         screen_println("File not found.");
         return;
     }
@@ -678,9 +1289,15 @@ static void cmd_run(const char* args) {
         return;
     }
 
+    char path[SHELL_PATH_MAX];
+    if (!resolve_path(shell_cwd, args, path, sizeof(path))) {
+        screen_println("Invalid path.");
+        return;
+    }
+
     const uint8_t* data = NULL;
     uint32_t size = 0;
-    if (!vfs_read_file(args, &data, &size) || !data || size == 0) {
+    if (!vfs_read_file(path, &data, &size) || !data || size == 0) {
         screen_println("File not found.");
         return;
     }
@@ -704,15 +1321,18 @@ static void cmd_run(const char* args) {
         return;
     }
 
-    if (!tasking_spawn_user(entry, user_esp, user_dir, brk)) {
+    uint32_t pid = tasking_spawn_user_pid(entry, user_esp, user_dir, brk);
+    if (pid == 0) {
         screen_println("Failed to spawn task.");
         return;
     }
 
-    screen_println("Spawned user task.");
-
-    // Give the new task a chance to run immediately.
-    __asm__ volatile ("int $0x80" : : "a"(2u) : "memory");
+    // Foreground: wait for exit so output/input doesn't race the shell.
+    int exit_code = 0;
+    __asm__ volatile ("int $0x80" : "=a"(exit_code) : "a"((uint32_t)SYS_WAIT), "b"(pid) : "memory");
+    screen_print("Program exited with code ");
+    screen_print_dec(exit_code);
+    screen_putchar('\n');
 }
 
 static const char* task_state_str(task_state_t state) {

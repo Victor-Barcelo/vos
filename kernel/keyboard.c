@@ -2,6 +2,7 @@
 #include "screen.h"
 #include "io.h"
 #include "idt.h"
+#include "ctype.h"
 #include "string.h"
 
 // Keyboard ports
@@ -184,6 +185,15 @@ void keyboard_handler(void) {
                     c = scancode_to_ascii_shift[scancode];
                 } else {
                     c = scancode_to_ascii[scancode];
+                }
+            }
+
+            // Ctrl+<letter> -> ASCII control codes (1-26)
+            if (ctrl_pressed) {
+                if (c >= 'a' && c <= 'z') {
+                    c = (char)(c - 'a' + 1);
+                } else if (c >= 'A' && c <= 'Z') {
+                    c = (char)(c - 'A' + 1);
                 }
             }
 

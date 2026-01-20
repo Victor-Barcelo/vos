@@ -95,14 +95,16 @@ static void try_start_init(void) {
         return;
     }
 
-    if (!tasking_spawn_user(entry, user_esp, user_dir, brk)) {
+    uint32_t pid = tasking_spawn_user_pid(entry, user_esp, user_dir, brk);
+    if (pid == 0) {
         return;
     }
 
     serial_write_string("[INIT] spawned /bin/init\n");
 
-    // Let init run immediately.
-    __asm__ volatile ("int $0x80" : : "a"(2u) : "memory");
+    // Run init in the foreground to avoid interleaved console output.
+    int exit_code = 0;
+    __asm__ volatile ("int $0x80" : "=a"(exit_code) : "a"(4u), "b"(pid) : "memory");
 }
 
 // Kernel main entry point

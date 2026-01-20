@@ -55,6 +55,35 @@ char* strchr(const char* str, int c) {
     return NULL;
 }
 
+char* strrchr(const char* str, int c) {
+    const char* last = NULL;
+    char ch = (char)c;
+
+    while (*str) {
+        if (*str == ch) {
+            last = str;
+        }
+        str++;
+    }
+    if (ch == '\0') {
+        return (char*)str;
+    }
+    return (char*)last;
+}
+
+char* strncat(char* dest, const char* src, size_t n) {
+    char* ret = dest;
+    while (*dest) {
+        dest++;
+    }
+    while (n && *src) {
+        *dest++ = *src++;
+        n--;
+    }
+    *dest = '\0';
+    return ret;
+}
+
 void* memset(void* ptr, int value, size_t num) {
     unsigned char* p = ptr;
     while (num--) {
@@ -68,6 +97,26 @@ void* memcpy(void* dest, const void* src, size_t num) {
     const unsigned char* s = src;
     while (num--) {
         *d++ = *s++;
+    }
+    return dest;
+}
+
+void* memmove(void* dest, const void* src, size_t num) {
+    unsigned char* d = dest;
+    const unsigned char* s = src;
+    if (d == s || num == 0) {
+        return dest;
+    }
+    if (d < s) {
+        while (num--) {
+            *d++ = *s++;
+        }
+        return dest;
+    }
+    d += num;
+    s += num;
+    while (num--) {
+        *--d = *--s;
     }
     return dest;
 }

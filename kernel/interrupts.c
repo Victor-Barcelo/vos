@@ -126,7 +126,7 @@ interrupt_frame_t* interrupt_handler(interrupt_frame_t* frame) {
 
     if (frame->int_no < 32) {
         if (frame_from_user(frame)) {
-            screen_set_color(VGA_LIGHT_RED, VGA_BLUE);
+            screen_set_color(VGA_YELLOW, VGA_BLUE);
             screen_print("\n[USER EXCEPTION] ");
             screen_set_color(VGA_WHITE, VGA_BLUE);
             screen_println(exception_names[frame->int_no]);
@@ -146,7 +146,9 @@ interrupt_frame_t* interrupt_handler(interrupt_frame_t* frame) {
 
             print_user_backtrace(frame->ebp);
 
+            screen_set_color(VGA_LIGHT_RED, VGA_BLUE);
             screen_println("  -> killing user task");
+            screen_set_color(VGA_WHITE, VGA_BLUE);
             return tasking_exit(frame, -(int32_t)frame->int_no);
         }
 

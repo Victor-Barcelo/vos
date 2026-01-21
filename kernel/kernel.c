@@ -234,7 +234,7 @@ void kernel_main(uint32_t magic, uint32_t* mboot_info) {
         screen_set_color(VGA_WHITE, VGA_BLUE);
         screen_println("Multiboot verified");
     } else {
-        screen_set_color(VGA_LIGHT_RED, VGA_BLUE);
+        screen_set_color(VGA_YELLOW, VGA_BLUE);
         screen_print("[WARN] ");
         screen_set_color(VGA_WHITE, VGA_BLUE);
         screen_print("Unexpected boot magic: ");

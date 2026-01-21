@@ -32,7 +32,7 @@ static int sys_readdir(int fd, vos_dirent_t* out) {
 
 static void print_errno(const char* what) {
     if (!what) what = "error";
-    printf("%s: %s\n", what, strerror(errno));
+    printf("\x1b[31;1m%s\x1b[0m: %s\n", what, strerror(errno));
 }
 
 static int split_args(char* line, char* argv[], int max) {
@@ -71,17 +71,17 @@ static int split_args(char* line, char* argv[], int max) {
 }
 
 static void cmd_help(void) {
-    puts("Built-ins:");
-    puts("  help                Show this help");
-    puts("  exit                Exit the shell");
-    puts("  cd [dir]            Change directory");
-    puts("  pwd                 Print current directory");
-    puts("  ls [dir]            List directory");
-    puts("  cat <file>          Print a file");
-    puts("  clear               Clear the screen");
+    puts("\x1b[36;1mBuilt-ins:\x1b[0m");
+    puts("  \x1b[33;1mhelp\x1b[0m               Show this help");
+    puts("  \x1b[33;1mexit\x1b[0m               Exit the shell");
+    puts("  \x1b[33;1mcd\x1b[0m [dir]            Change directory");
+    puts("  \x1b[33;1mpwd\x1b[0m                Print current directory");
+    puts("  \x1b[33;1mls\x1b[0m [opts] [path]    List directory contents");
+    puts("  \x1b[33;1mcat\x1b[0m <file>          Print a file");
+    puts("  \x1b[33;1mclear\x1b[0m              Clear the screen");
 
     puts("");
-    puts("Programs in /bin:");
+    puts("\x1b[36;1mPrograms in /bin:\x1b[0m");
 
     int fd = open("/bin", O_RDONLY | O_DIRECTORY);
     if (fd < 0) {
@@ -203,84 +203,306 @@ static int is_elf_file(const char* dir, const char* name) {
     return (hdr[0] == 0x7F && hdr[1] == 'E' && hdr[2] == 'L' && hdr[3] == 'F') ? 1 : 0;
 }
 
-static void cmd_ls(int argc, char** argv) {
-    const char* path = (argc >= 2) ? argv[1] : ".";
+typedef struct ls_entry {
+    char name[64];
+    unsigned char is_dir;
+    unsigned int size;
+    unsigned char is_exec;
+    unsigned char _pad[3];
+} ls_entry_t;
 
+typedef struct ls_opts {
+    int show_all;
+    int long_format;
+    int bytes;
+    int human;
+} ls_opts_t;
+
+static char ascii_lower(char c) {
+    if (c >= 'A' && c <= 'Z') return (char)(c + ('a' - 'A'));
+    return c;
+}
+
+static int str_eq_ci(const char* a, const char* b) {
+    if (!a || !b) return 0;
+    while (*a && *b) {
+        if (ascii_lower(*a) != ascii_lower(*b)) {
+            return 0;
+        }
+        a++;
+        b++;
+    }
+    return (*a == '\0' && *b == '\0') ? 1 : 0;
+}
+
+static int has_ext_ci(const char* name, const char* ext) {
+    if (!name || !ext) return 0;
+    const char* dot = strrchr(name, '.');
+    if (!dot || dot == name) return 0;
+    return str_eq_ci(dot, ext);
+}
+
+static int ls_entry_cmp(const ls_entry_t* a, const ls_entry_t* b) {
+    if (!a || !b) return 0;
+    if (a->is_dir != b->is_dir) {
+        return a->is_dir ? -1 : 1;
+    }
+    return strcmp(a->name, b->name);
+}
+
+static void ls_sort(ls_entry_t* entries, int count) {
+    for (int i = 1; i < count; i++) {
+        ls_entry_t key = entries[i];
+        int j = i;
+        while (j > 0 && ls_entry_cmp(&entries[j - 1], &key) > 0) {
+            entries[j] = entries[j - 1];
+            j--;
+        }
+        entries[j] = key;
+    }
+}
+
+static void ls_format_size(char* out, size_t cap, unsigned int bytes, const ls_opts_t* opts) {
+    if (!out || cap == 0) return;
+    out[0] = '\0';
+
+    if (opts && opts->bytes) {
+        snprintf(out, cap, "%u", bytes);
+        return;
+    }
+
+    if (opts && opts->human) {
+        const char* suf = "B";
+        unsigned int v = bytes;
+        if (v >= 1024u * 1024u * 1024u) {
+            v /= 1024u * 1024u * 1024u;
+            suf = "G";
+        } else if (v >= 1024u * 1024u) {
+            v /= 1024u * 1024u;
+            suf = "M";
+        } else if (v >= 1024u) {
+            v /= 1024u;
+            suf = "K";
+        }
+        snprintf(out, cap, "%u%s", v, suf);
+        return;
+    }
+
+    unsigned int kib = (bytes == 0) ? 0u : (unsigned int)((bytes + 1023u) / 1024u);
+    snprintf(out, cap, "%uK", kib);
+}
+
+static const char* ls_color_for(const ls_entry_t* e) {
+    if (!e) return "";
+
+    // Theme assumes default is white-on-blue; avoid dark/blue-ish foregrounds.
+    if (e->is_dir) return "\x1b[36;1m";     // cyan + bold
+    if (e->is_exec) return "\x1b[32;1m";    // green + bold
+
+    const char* name = e->name;
+    if (name[0] == '.') return "\x1b[37m";  // light grey for dotfiles
+
+    if (strcmp(name, "Makefile") == 0 || strcmp(name, "makefile") == 0) return "\x1b[33;1m";
+
+    if (has_ext_ci(name, ".c") || has_ext_ci(name, ".h") || has_ext_ci(name, ".cpp") || has_ext_ci(name, ".hpp") ||
+        has_ext_ci(name, ".cc") || has_ext_ci(name, ".s") || has_ext_ci(name, ".asm") || has_ext_ci(name, ".ld") ||
+        has_ext_ci(name, ".mk")) {
+        return "\x1b[33;1m"; // yellow + bold (via 33 then 1)
+    }
+
+    if (has_ext_ci(name, ".bas") || has_ext_ci(name, ".lua") || has_ext_ci(name, ".sh") || has_ext_ci(name, ".py")) {
+        return "\x1b[35;1m"; // magenta + bold
+    }
+
+    if (has_ext_ci(name, ".txt") || has_ext_ci(name, ".md") || has_ext_ci(name, ".cfg") || has_ext_ci(name, ".ini")) {
+        return "\x1b[37m"; // light grey
+    }
+
+    if (has_ext_ci(name, ".img") || has_ext_ci(name, ".iso") || has_ext_ci(name, ".tar") || has_ext_ci(name, ".gz") ||
+        has_ext_ci(name, ".zip")) {
+        return "\x1b[31;1m"; // red + bold
+    }
+
+    return "";
+}
+
+static void ls_print_name(const ls_entry_t* e) {
     const char* CLR_RESET = "\x1b[0m";
-    const char* CLR_DIR = "\x1b[94m";   // bright blue
-    const char* CLR_EXEC = "\x1b[92m";  // bright green (used for /bin entries)
-
-    char cwd[256];
-    if (!getcwd(cwd, sizeof(cwd))) {
-        strcpy(cwd, "/");
+    const char* seq = ls_color_for(e);
+    if (seq[0]) fputs(seq, stdout);
+    fputs(e->name, stdout);
+    if (e->is_dir) {
+        fputc('/', stdout);
+    } else if (e->is_exec) {
+        fputc('*', stdout);
     }
+    if (seq[0]) fputs(CLR_RESET, stdout);
+}
 
-    char abs[512];
-    const char* list_dir = NULL;
-    if (path[0] == '/') {
-        list_dir = path;
-    } else if (strcmp(path, ".") == 0) {
-        list_dir = cwd;
-    } else {
-        if (strcmp(cwd, "/") == 0) {
-            snprintf(abs, sizeof(abs), "/%s", path);
-        } else {
-            snprintf(abs, sizeof(abs), "%s/%s", cwd, path);
+static void cmd_ls(int argc, char** argv) {
+    ls_opts_t opts;
+    memset(&opts, 0, sizeof(opts));
+    opts.long_format = 1; // default: useful info
+
+    const char* paths[8];
+    int path_count = 0;
+
+    for (int i = 1; i < argc; i++) {
+        const char* a = argv[i];
+        if (!a || a[0] == '\0') continue;
+        if (a[0] != '-' || a[1] == '\0') {
+            if (path_count < (int)(sizeof(paths) / sizeof(paths[0]))) {
+                paths[path_count++] = a;
+            }
+            continue;
         }
-        list_dir = abs;
-    }
-
-    // Trim trailing slashes for comparisons like "/bin/".
-    char list_dir_trim[512];
-    strncpy(list_dir_trim, list_dir, sizeof(list_dir_trim) - 1u);
-    list_dir_trim[sizeof(list_dir_trim) - 1u] = '\0';
-    size_t tlen = strlen(list_dir_trim);
-    while (tlen > 1 && list_dir_trim[tlen - 1u] == '/') {
-        list_dir_trim[tlen - 1u] = '\0';
-        tlen--;
-    }
-
-    int in_bin = (strcmp(list_dir_trim, "/bin") == 0);
-
-    struct stat st;
-    if (stat(path, &st) < 0) {
-        print_errno("ls");
-        return;
-    }
-
-    if (!S_ISDIR(st.st_mode)) {
-        // When listing a file, colorize it if it's under /bin.
-        if (strncmp(list_dir_trim, "/bin/", 5) == 0 ||
-            (strcmp(cwd, "/bin") == 0 && strchr(path, '/') == NULL) ||
-            is_elf_file(".", path)) {
-            printf("%s%s%s\n", CLR_EXEC, path, CLR_RESET);
-        } else {
-            puts(path);
+        if (strcmp(a, "--") == 0) {
+            for (int j = i + 1; j < argc; j++) {
+                if (path_count < (int)(sizeof(paths) / sizeof(paths[0]))) {
+                    paths[path_count++] = argv[j];
+                }
+            }
+            break;
         }
-        return;
-    }
-
-    int fd = open(path, O_RDONLY | O_DIRECTORY);
-    if (fd < 0) {
-        print_errno("ls");
-        return;
-    }
-
-    vos_dirent_t de;
-    while (sys_readdir(fd, &de) > 0) {
-        if (de.name[0] == '\0') continue;
-        if (de.is_dir) {
-            printf("%s%s/%s\n", CLR_DIR, de.name, CLR_RESET);
-        } else {
-            if (in_bin || (de.size >= 4u && is_elf_file(path, de.name))) {
-                printf("%s%s%s\n", CLR_EXEC, de.name, CLR_RESET);
-            } else {
-                printf("%s\n", de.name);
+        if (strcmp(a, "--help") == 0) {
+            puts("Usage: ls [options] [path]");
+            puts("Options:");
+            puts("  -l   long format (default)");
+            puts("  -1   names only");
+            puts("  -a   show hidden entries");
+            puts("  -b   sizes in bytes");
+            puts("  -h   human-readable sizes");
+            return;
+        }
+        for (const char* p = a + 1; *p; p++) {
+            switch (*p) {
+                case 'l': opts.long_format = 1; break;
+                case '1': opts.long_format = 0; break;
+                case 'a': opts.show_all = 1; break;
+                case 'b': opts.bytes = 1; opts.human = 0; break;
+                case 'h': opts.human = 1; opts.bytes = 0; break;
+                default:
+                    printf("ls: unknown option -%c (try --help)\n", *p);
+                    return;
             }
         }
     }
 
-    close(fd);
+    if (path_count == 0) {
+        paths[path_count++] = ".";
+    }
+
+    for (int pi = 0; pi < path_count; pi++) {
+        const char* path = paths[pi];
+        if (!path || path[0] == '\0') {
+            path = ".";
+        }
+
+        struct stat st;
+        if (stat(path, &st) < 0) {
+            print_errno("ls");
+            continue;
+        }
+
+        if (!S_ISDIR(st.st_mode)) {
+            ls_entry_t e;
+            memset(&e, 0, sizeof(e));
+            strncpy(e.name, path, sizeof(e.name) - 1u);
+            e.name[sizeof(e.name) - 1u] = '\0';
+            e.is_dir = 0;
+            e.size = (unsigned int)st.st_size;
+            e.is_exec = (e.size >= 4u && is_elf_file(".", path)) ? 1u : 0u;
+            if (opts.long_format) {
+                char sbuf[16];
+                ls_format_size(sbuf, sizeof(sbuf), e.size, &opts);
+                printf("%c %6s ", e.is_exec ? 'x' : '-', sbuf);
+            }
+            ls_print_name(&e);
+            putchar('\n');
+            continue;
+        }
+
+        int fd = open(path, O_RDONLY | O_DIRECTORY);
+        if (fd < 0) {
+            print_errno("ls");
+            continue;
+        }
+
+        ls_entry_t* entries = (ls_entry_t*)malloc(sizeof(ls_entry_t) * 256u);
+        if (!entries) {
+            close(fd);
+            puts("ls: out of memory");
+            continue;
+        }
+
+        int entry_count = 0;
+        if (opts.show_all) {
+            ls_entry_t* dot = &entries[entry_count++];
+            memset(dot, 0, sizeof(*dot));
+            strcpy(dot->name, ".");
+            dot->is_dir = 1;
+            dot->size = 0;
+
+            if (entry_count < 256) {
+                ls_entry_t* dotdot = &entries[entry_count++];
+                memset(dotdot, 0, sizeof(*dotdot));
+                strcpy(dotdot->name, "..");
+                dotdot->is_dir = 1;
+                dotdot->size = 0;
+            }
+        }
+
+        vos_dirent_t de;
+        while (entry_count < 256 && sys_readdir(fd, &de) > 0) {
+            if (de.name[0] == '\0') continue;
+            if (!opts.show_all && de.name[0] == '.') continue;
+
+            ls_entry_t* e = &entries[entry_count++];
+            memset(e, 0, sizeof(*e));
+            strncpy(e->name, de.name, sizeof(e->name) - 1u);
+            e->name[sizeof(e->name) - 1u] = '\0';
+            e->is_dir = de.is_dir ? 1u : 0u;
+            e->size = de.size;
+            e->is_exec = (!e->is_dir && e->size >= 4u && is_elf_file(path, e->name)) ? 1u : 0u;
+        }
+        close(fd);
+
+        ls_sort(entries, entry_count);
+
+        size_t sizew = 0;
+        if (opts.long_format) {
+            for (int i = 0; i < entry_count; i++) {
+                char sbuf[16];
+                ls_format_size(sbuf, sizeof(sbuf), entries[i].size, &opts);
+                size_t n = strlen(sbuf);
+                if (n > sizew) sizew = n;
+            }
+            if (sizew < 1) sizew = 1;
+            if (sizew > 12) sizew = 12;
+        }
+
+        if (path_count > 1) {
+            if (pi > 0) putchar('\n');
+            printf("\x1b[36;1m%s:\x1b[0m\n", path);
+        }
+
+        for (int i = 0; i < entry_count; i++) {
+            ls_entry_t* e = &entries[i];
+            if (opts.long_format) {
+                char sbuf[16];
+                ls_format_size(sbuf, sizeof(sbuf), e->size, &opts);
+
+                char t = e->is_dir ? 'd' : (e->is_exec ? 'x' : '-');
+                const char* tclr = e->is_dir ? "\x1b[36;1m" : (e->is_exec ? "\x1b[32;1m" : "\x1b[0m");
+                printf("%s%c\x1b[0m %*s ", tclr, t, (int)sizew, sbuf);
+            }
+
+            ls_print_name(e);
+            putchar('\n');
+        }
+
+        free(entries);
+    }
 }
 
 static void complete_first_word(const char* word, linenoiseCompletions* lc) {
@@ -370,7 +592,7 @@ int main(int argc, char** argv) {
     linenoiseSetCompletionCallback(completion_cb);
     linenoiseHistorySetMaxLen(128);
 
-    puts("VOS user shell (linenoise). Type 'help' for help.");
+    puts("\x1b[36;1mVOS user shell\x1b[0m (linenoise). Type '\x1b[33;1mhelp\x1b[0m' for help.");
 
     char cwd[256];
     for (;;) {

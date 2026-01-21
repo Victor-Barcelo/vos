@@ -133,6 +133,11 @@ interrupt_frame_t* syscall_handle(interrupt_frame_t* frame) {
         return frame;
     }
 
+    int32_t pending_exit = 0;
+    if ((frame->cs & 3u) == 3u && tasking_current_should_exit(&pending_exit)) {
+        return tasking_exit(frame, pending_exit);
+    }
+
     uint32_t num = frame->eax;
     switch (num) {
         case SYS_WRITE: {

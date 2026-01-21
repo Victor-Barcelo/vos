@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/ioctl.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
@@ -648,7 +649,16 @@ static int run_external(int argc, char** argv) {
         return -1;
     }
 
+    // Make the child the terminal foreground process so Ctrl+C can stop it.
+    int fg = pid;
+    (void)ioctl(0, TIOCSPGRP, &fg);
+
     int code = sys_wait((uint32_t)pid);
+
+    // Restore "no foreground process" while at the prompt.
+    int none = 0;
+    (void)ioctl(0, TIOCSPGRP, &none);
+
     printf("exit %d\n", code);
     return 0;
 }

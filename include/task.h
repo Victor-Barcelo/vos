@@ -44,6 +44,14 @@ uint32_t tasking_current_pid(void);
 uint32_t tasking_task_count(void);
 bool tasking_get_task_info(uint32_t index, task_info_t* out);
 
+// Check whether the current task has a deferred kill pending.
+// If true, *out_exit_code receives the exit code to use.
+bool tasking_current_should_exit(int32_t* out_exit_code);
+
+// Handle asynchronous terminal control characters (e.g. Ctrl+C) that should
+// affect the current foreground process. Returns true if consumed.
+bool tasking_tty_handle_input_char(uint8_t c);
+
 // Put the current task to sleep until `wake_tick` (timer_get_ticks() units).
 interrupt_frame_t* tasking_sleep_until(interrupt_frame_t* frame, uint32_t wake_tick);
 

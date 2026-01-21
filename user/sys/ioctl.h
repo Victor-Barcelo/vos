@@ -19,6 +19,8 @@ struct winsize {
 #define TCSETS     0x5402u
 #define TCSETSW    0x5403u
 #define TCSETSF    0x5404u
+#define TIOCGPGRP  0x540Fu
+#define TIOCSPGRP  0x5410u
 #define TIOCGWINSZ 0x5413u
 
 int ioctl(int fd, unsigned long request, ...);
@@ -28,4 +30,3 @@ int ioctl(int fd, unsigned long request, ...);
 #endif
 
 #endif
-

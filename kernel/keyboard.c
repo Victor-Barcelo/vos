@@ -2,6 +2,7 @@
 #include "screen.h"
 #include "io.h"
 #include "idt.h"
+#include "task.h"
 #include "ctype.h"
 #include "string.h"
 #include "serial.h"
@@ -204,7 +205,9 @@ void keyboard_handler(void) {
             }
 
             if (c != 0) {
-                buffer_push(c);
+                if (!tasking_tty_handle_input_char((uint8_t)c)) {
+                    buffer_push(c);
+                }
             }
         }
     }

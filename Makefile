@@ -2,6 +2,7 @@
 
 # Tools
 AS = nasm
+AR = $(CROSS_PREFIX)/bin/$(CROSS_TARGET)-ar
 
 # Cross toolchain (built by tools/build_newlib_toolchain.sh)
 CROSS_PREFIX ?= $(CURDIR)/toolchain/opt/cross
@@ -72,6 +73,9 @@ USER_ASM_OBJECTS = $(USER_BUILD_DIR)/crt0.o
 USER_RUNTIME_C_SOURCES = $(USER_DIR)/newlib_syscalls.c
 USER_RUNTIME_C_OBJECTS = $(patsubst $(USER_DIR)/%.c,$(USER_BUILD_DIR)/%.o,$(USER_RUNTIME_C_SOURCES))
 USER_RUNTIME_OBJECTS = $(USER_ASM_OBJECTS) $(USER_RUNTIME_C_OBJECTS)
+USER_RUNTIME_LIBS = $(USER_BUILD_DIR)/libvosposix.a
+
+USER_LINK_CMD = $(CC) -nostartfiles -Wl,-T,$(USER_DIR)/linker.ld -Wl,--gc-sections -o $@ $(filter-out $(USER_RUNTIME_LIBS),$^) $(USER_RUNTIME_LIBS) -lc -lgcc
 USER_INIT_OBJ = $(USER_BUILD_DIR)/init.o
 USER_ELIZA_OBJ = $(USER_BUILD_DIR)/eliza.o
 USER_LSH_OBJ = $(USER_BUILD_DIR)/lsh.o
@@ -227,49 +231,54 @@ $(USER_BUILD_DIR)/%.o: $(USER_DIR)/%.c | $(USER_BUILD_DIR)
 $(USER_LINENOISE_OBJ): $(THIRD_PARTY_DIR)/linenoise/linenoise.c | $(USER_BUILD_DIR)
 	$(CC) -ffreestanding -fno-stack-protector -fno-pie -Wall -Wextra -O2 -D_POSIX_C_SOURCE=200809L -I$(USER_DIR) -I$(THIRD_PARTY_DIR)/linenoise -I$(THIRD_PARTY_DIR)/jsmn -I$(THIRD_PARTY_DIR)/sheredom_json -c $< -o $@
 
+# Build a small POSIX compatibility archive (regex, etc.) for userland ports.
+$(USER_RUNTIME_LIBS): $(NEWLIB_REGEX_OBJS) | $(USER_BUILD_DIR)
+	rm -f $@
+	$(AR) rcs $@ $(NEWLIB_REGEX_OBJS)
+
 # Link userland init (static, freestanding)
-$(USER_INIT): $(USER_RUNTIME_OBJECTS) $(USER_INIT_OBJ)
-	$(CC) -nostartfiles -Wl,-T,$(USER_DIR)/linker.ld -Wl,--gc-sections -o $@ $^ -lc -lgcc
+$(USER_INIT): $(USER_RUNTIME_OBJECTS) $(USER_INIT_OBJ) $(USER_RUNTIME_LIBS)
+	$(USER_LINK_CMD)
 
 # Link userland eliza (static, freestanding)
-$(USER_ELIZA): $(USER_RUNTIME_OBJECTS) $(USER_ELIZA_OBJ)
-	$(CC) -nostartfiles -Wl,-T,$(USER_DIR)/linker.ld -Wl,--gc-sections -o $@ $^ -lc -lgcc
+$(USER_ELIZA): $(USER_RUNTIME_OBJECTS) $(USER_ELIZA_OBJ) $(USER_RUNTIME_LIBS)
+	$(USER_LINK_CMD)
 
 # Link userland linenoise demo
-$(USER_LSH): $(USER_RUNTIME_OBJECTS) $(USER_LINENOISE_OBJ) $(USER_LSH_OBJ)
-	$(CC) -nostartfiles -Wl,-T,$(USER_DIR)/linker.ld -Wl,--gc-sections -o $@ $^ -lc -lgcc
+$(USER_LSH): $(USER_RUNTIME_OBJECTS) $(USER_LINENOISE_OBJ) $(USER_LSH_OBJ) $(USER_RUNTIME_LIBS)
+	$(USER_LINK_CMD)
 
 # Link userland shell (linenoise)
-$(USER_SH): $(USER_RUNTIME_OBJECTS) $(USER_LINENOISE_OBJ) $(USER_SH_OBJ)
-	$(CC) -nostartfiles -Wl,-T,$(USER_DIR)/linker.ld -Wl,--gc-sections -o $@ $^ -lc -lgcc
+$(USER_SH): $(USER_RUNTIME_OBJECTS) $(USER_LINENOISE_OBJ) $(USER_SH_OBJ) $(USER_RUNTIME_LIBS)
+	$(USER_LINK_CMD)
 
 # Link userland uptime/date/setdate/ps/top (static, freestanding)
-$(USER_UPTIME): $(USER_RUNTIME_OBJECTS) $(USER_UPTIME_OBJ)
-	$(CC) -nostartfiles -Wl,-T,$(USER_DIR)/linker.ld -Wl,--gc-sections -o $@ $^ -lc -lgcc
+$(USER_UPTIME): $(USER_RUNTIME_OBJECTS) $(USER_UPTIME_OBJ) $(USER_RUNTIME_LIBS)
+	$(USER_LINK_CMD)
 
-$(USER_DATE): $(USER_RUNTIME_OBJECTS) $(USER_DATE_OBJ)
-	$(CC) -nostartfiles -Wl,-T,$(USER_DIR)/linker.ld -Wl,--gc-sections -o $@ $^ -lc -lgcc
+$(USER_DATE): $(USER_RUNTIME_OBJECTS) $(USER_DATE_OBJ) $(USER_RUNTIME_LIBS)
+	$(USER_LINK_CMD)
 
-$(USER_SETDATE): $(USER_RUNTIME_OBJECTS) $(USER_SETDATE_OBJ)
-	$(CC) -nostartfiles -Wl,-T,$(USER_DIR)/linker.ld -Wl,--gc-sections -o $@ $^ -lc -lgcc
+$(USER_SETDATE): $(USER_RUNTIME_OBJECTS) $(USER_SETDATE_OBJ) $(USER_RUNTIME_LIBS)
+	$(USER_LINK_CMD)
 
-$(USER_PS): $(USER_RUNTIME_OBJECTS) $(USER_PS_OBJ)
-	$(CC) -nostartfiles -Wl,-T,$(USER_DIR)/linker.ld -Wl,--gc-sections -o $@ $^ -lc -lgcc
+$(USER_PS): $(USER_RUNTIME_OBJECTS) $(USER_PS_OBJ) $(USER_RUNTIME_LIBS)
+	$(USER_LINK_CMD)
 
-$(USER_TOP): $(USER_RUNTIME_OBJECTS) $(USER_TOP_OBJ)
-	$(CC) -nostartfiles -Wl,-T,$(USER_DIR)/linker.ld -Wl,--gc-sections -o $@ $^ -lc -lgcc
+$(USER_TOP): $(USER_RUNTIME_OBJECTS) $(USER_TOP_OBJ) $(USER_RUNTIME_LIBS)
+	$(USER_LINK_CMD)
 
 # Link userland neofetch (static, freestanding)
-$(USER_NEOFETCH): $(USER_RUNTIME_OBJECTS) $(USER_NEOFETCH_OBJ)
-	$(CC) -nostartfiles -Wl,-T,$(USER_DIR)/linker.ld -Wl,--gc-sections -o $@ $^ -lc -lgcc
+$(USER_NEOFETCH): $(USER_RUNTIME_OBJECTS) $(USER_NEOFETCH_OBJ) $(USER_RUNTIME_LIBS)
+	$(USER_LINK_CMD)
 
 # Link userland font selector
-$(USER_FONT): $(USER_RUNTIME_OBJECTS) $(USER_FONT_OBJ)
-	$(CC) -nostartfiles -Wl,-T,$(USER_DIR)/linker.ld -Wl,--gc-sections -o $@ $^ -lc -lgcc
+$(USER_FONT): $(USER_RUNTIME_OBJECTS) $(USER_FONT_OBJ) $(USER_RUNTIME_LIBS)
+	$(USER_LINK_CMD)
 
 # Link userland json tool (jsmn)
-$(USER_JSON): $(USER_RUNTIME_OBJECTS) $(USER_JSON_OBJ)
-	$(CC) -nostartfiles -Wl,-T,$(USER_DIR)/linker.ld -Wl,--gc-sections -o $@ $^ -lc -lgcc
+$(USER_JSON): $(USER_RUNTIME_OBJECTS) $(USER_JSON_OBJ) $(USER_RUNTIME_LIBS)
+	$(USER_LINK_CMD)
 
 # Compile sbase sources
 $(SBASE_BUILD_DIR)/%.o: $(SBASE_DIR)/%.c | $(USER_BUILD_DIR)
@@ -282,43 +291,43 @@ $(NEWLIB_POSIX_BUILD_DIR)/%.o: $(NEWLIB_POSIX_DIR)/%.c | $(USER_BUILD_DIR)
 	$(CC) -ffreestanding -fno-stack-protector -fno-pie -Wall -Wextra -O2 -D_POSIX2_RE_DUP_MAX=255 -I$(NEWLIB_POSIX_DIR) -c $< -o $@
 
 # Link sbase tools (minimal subset)
-$(SBASE_CAT): $(USER_RUNTIME_OBJECTS) $(SBASE_CAT_OBJ) $(SBASE_EPRINTF_OBJ) $(SBASE_CONCAT_OBJ) $(SBASE_WRITEALL_OBJ)
-	$(CC) -nostartfiles -Wl,-T,$(USER_DIR)/linker.ld -Wl,--gc-sections -o $@ $^ -lc -lgcc
+$(SBASE_CAT): $(USER_RUNTIME_OBJECTS) $(SBASE_CAT_OBJ) $(SBASE_EPRINTF_OBJ) $(SBASE_CONCAT_OBJ) $(SBASE_WRITEALL_OBJ) $(USER_RUNTIME_LIBS)
+	$(USER_LINK_CMD)
 
-$(SBASE_ECHO): $(USER_RUNTIME_OBJECTS) $(SBASE_ECHO_OBJ) $(SBASE_EPRINTF_OBJ) $(SBASE_PUTWORD_OBJ) $(SBASE_FSHUT_OBJ)
-	$(CC) -nostartfiles -Wl,-T,$(USER_DIR)/linker.ld -Wl,--gc-sections -o $@ $^ -lc -lgcc
+$(SBASE_ECHO): $(USER_RUNTIME_OBJECTS) $(SBASE_ECHO_OBJ) $(SBASE_EPRINTF_OBJ) $(SBASE_PUTWORD_OBJ) $(SBASE_FSHUT_OBJ) $(USER_RUNTIME_LIBS)
+	$(USER_LINK_CMD)
 
-$(SBASE_BASENAME): $(USER_RUNTIME_OBJECTS) $(SBASE_BASENAME_OBJ) $(SBASE_EPRINTF_OBJ) $(SBASE_FSHUT_OBJ)
-	$(CC) -nostartfiles -Wl,-T,$(USER_DIR)/linker.ld -Wl,--gc-sections -o $@ $^ -lc -lgcc
+$(SBASE_BASENAME): $(USER_RUNTIME_OBJECTS) $(SBASE_BASENAME_OBJ) $(SBASE_EPRINTF_OBJ) $(SBASE_FSHUT_OBJ) $(USER_RUNTIME_LIBS)
+	$(USER_LINK_CMD)
 
-$(SBASE_DIRNAME): $(USER_RUNTIME_OBJECTS) $(SBASE_DIRNAME_OBJ) $(SBASE_EPRINTF_OBJ) $(SBASE_FSHUT_OBJ)
-	$(CC) -nostartfiles -Wl,-T,$(USER_DIR)/linker.ld -Wl,--gc-sections -o $@ $^ -lc -lgcc
+$(SBASE_DIRNAME): $(USER_RUNTIME_OBJECTS) $(SBASE_DIRNAME_OBJ) $(SBASE_EPRINTF_OBJ) $(SBASE_FSHUT_OBJ) $(USER_RUNTIME_LIBS)
+	$(USER_LINK_CMD)
 
-$(SBASE_HEAD): $(USER_RUNTIME_OBJECTS) $(SBASE_HEAD_OBJ) $(SBASE_EPRINTF_OBJ) $(SBASE_FSHUT_OBJ) $(SBASE_STRTONUM_OBJ)
-	$(CC) -nostartfiles -Wl,-T,$(USER_DIR)/linker.ld -Wl,--gc-sections -o $@ $^ -lc -lgcc
+$(SBASE_HEAD): $(USER_RUNTIME_OBJECTS) $(SBASE_HEAD_OBJ) $(SBASE_EPRINTF_OBJ) $(SBASE_FSHUT_OBJ) $(SBASE_STRTONUM_OBJ) $(USER_RUNTIME_LIBS)
+	$(USER_LINK_CMD)
 
-$(SBASE_WC): $(USER_RUNTIME_OBJECTS) $(SBASE_WC_OBJ) $(SBASE_EPRINTF_OBJ) $(SBASE_FSHUT_OBJ) $(SBASE_RUNE_OBJ) $(SBASE_UTF_OBJ) $(SBASE_RUNETYPE_OBJ) $(SBASE_ISSPACERUNE_OBJ) $(SBASE_FGETRUNE_OBJ)
-	$(CC) -nostartfiles -Wl,-T,$(USER_DIR)/linker.ld -Wl,--gc-sections -o $@ $^ -lc -lgcc
+$(SBASE_WC): $(USER_RUNTIME_OBJECTS) $(SBASE_WC_OBJ) $(SBASE_EPRINTF_OBJ) $(SBASE_FSHUT_OBJ) $(SBASE_RUNE_OBJ) $(SBASE_UTF_OBJ) $(SBASE_RUNETYPE_OBJ) $(SBASE_ISSPACERUNE_OBJ) $(SBASE_FGETRUNE_OBJ) $(USER_RUNTIME_LIBS)
+	$(USER_LINK_CMD)
 
-$(SBASE_GREP): $(USER_RUNTIME_OBJECTS) $(SBASE_GREP_OBJ) $(SBASE_EPRINTF_OBJ) $(SBASE_FSHUT_OBJ) $(SBASE_EALLOC_OBJ) $(SBASE_STRCASESTR_OBJ) $(SBASE_EREGCOMP_OBJ) $(NEWLIB_REGEX_OBJS)
-	$(CC) -nostartfiles -Wl,-T,$(USER_DIR)/linker.ld -Wl,--gc-sections -o $@ $^ -lc -lgcc
+$(SBASE_GREP): $(USER_RUNTIME_OBJECTS) $(SBASE_GREP_OBJ) $(SBASE_EPRINTF_OBJ) $(SBASE_FSHUT_OBJ) $(SBASE_EALLOC_OBJ) $(SBASE_STRCASESTR_OBJ) $(SBASE_EREGCOMP_OBJ) $(USER_RUNTIME_LIBS)
+	$(USER_LINK_CMD)
 
-$(SBASE_YES): $(USER_RUNTIME_OBJECTS) $(SBASE_YES_OBJ) $(SBASE_EPRINTF_OBJ)
-	$(CC) -nostartfiles -Wl,-T,$(USER_DIR)/linker.ld -Wl,--gc-sections -o $@ $^ -lc -lgcc
+$(SBASE_YES): $(USER_RUNTIME_OBJECTS) $(SBASE_YES_OBJ) $(SBASE_EPRINTF_OBJ) $(USER_RUNTIME_LIBS)
+	$(USER_LINK_CMD)
 
-$(SBASE_TRUE): $(USER_RUNTIME_OBJECTS) $(SBASE_TRUE_OBJ)
-	$(CC) -nostartfiles -Wl,-T,$(USER_DIR)/linker.ld -Wl,--gc-sections -o $@ $^ -lc -lgcc
+$(SBASE_TRUE): $(USER_RUNTIME_OBJECTS) $(SBASE_TRUE_OBJ) $(USER_RUNTIME_LIBS)
+	$(USER_LINK_CMD)
 
-$(SBASE_FALSE): $(USER_RUNTIME_OBJECTS) $(SBASE_FALSE_OBJ)
-	$(CC) -nostartfiles -Wl,-T,$(USER_DIR)/linker.ld -Wl,--gc-sections -o $@ $^ -lc -lgcc
+$(SBASE_FALSE): $(USER_RUNTIME_OBJECTS) $(SBASE_FALSE_OBJ) $(USER_RUNTIME_LIBS)
+	$(USER_LINK_CMD)
 
 # Link userland BASIC interpreter
-$(USER_BASIC): $(USER_RUNTIME_OBJECTS) $(USER_BASIC_OBJECTS)
-	$(CC) -nostartfiles -Wl,-T,$(USER_DIR)/linker.ld -Wl,--gc-sections -o $@ $^ -lc -lgcc
+$(USER_BASIC): $(USER_RUNTIME_OBJECTS) $(USER_BASIC_OBJECTS) $(USER_RUNTIME_LIBS)
+	$(USER_LINK_CMD)
 
 # Link userland zork (static, freestanding)
-$(USER_ZORK): $(USER_RUNTIME_OBJECTS) $(USER_ZORK_OBJECTS)
-	$(CC) -nostartfiles -Wl,-T,$(USER_DIR)/linker.ld -Wl,--gc-sections -o $@ $^ -lc -lgcc
+$(USER_ZORK): $(USER_RUNTIME_OBJECTS) $(USER_ZORK_OBJECTS) $(USER_RUNTIME_LIBS)
+	$(USER_LINK_CMD)
 
 # Compile C files
 $(BUILD_DIR)/%.o: $(KERNEL_DIR)/%.c | $(BUILD_DIR)

@@ -511,7 +511,11 @@ static void fill_stat_common(struct stat* st, const vos_stat_t* vst) {
     }
 
     memset(st, 0, sizeof(*st));
-    st->st_mode = vst->is_dir ? S_IFDIR : S_IFREG;
+    if (vst->is_dir) {
+        st->st_mode = S_IFDIR | 0755;
+    } else {
+        st->st_mode = S_IFREG | 0644;
+    }
     st->st_nlink = 1;
     st->st_size = (off_t)vst->size;
     st->st_blksize = 512;

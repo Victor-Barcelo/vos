@@ -29,6 +29,8 @@ enum {
     VOS_TCSETS     = 0x5402u,
     VOS_TCSETSW    = 0x5403u,
     VOS_TCSETSF    = 0x5404u,
+    VOS_TIOCGPGRP  = 0x540Fu,
+    VOS_TIOCSPGRP  = 0x5410u,
     VOS_TIOCGWINSZ = 0x5413u,
 };
 
@@ -116,6 +118,8 @@ typedef struct task {
     uint32_t wake_tick;
     uint32_t wait_pid;
     int32_t exit_code;
+    bool kill_pending;
+    int32_t kill_exit_code;
     uint32_t cpu_ticks;
     char name[TASK_NAME_LEN + 1];
     struct task* next;
@@ -128,6 +132,28 @@ static bool enabled = false;
 static uint32_t next_id = 1;
 static uint32_t tick_div = 0;
 static uint32_t next_kstack_region = KSTACK_REGION_BASE;
+static uint32_t tty_foreground_pid = 0;
+
+static task_t* task_find_by_pid(uint32_t pid) {
+    if (!current_task || pid == 0) {
+        return NULL;
+    }
+
+    task_t* t = current_task;
+    for (uint32_t i = 0; i < TASK_MAX_SCAN; i++) {
+        if (!t) {
+            break;
+        }
+        if (t->id == pid) {
+            return t;
+        }
+        t = t->next;
+        if (t == current_task) {
+            break;
+        }
+    }
+    return NULL;
+}
 
 static uint32_t* push32(uint32_t* sp, uint32_t v) {
     sp--;
@@ -536,6 +562,19 @@ uint32_t tasking_current_pid(void) {
     return current_task ? current_task->id : 0;
 }
 
+bool tasking_current_should_exit(int32_t* out_exit_code) {
+    if (!enabled || !current_task) {
+        return false;
+    }
+    if (!current_task->kill_pending) {
+        return false;
+    }
+    if (out_exit_code) {
+        *out_exit_code = current_task->kill_exit_code;
+    }
+    return true;
+}
+
 uint32_t tasking_task_count(void) {
     uint32_t flags = irq_save();
 
@@ -720,6 +759,11 @@ interrupt_frame_t* tasking_on_timer_tick(interrupt_frame_t* frame) {
         return frame;
     }
 
+    // Only terminate a task at safe points (when the interrupt happened in ring3).
+    if ((frame->cs & 3u) == 3u && current_task->kill_pending) {
+        return tasking_exit(frame, current_task->kill_exit_code);
+    }
+
     current_task->cpu_ticks++;
 
     uint32_t now = timer_get_ticks();
@@ -834,9 +878,6 @@ int32_t tasking_kill(uint32_t pid, int32_t exit_code) {
     if (pid == 0) {
         return -EINVAL;
     }
-    if (pid == current_task->id) {
-        return -EPERM;
-    }
 
     uint32_t flags = irq_save();
 
@@ -851,10 +892,15 @@ int32_t tasking_kill(uint32_t pid, int32_t exit_code) {
                 return -EPERM;
             }
             if (t->state != TASK_STATE_ZOMBIE) {
-                task_close_fds(t);
-                t->state = TASK_STATE_ZOMBIE;
-                t->exit_code = exit_code;
-                wake_waiters(pid, exit_code);
+                // Defer termination to a safe point (syscall entry or timer tick in ring3)
+                // to avoid tearing down resources while the target is executing in-kernel.
+                t->kill_pending = true;
+                t->kill_exit_code = exit_code;
+                if (t->state != TASK_STATE_RUNNABLE) {
+                    t->state = TASK_STATE_RUNNABLE;
+                    t->wake_tick = 0;
+                    t->wait_pid = 0;
+                }
             }
             irq_restore(flags);
             return 0;
@@ -1167,6 +1213,40 @@ int32_t tasking_fd_close(int32_t fd) {
         return 0;
     }
     return 0;
+}
+
+bool tasking_tty_handle_input_char(uint8_t c) {
+    if (!enabled || !current_task) {
+        return false;
+    }
+    if (tty_foreground_pid == 0) {
+        return false;
+    }
+
+    task_t* fg = task_find_by_pid(tty_foreground_pid);
+    if (!fg || !fg->user || fg->state == TASK_STATE_ZOMBIE) {
+        return false;
+    }
+
+    // Respect the foreground task's terminal settings:
+    // only generate an interrupt when ISIG is enabled and the input matches VINTR.
+    if ((fg->tty.c_lflag & VOS_ISIG) == 0) {
+        return false;
+    }
+    uint8_t vintr = fg->tty.c_cc[VOS_VINTR];
+    if (vintr == 0) {
+        vintr = 0x03u; // default ^C
+    }
+    if (c != vintr) {
+        return false;
+    }
+
+    // Approximate SIGINT using exit code 130 (128 + SIGINT).
+    (void)tasking_kill(tty_foreground_pid, 130);
+    screen_putchar('^');
+    screen_putchar('C');
+    screen_putchar('\n');
+    return true;
 }
 
 static uint32_t tty_encode_key(int8_t key, uint8_t seq[8]) {
@@ -2054,11 +2134,38 @@ int32_t tasking_fd_ioctl(int32_t fd, uint32_t req, void* argp_user) {
         return -ENOTTY;
     }
 
-    if (!argp_user && (req == VOS_TCGETS || req == VOS_TCSETS || req == VOS_TCSETSW || req == VOS_TCSETSF || req == VOS_TIOCGWINSZ)) {
+    if (!argp_user && (req == VOS_TCGETS || req == VOS_TCSETS || req == VOS_TCSETSW || req == VOS_TCSETSF ||
+                       req == VOS_TIOCGPGRP || req == VOS_TIOCSPGRP || req == VOS_TIOCGWINSZ)) {
         return -EFAULT;
     }
 
     switch (req) {
+        case VOS_TIOCGPGRP: {
+            uint32_t pid = tty_foreground_pid;
+            if (!copy_to_user(argp_user, &pid, (uint32_t)sizeof(pid))) {
+                return -EFAULT;
+            }
+            return 0;
+        }
+        case VOS_TIOCSPGRP: {
+            uint32_t pid = 0;
+            if (!copy_from_user(&pid, argp_user, (uint32_t)sizeof(pid))) {
+                return -EFAULT;
+            }
+            if (pid == 0) {
+                tty_foreground_pid = 0;
+                return 0;
+            }
+            task_t* fg = task_find_by_pid(pid);
+            if (!fg) {
+                return -ESRCH;
+            }
+            if (!fg->user) {
+                return -EPERM;
+            }
+            tty_foreground_pid = pid;
+            return 0;
+        }
         case VOS_TIOCGWINSZ: {
             vos_winsize_t ws;
             ws.ws_col = (uint16_t)screen_cols();

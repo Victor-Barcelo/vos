@@ -1,11 +1,86 @@
 #include <errno.h>
+#include <fcntl.h>
 #include <stdarg.h>
 #include <stddef.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 #include <sys/stat.h>
+#include <sys/time.h>
 #include <sys/types.h>
 #include <sys/ioctl.h>
+#include <dirent.h>
 #include <termios.h>
+#include <time.h>
 #include <unistd.h>
+
+// Force "C"/ASCII collation for newlib's regex implementation.
+int __collate_load_error = 1;
+
+ssize_t getdelim(char** lineptr, size_t* n, int delim, FILE* stream) {
+    return __getdelim(lineptr, n, delim, stream);
+}
+
+ssize_t getline(char** lineptr, size_t* n, FILE* stream) {
+    return __getline(lineptr, n, stream);
+}
+
+// Minimal POSIX basename/dirname for userland ports (e.g. sbase).
+char* basename(char* path) {
+    static char dot[] = ".";
+    static char slash[] = "/";
+    if (!path || !*path) {
+        return dot;
+    }
+
+    char* end = path + strlen(path) - 1;
+    while (end > path && *end == '/') {
+        *end-- = '\0';
+    }
+    if (end == path && *end == '/') {
+        return slash;
+    }
+
+    char* base = end;
+    while (base > path && *(base - 1) != '/') {
+        base--;
+    }
+    return base;
+}
+
+char* dirname(char* path) {
+    static char dot[] = ".";
+    static char slash[] = "/";
+    if (!path || !*path) {
+        return dot;
+    }
+
+    char* end = path + strlen(path) - 1;
+    while (end > path && *end == '/') {
+        *end-- = '\0';
+    }
+    if (end == path && *end == '/') {
+        return slash;
+    }
+
+    char* last = strrchr(path, '/');
+    if (!last) {
+        return dot;
+    }
+    if (last == path) {
+        return slash;
+    }
+
+    *last = '\0';
+    while (last > path && *(last - 1) == '/') {
+        *(last - 1) = '\0';
+        last--;
+    }
+    if (!*path) {
+        return slash;
+    }
+    return path;
+}
 
 // VOS syscall numbers (kernel/syscall.c)
 enum {
@@ -39,6 +114,8 @@ enum {
     SYS_PIPE = 27,
     SYS_GETPID = 28,
     SYS_SPAWN = 29,
+    SYS_UPTIME_MS = 30,
+    SYS_RTC_GET = 31,
 };
 
 typedef struct vos_stat {
@@ -48,6 +125,15 @@ typedef struct vos_stat {
     unsigned short wtime;
     unsigned short wdate;
 } vos_stat_t;
+
+typedef struct vos_rtc_datetime {
+    unsigned short year;
+    unsigned char month;
+    unsigned char day;
+    unsigned char hour;
+    unsigned char minute;
+    unsigned char second;
+} vos_rtc_datetime_t;
 
 #define VOS_NAME_MAX 64
 typedef struct vos_dirent {
@@ -59,12 +145,56 @@ typedef struct vos_dirent {
     unsigned short wdate;
 } vos_dirent_t;
 
+static inline int vos_sys_sleep(unsigned int ms) {
+    int ret;
+    __asm__ volatile (
+        "int $0x80"
+        : "=a"(ret)
+        : "a"(SYS_SLEEP), "b"(ms)
+        : "memory"
+    );
+    return ret;
+}
+
 static inline int vos_sys_write(int fd, const void* buf, unsigned int len) {
     int ret;
     __asm__ volatile (
         "int $0x80"
         : "=a"(ret)
         : "a"(SYS_WRITE), "b"(fd), "c"(buf), "d"(len)
+        : "memory"
+    );
+    return ret;
+}
+
+static inline int vos_sys_readdir(int fd, vos_dirent_t* ent) {
+    int ret;
+    __asm__ volatile (
+        "int $0x80"
+        : "=a"(ret)
+        : "a"(SYS_READDIR), "b"(fd), "c"(ent)
+        : "memory"
+    );
+    return ret;
+}
+
+static inline int vos_sys_rtc_get(vos_rtc_datetime_t* dt) {
+    int ret;
+    __asm__ volatile (
+        "int $0x80"
+        : "=a"(ret)
+        : "a"(SYS_RTC_GET), "b"(dt)
+        : "memory"
+    );
+    return ret;
+}
+
+static inline unsigned int vos_sys_uptime_ms(void) {
+    unsigned int ret;
+    __asm__ volatile (
+        "int $0x80"
+        : "=a"(ret)
+        : "a"(SYS_UPTIME_MS)
         : "memory"
     );
     return ret;
@@ -324,6 +454,76 @@ static inline int vos_sys_kill(int pid, int sig) {
     return ret;
 }
 
+static int is_leap(int year) {
+    if ((year % 4) != 0) return 0;
+    if ((year % 100) != 0) return 1;
+    return (year % 400) == 0;
+}
+
+static time_t ymdhms_to_epoch(int year, int month, int day, int hour, int minute, int second) {
+    if (year < 1970) {
+        return (time_t)0;
+    }
+    if (month < 1) month = 1;
+    if (month > 12) month = 12;
+    if (day < 1) day = 1;
+    if (day > 31) day = 31;
+    if (hour < 0) hour = 0;
+    if (hour > 23) hour = 23;
+    if (minute < 0) minute = 0;
+    if (minute > 59) minute = 59;
+    if (second < 0) second = 0;
+    if (second > 59) second = 59;
+
+    static const int mdays[12] = {31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
+    long days = 0;
+    for (int y = 1970; y < year; y++) {
+        days += is_leap(y) ? 366 : 365;
+    }
+    for (int m = 1; m < month; m++) {
+        days += mdays[m - 1];
+        if (m == 2 && is_leap(year)) {
+            days += 1;
+        }
+    }
+    days += (day - 1);
+
+    long sec = days * 86400L + hour * 3600L + minute * 60L + second;
+    return (time_t)sec;
+}
+
+static time_t fat_ts_to_epoch(unsigned short wdate, unsigned short wtime) {
+    if (wdate == 0) {
+        return (time_t)0;
+    }
+    int year = 1980 + ((wdate >> 9) & 0x7F);
+    int month = (wdate >> 5) & 0x0F;
+    int day = wdate & 0x1F;
+    int hour = (wtime >> 11) & 0x1F;
+    int minute = (wtime >> 5) & 0x3F;
+    int second = (wtime & 0x1F) * 2;
+    return ymdhms_to_epoch(year, month, day, hour, minute, second);
+}
+
+static void fill_stat_common(struct stat* st, const vos_stat_t* vst) {
+    if (!st || !vst) {
+        return;
+    }
+
+    memset(st, 0, sizeof(*st));
+    st->st_mode = vst->is_dir ? S_IFDIR : S_IFREG;
+    st->st_nlink = 1;
+    st->st_size = (off_t)vst->size;
+    st->st_blksize = 512;
+    st->st_blocks = (blkcnt_t)((vst->size + 511u) / 512u);
+
+    time_t t = fat_ts_to_epoch(vst->wdate, vst->wtime);
+    st->st_mtim.tv_sec = t;
+    st->st_mtim.tv_nsec = 0;
+    st->st_atim = st->st_mtim;
+    st->st_ctim = st->st_mtim;
+}
+
 int open(const char* name, int flags, ...) {
     va_list ap;
     va_start(ap, flags);
@@ -393,8 +593,10 @@ int fstat(int file, struct stat* st) {
         struct termios t;
         if (ioctl(file, TCGETS, &t) == 0) {
             errno = saved;
+            memset(st, 0, sizeof(*st));
             st->st_mode = S_IFCHR;
-            st->st_size = 0;
+            st->st_nlink = 1;
+            st->st_blksize = 512;
             return 0;
         }
         errno = saved;
@@ -407,8 +609,7 @@ int fstat(int file, struct stat* st) {
         return -1;
     }
 
-    st->st_mode = vst.is_dir ? S_IFDIR : S_IFREG;
-    st->st_size = (off_t)vst.size;
+    fill_stat_common(st, &vst);
     return 0;
 }
 
@@ -445,9 +646,186 @@ int stat(const char* path, struct stat* st) {
         return -1;
     }
 
-    st->st_mode = vst.is_dir ? S_IFDIR : S_IFREG;
-    st->st_size = (off_t)vst.size;
+    fill_stat_common(st, &vst);
     return 0;
+}
+
+int lstat(const char* path, struct stat* st) {
+    // VOS currently doesn't support symlinks, so lstat == stat.
+    return stat(path, st);
+}
+
+unsigned int sleep(unsigned int seconds) {
+    (void)vos_sys_sleep(seconds * 1000u);
+    return 0;
+}
+
+int usleep(useconds_t usec) {
+    (void)vos_sys_sleep((unsigned int)((usec + 999u) / 1000u));
+    return 0;
+}
+
+int gettimeofday(struct timeval* tv, void* tz) {
+    (void)tz;
+    if (!tv) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    vos_rtc_datetime_t dt;
+    int rc = vos_sys_rtc_get(&dt);
+    if (rc < 0) {
+        errno = -rc;
+        return -1;
+    }
+
+    tv->tv_sec = ymdhms_to_epoch((int)dt.year, (int)dt.month, (int)dt.day, (int)dt.hour, (int)dt.minute, (int)dt.second);
+    tv->tv_usec = 0;
+    return 0;
+}
+
+time_t time(time_t* tloc) {
+    struct timeval tv;
+    if (gettimeofday(&tv, NULL) < 0) {
+        if (tloc) *tloc = (time_t)-1;
+        return (time_t)-1;
+    }
+    if (tloc) *tloc = tv.tv_sec;
+    return tv.tv_sec;
+}
+
+int clock_gettime(clockid_t clock_id, struct timespec* tp) {
+    if (!tp) {
+        errno = EINVAL;
+        return -1;
+    }
+
+#ifdef CLOCK_MONOTONIC
+    if (clock_id == CLOCK_MONOTONIC) {
+        unsigned int ms = vos_sys_uptime_ms();
+        tp->tv_sec = (time_t)(ms / 1000u);
+        tp->tv_nsec = (long)((ms % 1000u) * 1000000u);
+        return 0;
+    }
+#endif
+
+    if (clock_id == CLOCK_REALTIME) {
+        struct timeval tv;
+        if (gettimeofday(&tv, NULL) < 0) {
+            return -1;
+        }
+        tp->tv_sec = tv.tv_sec;
+        tp->tv_nsec = (long)tv.tv_usec * 1000L;
+        return 0;
+    }
+
+    errno = EINVAL;
+    return -1;
+}
+
+DIR* opendir(const char* name) {
+    if (!name) {
+        errno = EINVAL;
+        return NULL;
+    }
+    int fd = open(name, O_RDONLY | O_DIRECTORY);
+    if (fd < 0) {
+        return NULL;
+    }
+    DIR* d = (DIR*)malloc(sizeof(DIR));
+    if (!d) {
+        int saved = errno;
+        close(fd);
+        errno = saved ? saved : ENOMEM;
+        return NULL;
+    }
+    memset(d, 0, sizeof(*d));
+    d->fd = fd;
+    d->eof = 0;
+    return d;
+}
+
+DIR* fdopendir(int fd) {
+    if (fd < 0) {
+        errno = EBADF;
+        return NULL;
+    }
+    struct stat st;
+    if (fstat(fd, &st) < 0) {
+        return NULL;
+    }
+    if (!S_ISDIR(st.st_mode)) {
+        errno = ENOTDIR;
+        return NULL;
+    }
+    DIR* d = (DIR*)malloc(sizeof(DIR));
+    if (!d) {
+        errno = ENOMEM;
+        return NULL;
+    }
+    memset(d, 0, sizeof(*d));
+    d->fd = fd;
+    d->eof = 0;
+    return d;
+}
+
+int closedir(DIR* dirp) {
+    if (!dirp) {
+        errno = EINVAL;
+        return -1;
+    }
+    int fd = dirp->fd;
+    free(dirp);
+    if (fd >= 0) {
+        return close(fd);
+    }
+    return 0;
+}
+
+struct dirent* readdir(DIR* dirp) {
+    if (!dirp) {
+        errno = EINVAL;
+        return NULL;
+    }
+    if (dirp->eof) {
+        return NULL;
+    }
+
+    vos_dirent_t de;
+    int rc = vos_sys_readdir(dirp->fd, &de);
+    if (rc < 0) {
+        errno = -rc;
+        return NULL;
+    }
+    if (rc == 0) {
+        dirp->eof = 1;
+        return NULL;
+    }
+
+    memset(&dirp->de, 0, sizeof(dirp->de));
+    dirp->de.d_ino = 0;
+    dirp->de.d_reclen = (unsigned short)sizeof(struct dirent);
+    dirp->de.d_type = de.is_dir ? DT_DIR : DT_REG;
+    strncpy(dirp->de.d_name, de.name, sizeof(dirp->de.d_name) - 1u);
+    dirp->de.d_name[sizeof(dirp->de.d_name) - 1u] = '\0';
+    return &dirp->de;
+}
+
+void rewinddir(DIR* dirp) {
+    // Our VFS doesn't support seekable directory streams yet.
+    // Best-effort: just mark "not EOF" and rely on reopening if needed.
+    if (!dirp) {
+        return;
+    }
+    dirp->eof = 0;
+}
+
+int dirfd(DIR* dirp) {
+    if (!dirp) {
+        errno = EINVAL;
+        return -1;
+    }
+    return dirp->fd;
 }
 
 int mkdir(const char* path, mode_t mode) {

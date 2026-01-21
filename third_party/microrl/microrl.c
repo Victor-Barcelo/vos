@@ -544,8 +544,12 @@ static void microrl_get_complite (microrl_t * pThis)
 		if (len) {
 			microrl_insert_text (pThis, compl_token[0] + strlen(tkn_arr[status-1]), 
 																	len - strlen(tkn_arr[status-1]));
-			if (compl_token[1] == NULL) 
-				microrl_insert_text (pThis, " ", 1);
+			if (compl_token[1] == NULL) {
+				// Only append a space if this doesn't look like a directory path.
+				if (len > 0 && compl_token[0][len - 1] != '/') {
+					microrl_insert_text (pThis, " ", 1);
+				}
+			}
 		}
 		terminal_reset_cursor (pThis);
 		terminal_print_line (pThis, 0, pThis->cursor);

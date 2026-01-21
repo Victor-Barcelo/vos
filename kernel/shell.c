@@ -145,6 +145,187 @@ static int shell_rl_execute(int argc, const char* const* argv) {
     return 0;
 }
 
+static bool ci_starts_with(const char* s, const char* prefix);
+static bool resolve_path(const char* cwd, const char* in, char* out, uint32_t out_cap);
+
+// -----------------------------
+// TAB completion (microrl)
+// -----------------------------
+
+#define SHELL_COMPLETE_MAX 32
+#define SHELL_COMPLETE_STR_MAX 128
+
+static char shell_complete_storage[SHELL_COMPLETE_MAX][SHELL_COMPLETE_STR_MAX];
+static char* shell_complete_list[SHELL_COMPLETE_MAX + 1];
+
+static char** shell_complete_commands(const char* prefix) {
+    if (!prefix) {
+        prefix = "";
+    }
+
+    static const char* const commands[] = {
+        "help",
+        "clear",
+        "cls",
+        "echo",
+        "info",
+        "about",
+        "fetch",
+        "neofetch",
+        "uptime",
+        "sleep",
+        "date",
+        "setdate",
+        "pwd",
+        "cd",
+        "ls",
+        "cat",
+        "run",
+        "ps",
+        "top",
+        "kill",
+        "wait",
+        "mkdir",
+        "cp",
+        "mv",
+        "nano",
+        "edit",
+        "color",
+        "basic",
+        "reboot",
+        "halt",
+        "shutdown",
+        NULL,
+    };
+
+    int out = 0;
+    for (int i = 0; commands[i] && out < SHELL_COMPLETE_MAX; i++) {
+        if (ci_starts_with(commands[i], prefix)) {
+            strncpy(shell_complete_storage[out], commands[i], SHELL_COMPLETE_STR_MAX - 1u);
+            shell_complete_storage[out][SHELL_COMPLETE_STR_MAX - 1u] = '\0';
+            shell_complete_list[out] = shell_complete_storage[out];
+            out++;
+        }
+    }
+    shell_complete_list[out] = NULL;
+    return shell_complete_list;
+}
+
+static char** shell_complete_paths(const char* token) {
+    if (!token) {
+        token = "";
+    }
+
+    char dir_prefix[SHELL_PATH_MAX];
+    char dir_part[SHELL_PATH_MAX];
+    char base_prefix[SHELL_PATH_MAX];
+    dir_prefix[0] = '\0';
+    dir_part[0] = '\0';
+    base_prefix[0] = '\0';
+
+    // Determine typed dir prefix (kept as-is for insertion) and a directory path to resolve.
+    const char* last_slash = NULL;
+    for (const char* p = token; *p; p++) {
+        if (*p == '/') {
+            last_slash = p;
+        }
+    }
+
+    if (last_slash) {
+        size_t prefix_len = (size_t)(last_slash - token + 1);
+        if (prefix_len >= sizeof(dir_prefix)) {
+            shell_complete_list[0] = NULL;
+            return shell_complete_list;
+        }
+        memcpy(dir_prefix, token, prefix_len);
+        dir_prefix[prefix_len] = '\0';
+
+        if (prefix_len == 1 && token[0] == '/') {
+            strncpy(dir_part, "/", sizeof(dir_part) - 1u);
+            dir_part[sizeof(dir_part) - 1u] = '\0';
+        } else {
+            size_t part_len = prefix_len - 1u; // drop trailing '/'
+            if (part_len >= sizeof(dir_part)) {
+                shell_complete_list[0] = NULL;
+                return shell_complete_list;
+            }
+            memcpy(dir_part, token, part_len);
+            dir_part[part_len] = '\0';
+        }
+
+        strncpy(base_prefix, last_slash + 1, sizeof(base_prefix) - 1u);
+        base_prefix[sizeof(base_prefix) - 1u] = '\0';
+    } else {
+        strncpy(dir_part, ".", sizeof(dir_part) - 1u);
+        dir_part[sizeof(dir_part) - 1u] = '\0';
+        strncpy(base_prefix, token, sizeof(base_prefix) - 1u);
+        base_prefix[sizeof(base_prefix) - 1u] = '\0';
+    }
+
+    char abs_dir[SHELL_PATH_MAX];
+    if (!resolve_path(shell_cwd, dir_part, abs_dir, sizeof(abs_dir))) {
+        shell_complete_list[0] = NULL;
+        return shell_complete_list;
+    }
+
+    vfs_handle_t* h = NULL;
+    if (vfs_open_path("/", abs_dir, 0, &h) < 0 || !h) {
+        shell_complete_list[0] = NULL;
+        return shell_complete_list;
+    }
+
+    int out = 0;
+    vfs_dirent_t ent;
+    for (;;) {
+        int32_t rc = vfs_readdir(h, &ent);
+        if (rc <= 0) {
+            break;
+        }
+        if (!ci_starts_with(ent.name, base_prefix)) {
+            continue;
+        }
+
+        size_t dp = strlen(dir_prefix);
+        size_t nm = strlen(ent.name);
+        size_t extra = ent.is_dir ? 1u : 0u;
+        if (dp + nm + extra + 1u > SHELL_COMPLETE_STR_MAX) {
+            continue;
+        }
+
+        memcpy(shell_complete_storage[out], dir_prefix, dp);
+        memcpy(shell_complete_storage[out] + dp, ent.name, nm);
+        size_t pos = dp + nm;
+        if (ent.is_dir) {
+            shell_complete_storage[out][pos++] = '/';
+        }
+        shell_complete_storage[out][pos] = '\0';
+
+        shell_complete_list[out] = shell_complete_storage[out];
+        out++;
+        if (out >= SHELL_COMPLETE_MAX) {
+            break;
+        }
+    }
+
+    (void)vfs_close(h);
+
+    shell_complete_list[out] = NULL;
+    return shell_complete_list;
+}
+
+static char** shell_rl_complete(int argc, const char* const* argv) {
+    if (!argv || argc <= 0) {
+        shell_complete_list[0] = NULL;
+        return shell_complete_list;
+    }
+
+    const char* cur = argv[argc - 1] ? argv[argc - 1] : "";
+    if (argc == 1) {
+        return shell_complete_commands(cur);
+    }
+    return shell_complete_paths(cur);
+}
+
 static void print_spaces(int count) {
     for (int i = 0; i < count; i++) {
         screen_putchar(' ');
@@ -754,7 +935,7 @@ static void cmd_help(void) {
     print_help_cmd("setdate", "Set RTC date/time (YYYY-MM-DD HH:MM:SS)");
     print_help_cmd("pwd", "Print current directory");
     print_help_cmd("cd <dir>", "Change directory");
-    print_help_cmd("ls [path]", "List directory contents");
+    print_help_cmd("ls [opts] [path...]", "List directory contents");
     print_help_cmd("cat <file>", "Print a file");
     print_help_cmd("run <elf>", "Run a user-mode ELF (foreground)");
     print_help_cmd("mkdir <dir>", "Create directory (/ram or /disk)");
@@ -998,6 +1179,8 @@ typedef struct {
     char name[64];
     bool is_dir;
     uint32_t size;
+    uint16_t wtime;
+    uint16_t wdate;
 } ls_entry_t;
 
 static int ls_find_entry(ls_entry_t* entries, int n, const char* name) {
@@ -1009,86 +1192,356 @@ static int ls_find_entry(ls_entry_t* entries, int n, const char* name) {
     return -1;
 }
 
-static void cmd_ls(const char* args) {
-    if (!vfs_is_ready()) {
-        screen_println("VFS not ready.");
+typedef enum {
+    LS_SHOW_DEFAULT = 0,
+    LS_SHOW_ALMOST_ALL,
+    LS_SHOW_ALL,
+} ls_show_mode_t;
+
+typedef enum {
+    LS_SORT_NAME = 0,
+    LS_SORT_TIME,
+    LS_SORT_SIZE,
+} ls_sort_mode_t;
+
+typedef struct {
+    ls_show_mode_t show;
+    ls_sort_mode_t sort;
+    bool reverse;
+    bool long_format;
+    bool human;
+    bool bytes;
+} ls_opts_t;
+
+static uint32_t u32_digits(uint32_t v) {
+    uint32_t d = 1;
+    while (v >= 10u) {
+        v /= 10u;
+        d++;
+    }
+    return d;
+}
+
+static void print_u32(uint32_t v) {
+    if (v == 0) {
+        screen_putchar('0');
         return;
     }
 
-    char path[SHELL_PATH_MAX];
-    if (!resolve_path(shell_cwd, args && args[0] ? args : ".", path, sizeof(path))) {
-        screen_println("Invalid path.");
+    char buf[10];
+    uint32_t i = 0;
+    while (v && i < sizeof(buf)) {
+        buf[i++] = (char)('0' + (v % 10u));
+        v /= 10u;
+    }
+    while (i) {
+        screen_putchar(buf[--i]);
+    }
+}
+
+static void ls_print_spaces(uint32_t n) {
+    for (uint32_t i = 0; i < n; i++) {
+        screen_putchar(' ');
+    }
+}
+
+static void ls_print_mtime(uint16_t wdate, uint16_t wtime) {
+    if (wdate == 0) {
+        screen_print("????");
+        screen_putchar('-');
+        screen_print("??");
+        screen_putchar('-');
+        screen_print("??");
+        screen_putchar(' ');
+        screen_print("??");
+        screen_putchar(':');
+        screen_print("??");
         return;
     }
 
-    if (is_disk_path_abs(path)) {
+    uint16_t year = (uint16_t)(1980u + ((wdate >> 9) & 0x7Fu));
+    uint8_t month = (uint8_t)((wdate >> 5) & 0x0Fu);
+    uint8_t day = (uint8_t)(wdate & 0x1Fu);
+    uint8_t hour = (uint8_t)((wtime >> 11) & 0x1Fu);
+    uint8_t minute = (uint8_t)((wtime >> 5) & 0x3Fu);
+
+    screen_print_dec((int32_t)year);
+    screen_putchar('-');
+    print_2d(month);
+    screen_putchar('-');
+    print_2d(day);
+    screen_putchar(' ');
+    print_2d(hour);
+    screen_putchar(':');
+    print_2d(minute);
+}
+
+static uint32_t ls_size_width(uint32_t size, const ls_opts_t* opts) {
+    if (!opts) {
+        return u32_digits(size);
+    }
+
+    if (opts->bytes) {
+        return u32_digits(size);
+    }
+
+    uint32_t v = size;
+    char suffix = 'B';
+
+    if (!opts->human) {
+        v = (v + 1023u) / 1024u;
+        suffix = 'K';
+        return u32_digits(v) + 1u;
+    }
+
+    if (v >= 1024u) {
+        v = (v + 1023u) / 1024u;
+        suffix = 'K';
+    }
+    if (v >= 1024u && suffix == 'K') {
+        v = (v + 1023u) / 1024u;
+        suffix = 'M';
+    }
+    if (v >= 1024u && suffix == 'M') {
+        v = (v + 1023u) / 1024u;
+        suffix = 'G';
+    }
+
+    return u32_digits(v) + 1u;
+}
+
+static void ls_print_size(uint32_t size, const ls_opts_t* opts) {
+    if (opts && opts->bytes) {
+        print_u32(size);
+        return;
+    }
+
+    uint32_t v = size;
+    char suffix = 'B';
+
+    if (!opts || !opts->human) {
+        v = (v + 1023u) / 1024u;
+        suffix = 'K';
+        print_u32(v);
+        screen_putchar(suffix);
+        return;
+    }
+
+    if (v >= 1024u) {
+        v = (v + 1023u) / 1024u;
+        suffix = 'K';
+    }
+    if (v >= 1024u && suffix == 'K') {
+        v = (v + 1023u) / 1024u;
+        suffix = 'M';
+    }
+    if (v >= 1024u && suffix == 'M') {
+        v = (v + 1023u) / 1024u;
+        suffix = 'G';
+    }
+
+    print_u32(v);
+    screen_putchar(suffix);
+}
+
+static bool ls_should_show_name(const char* name, const ls_opts_t* opts) {
+    if (!name || name[0] == '\0') {
+        return false;
+    }
+    if (name[0] != '.') {
+        return true;
+    }
+    if (!opts) {
+        return false;
+    }
+
+    if (opts->show == LS_SHOW_ALL) {
+        return true;
+    }
+    if (opts->show == LS_SHOW_ALMOST_ALL) {
+        return strcmp(name, ".") != 0 && strcmp(name, "..") != 0;
+    }
+    return false;
+}
+
+static int ci_cmp(const char* a, const char* b) {
+    if (!a) a = "";
+    if (!b) b = "";
+
+    for (;;) {
+        unsigned char ca = (unsigned char)*a++;
+        unsigned char cb = (unsigned char)*b++;
+        ca = (unsigned char)tolower(ca);
+        cb = (unsigned char)tolower(cb);
+        if (ca < cb) return -1;
+        if (ca > cb) return 1;
+        if (ca == 0) return 0;
+    }
+}
+
+static int ls_entry_cmp(const ls_entry_t* a, const ls_entry_t* b, const ls_opts_t* opts) {
+    int rc = 0;
+
+    if (opts && opts->sort == LS_SORT_TIME) {
+        uint32_t ak = ((uint32_t)a->wdate << 16) | (uint32_t)a->wtime;
+        uint32_t bk = ((uint32_t)b->wdate << 16) | (uint32_t)b->wtime;
+        if (ak != bk) {
+            rc = (ak > bk) ? -1 : 1; // newest first
+        } else {
+            rc = ci_cmp(a->name, b->name);
+        }
+    } else if (opts && opts->sort == LS_SORT_SIZE) {
+        if (a->size != b->size) {
+            rc = (a->size > b->size) ? -1 : 1; // largest first
+        } else {
+            rc = ci_cmp(a->name, b->name);
+        }
+    } else {
+        rc = ci_cmp(a->name, b->name);
+    }
+
+    if (opts && opts->reverse) {
+        rc = -rc;
+    }
+    return rc;
+}
+
+static void ls_sort_entries(ls_entry_t* entries, int n, const ls_opts_t* opts) {
+    if (!entries || n <= 1) {
+        return;
+    }
+
+    for (int i = 1; i < n; i++) {
+        ls_entry_t key = entries[i];
+        int j = i - 1;
+        while (j >= 0 && ls_entry_cmp(&key, &entries[j], opts) < 0) {
+            entries[j + 1] = entries[j];
+            j--;
+        }
+        entries[j + 1] = key;
+    }
+}
+
+static bool vfs_lookup_mtime_abs(const char* abs_path, uint16_t* out_wtime, uint16_t* out_wdate) {
+    if (out_wtime) *out_wtime = 0;
+    if (out_wdate) *out_wdate = 0;
+
+    if (!abs_path) {
+        return false;
+    }
+
+    const char* rel = abs_path;
+    while (*rel == '/') rel++;
+
+    uint32_t n = vfs_file_count();
+    for (uint32_t i = 0; i < n; i++) {
+        const char* name = vfs_file_name(i);
+        if (!name) continue;
+        const char* p = name;
+        while (*p == '/') p++;
+        if (ci_eq(p, rel)) {
+            return vfs_file_mtime(i, out_wtime, out_wdate);
+        }
+    }
+
+    return false;
+}
+
+static bool ls_stat_abs(const char* abs_path, bool* out_is_dir, uint32_t* out_size, uint16_t* out_wtime, uint16_t* out_wdate) {
+    if (out_is_dir) *out_is_dir = false;
+    if (out_size) *out_size = 0;
+    if (out_wtime) *out_wtime = 0;
+    if (out_wdate) *out_wdate = 0;
+
+    if (!abs_path || abs_path[0] != '/') {
+        return false;
+    }
+
+    if (is_disk_path_abs(abs_path)) {
         if (!fatdisk_is_ready()) {
-            screen_println("disk: not mounted");
-            return;
+            return false;
         }
+        return fatdisk_stat_ex(abs_path, out_is_dir, out_size, out_wtime, out_wdate);
+    }
 
-        bool is_dir = false;
-        uint32_t size = 0;
-        if (!fatdisk_stat(path, &is_dir, &size)) {
-            screen_println("No such file or directory.");
-            return;
-        }
+    if (is_ram_path_abs(abs_path)) {
+        return ramfs_stat_ex(abs_path, out_is_dir, out_size, out_wtime, out_wdate);
+    }
 
-        if (!is_dir) {
-            screen_set_color(VGA_YELLOW, VGA_BLUE);
-            screen_print_dec((int32_t)size);
-            screen_set_color(VGA_WHITE, VGA_BLUE);
-            screen_print("  ");
-            screen_println(path);
-            return;
-        }
+    if (vfs_file_exists(abs_path)) {
+        const uint8_t* data = NULL;
+        uint32_t sz = 0;
+        (void)vfs_read_file(abs_path, &data, &sz);
+        if (out_is_dir) *out_is_dir = false;
+        if (out_size) *out_size = sz;
+        (void)vfs_lookup_mtime_abs(abs_path, out_wtime, out_wdate);
+        return true;
+    }
 
-        fatdisk_dirent_t* dents = (fatdisk_dirent_t*)kmalloc(sizeof(fatdisk_dirent_t) * (size_t)LS_MAX_ENTRIES);
-        if (!dents) {
-            screen_println("ls: out of memory");
-            return;
-        }
+    if (vfs_dir_exists(abs_path)) {
+        if (out_is_dir) *out_is_dir = true;
+        return true;
+    }
 
-        uint32_t n = fatdisk_list_dir(path, dents, (uint32_t)LS_MAX_ENTRIES);
-        for (uint32_t i = 0; i < n; i++) {
-            if (dents[i].is_dir) {
-                screen_set_color(VGA_LIGHT_CYAN, VGA_BLUE);
-                screen_print(dents[i].name);
-                screen_println("/");
-            } else {
-                screen_set_color(VGA_YELLOW, VGA_BLUE);
-                screen_print_dec((int32_t)dents[i].size);
-                screen_set_color(VGA_WHITE, VGA_BLUE);
-                screen_print("  ");
-                screen_println(dents[i].name);
-            }
-        }
-        kfree(dents);
-        screen_set_color(VGA_WHITE, VGA_BLUE);
+    return false;
+}
+
+static void ls_print_one(const char* name, bool is_dir, uint32_t size, uint16_t wtime, uint16_t wdate, const ls_opts_t* opts, uint32_t size_width) {
+    if (!name || name[0] == '\0') {
         return;
     }
 
-    if (vfs_file_exists(path)) {
-        const uint8_t* data = NULL;
-        uint32_t size = 0;
-        vfs_read_file(path, &data, &size);
-        screen_set_color(VGA_YELLOW, VGA_BLUE);
-        screen_print_dec((int32_t)size);
+    if (opts && opts->long_format) {
+        screen_set_color(VGA_LIGHT_GREY, VGA_BLUE);
+        screen_putchar(is_dir ? 'd' : '-');
+        screen_putchar(' ');
+        ls_print_mtime(wdate, wtime);
         screen_set_color(VGA_WHITE, VGA_BLUE);
         screen_print("  ");
-        screen_println(path);
+
+        screen_set_color(VGA_YELLOW, VGA_BLUE);
+        uint32_t w = ls_size_width(size, opts);
+        if (size_width > w) {
+            ls_print_spaces(size_width - w);
+        }
+        ls_print_size(size, opts);
+        screen_set_color(VGA_WHITE, VGA_BLUE);
+        screen_print("  ");
+    }
+
+    if (is_dir) {
+        screen_set_color(VGA_LIGHT_CYAN, VGA_BLUE);
+        screen_print(name);
+        screen_println("/");
+    } else {
+        screen_set_color(VGA_WHITE, VGA_BLUE);
+        screen_println(name);
+    }
+}
+
+static void ls_print_entries(ls_entry_t* entries, int n, const ls_opts_t* opts) {
+    if (!entries || n <= 0) {
         return;
     }
 
-    if (!vfs_dir_exists(path)) {
-        screen_println("No such directory.");
-        return;
+    uint32_t max_size_w = 0;
+    if (opts && opts->long_format) {
+        for (int i = 0; i < n; i++) {
+            uint32_t w = ls_size_width(entries[i].size, opts);
+            if (w > max_size_w) {
+                max_size_w = w;
+            }
+        }
     }
 
-    const char* dir_rel = skip_slashes(path);
-    uint32_t dir_len = (uint32_t)strlen(dir_rel);
-    bool is_root = (dir_len == 0);
+    for (int i = 0; i < n; i++) {
+        ls_print_one(entries[i].name, entries[i].is_dir, entries[i].size, entries[i].wtime, entries[i].wdate, opts, max_size_w);
+    }
 
+    screen_set_color(VGA_WHITE, VGA_BLUE);
+}
+
+static void ls_list_dir_abs(const char* abs_dir, const ls_opts_t* opts) {
     ls_entry_t* entries = (ls_entry_t*)kcalloc((size_t)LS_MAX_ENTRIES, sizeof(ls_entry_t));
     if (!entries) {
         screen_println("ls: out of memory");
@@ -1096,128 +1549,358 @@ static void cmd_ls(const char* args) {
     }
     int entry_count = 0;
 
-    uint32_t count = vfs_file_count();
-    for (uint32_t i = 0; i < count; i++) {
-        const char* full = vfs_file_name(i);
-        if (!full) {
-            continue;
+    if (is_disk_path_abs(abs_dir)) {
+        if (!fatdisk_is_ready()) {
+            screen_println("disk: not mounted");
+            kfree(entries);
+            return;
         }
-        const char* n = skip_slashes(full);
 
-        const char* rem = NULL;
-        if (is_root) {
-            rem = n;
-        } else {
-            if (!ci_starts_with(n, dir_rel) || n[dir_len] != '/') {
+        fatdisk_dirent_t* dents = (fatdisk_dirent_t*)kmalloc(sizeof(fatdisk_dirent_t) * (size_t)LS_MAX_ENTRIES);
+        if (!dents) {
+            screen_println("ls: out of memory");
+            kfree(entries);
+            return;
+        }
+
+        uint32_t n = fatdisk_list_dir(abs_dir, dents, (uint32_t)LS_MAX_ENTRIES);
+        for (uint32_t i = 0; i < n && entry_count < LS_MAX_ENTRIES; i++) {
+            strncpy(entries[entry_count].name, dents[i].name, sizeof(entries[entry_count].name) - 1u);
+            entries[entry_count].name[sizeof(entries[entry_count].name) - 1u] = '\0';
+            entries[entry_count].is_dir = dents[i].is_dir;
+            entries[entry_count].size = dents[i].size;
+            entries[entry_count].wtime = dents[i].wtime;
+            entries[entry_count].wdate = dents[i].wdate;
+            entry_count++;
+        }
+        kfree(dents);
+    } else if (is_ram_path_abs(abs_dir)) {
+        ramfs_dirent_t* rents = (ramfs_dirent_t*)kmalloc(sizeof(ramfs_dirent_t) * (size_t)LS_MAX_ENTRIES);
+        if (!rents) {
+            screen_println("ls: out of memory");
+            kfree(entries);
+            return;
+        }
+        uint32_t n = ramfs_list_dir(abs_dir, rents, (uint32_t)LS_MAX_ENTRIES);
+        for (uint32_t i = 0; i < n && entry_count < LS_MAX_ENTRIES; i++) {
+            strncpy(entries[entry_count].name, rents[i].name, sizeof(entries[entry_count].name) - 1u);
+            entries[entry_count].name[sizeof(entries[entry_count].name) - 1u] = '\0';
+            entries[entry_count].is_dir = rents[i].is_dir;
+            entries[entry_count].size = rents[i].size;
+            entries[entry_count].wtime = rents[i].wtime;
+            entries[entry_count].wdate = rents[i].wdate;
+            entry_count++;
+        }
+        kfree(rents);
+    } else {
+        const char* dir_rel = skip_slashes(abs_dir);
+        uint32_t dir_len = (uint32_t)strlen(dir_rel);
+        bool is_root = (dir_len == 0);
+
+        uint32_t count = vfs_file_count();
+        for (uint32_t i = 0; i < count; i++) {
+            const char* full = vfs_file_name(i);
+            if (!full) {
                 continue;
             }
-            rem = n + dir_len + 1u;
-        }
+            const char* n = skip_slashes(full);
 
-        if (rem[0] == '\0') {
-            continue;
-        }
+            const char* rem = NULL;
+            if (is_root) {
+                rem = n;
+            } else {
+                if (!ci_starts_with(n, dir_rel) || n[dir_len] != '/') {
+                    continue;
+                }
+                rem = n + dir_len + 1u;
+            }
 
-        char seg[64];
-        uint32_t seg_len = 0;
-        while (rem[seg_len] && rem[seg_len] != '/' && seg_len + 1u < sizeof(seg)) {
-            seg[seg_len] = rem[seg_len];
-            seg_len++;
-        }
-        seg[seg_len] = '\0';
-        if (seg[0] == '\0') {
-            continue;
-        }
+            if (rem[0] == '\0') {
+                continue;
+            }
 
-        bool is_dir = rem[seg_len] == '/';
-        uint32_t size = is_dir ? 0u : vfs_file_size(i);
+            char seg[64];
+            uint32_t seg_len = 0;
+            while (rem[seg_len] && rem[seg_len] != '/' && seg_len + 1u < sizeof(seg)) {
+                seg[seg_len] = rem[seg_len];
+                seg_len++;
+            }
+            seg[seg_len] = '\0';
+            if (seg[0] == '\0') {
+                continue;
+            }
 
-        int idx = ls_find_entry(entries, entry_count, seg);
-        if (idx >= 0) {
-            entries[idx].is_dir = entries[idx].is_dir || is_dir;
-            continue;
-        }
-        if (entry_count >= LS_MAX_ENTRIES) {
-            continue;
-        }
-        strncpy(entries[entry_count].name, seg, sizeof(entries[entry_count].name) - 1u);
-        entries[entry_count].name[sizeof(entries[entry_count].name) - 1u] = '\0';
-        entries[entry_count].is_dir = is_dir;
-        entries[entry_count].size = size;
-        entry_count++;
-    }
+            uint16_t file_wtime = 0;
+            uint16_t file_wdate = 0;
+            (void)vfs_file_mtime(i, &file_wtime, &file_wdate);
 
-    if (is_root) {
-        // Mount point for writable storage.
-        int idx = ls_find_entry(entries, entry_count, "ram");
-        if (idx < 0 && entry_count < LS_MAX_ENTRIES) {
-            strncpy(entries[entry_count].name, "ram", sizeof(entries[entry_count].name) - 1u);
+            bool is_dir = rem[seg_len] == '/';
+            uint32_t size = is_dir ? 0u : vfs_file_size(i);
+
+            int idx = ls_find_entry(entries, entry_count, seg);
+            if (idx >= 0) {
+                entries[idx].is_dir = entries[idx].is_dir || is_dir;
+                uint32_t old_key = ((uint32_t)entries[idx].wdate << 16) | (uint32_t)entries[idx].wtime;
+                uint32_t new_key = ((uint32_t)file_wdate << 16) | (uint32_t)file_wtime;
+                if (new_key > old_key) {
+                    entries[idx].wtime = file_wtime;
+                    entries[idx].wdate = file_wdate;
+                }
+                continue;
+            }
+            if (entry_count >= LS_MAX_ENTRIES) {
+                continue;
+            }
+            strncpy(entries[entry_count].name, seg, sizeof(entries[entry_count].name) - 1u);
             entries[entry_count].name[sizeof(entries[entry_count].name) - 1u] = '\0';
-            entries[entry_count].is_dir = true;
-            entries[entry_count].size = 0;
+            entries[entry_count].is_dir = is_dir;
+            entries[entry_count].size = size;
+            entries[entry_count].wtime = file_wtime;
+            entries[entry_count].wdate = file_wdate;
             entry_count++;
-        } else if (idx >= 0) {
-            entries[idx].is_dir = true;
         }
 
-        if (fatdisk_is_ready()) {
-            idx = ls_find_entry(entries, entry_count, "disk");
+        if (is_root) {
+            int idx = ls_find_entry(entries, entry_count, "ram");
             if (idx < 0 && entry_count < LS_MAX_ENTRIES) {
-                strncpy(entries[entry_count].name, "disk", sizeof(entries[entry_count].name) - 1u);
+                strncpy(entries[entry_count].name, "ram", sizeof(entries[entry_count].name) - 1u);
                 entries[entry_count].name[sizeof(entries[entry_count].name) - 1u] = '\0';
                 entries[entry_count].is_dir = true;
                 entries[entry_count].size = 0;
+                entries[entry_count].wtime = 0;
+                entries[entry_count].wdate = 0;
                 entry_count++;
             } else if (idx >= 0) {
                 entries[idx].is_dir = true;
             }
+
+            if (fatdisk_is_ready()) {
+                idx = ls_find_entry(entries, entry_count, "disk");
+                if (idx < 0 && entry_count < LS_MAX_ENTRIES) {
+                    strncpy(entries[entry_count].name, "disk", sizeof(entries[entry_count].name) - 1u);
+                    entries[entry_count].name[sizeof(entries[entry_count].name) - 1u] = '\0';
+                    entries[entry_count].is_dir = true;
+                    entries[entry_count].size = 0;
+                    entries[entry_count].wtime = 0;
+                    entries[entry_count].wdate = 0;
+                    entry_count++;
+                } else if (idx >= 0) {
+                    entries[idx].is_dir = true;
+                }
+            }
+
+            // Give mountpoints a useful timestamp: max mtime of their immediate children.
+            idx = ls_find_entry(entries, entry_count, "ram");
+            if (idx >= 0) {
+                ramfs_dirent_t* rents = (ramfs_dirent_t*)kmalloc(sizeof(ramfs_dirent_t) * (size_t)LS_MAX_ENTRIES);
+                if (rents) {
+                    uint32_t n = ramfs_list_dir("/ram", rents, (uint32_t)LS_MAX_ENTRIES);
+                    uint16_t best_time = 0;
+                    uint16_t best_date = 0;
+                    uint32_t best_key = 0;
+                    for (uint32_t i = 0; i < n; i++) {
+                        uint32_t key = ((uint32_t)rents[i].wdate << 16) | (uint32_t)rents[i].wtime;
+                        if (key > best_key) {
+                            best_key = key;
+                            best_time = rents[i].wtime;
+                            best_date = rents[i].wdate;
+                        }
+                    }
+                    entries[idx].wtime = best_time;
+                    entries[idx].wdate = best_date;
+                    kfree(rents);
+                }
+            }
+
+            idx = ls_find_entry(entries, entry_count, "disk");
+            if (idx >= 0 && fatdisk_is_ready()) {
+                fatdisk_dirent_t* dents = (fatdisk_dirent_t*)kmalloc(sizeof(fatdisk_dirent_t) * (size_t)LS_MAX_ENTRIES);
+                if (dents) {
+                    uint32_t n = fatdisk_list_dir("/disk", dents, (uint32_t)LS_MAX_ENTRIES);
+                    uint16_t best_time = 0;
+                    uint16_t best_date = 0;
+                    uint32_t best_key = 0;
+                    for (uint32_t i = 0; i < n; i++) {
+                        uint32_t key = ((uint32_t)dents[i].wdate << 16) | (uint32_t)dents[i].wtime;
+                        if (key > best_key) {
+                            best_key = key;
+                            best_time = dents[i].wtime;
+                            best_date = dents[i].wdate;
+                        }
+                    }
+                    entries[idx].wtime = best_time;
+                    entries[idx].wdate = best_date;
+                    kfree(dents);
+                }
+            }
         }
     }
 
-    if (ramfs_is_dir(path)) {
-        ramfs_dirent_t* rents = (ramfs_dirent_t*)kmalloc(sizeof(ramfs_dirent_t) * (size_t)LS_MAX_ENTRIES);
-        if (rents) {
-            uint32_t n = ramfs_list_dir(path, rents, (uint32_t)LS_MAX_ENTRIES);
-            for (uint32_t i = 0; i < n; i++) {
-                int idx = ls_find_entry(entries, entry_count, rents[i].name);
-                if (idx >= 0) {
-                    entries[idx].is_dir = entries[idx].is_dir || rents[i].is_dir;
-                    continue;
-                }
-                if (entry_count >= LS_MAX_ENTRIES) {
-                    break;
-                }
-                strncpy(entries[entry_count].name, rents[i].name, sizeof(entries[entry_count].name) - 1u);
-                entries[entry_count].name[sizeof(entries[entry_count].name) - 1u] = '\0';
-                entries[entry_count].is_dir = rents[i].is_dir;
-                entries[entry_count].size = rents[i].size;
-                entry_count++;
-            }
-            kfree(rents);
+    // Filter hidden entries unless requested.
+    int out_n = 0;
+    for (int i = 0; i < entry_count; i++) {
+        if (!ls_should_show_name(entries[i].name, opts)) {
+            continue;
         }
+        entries[out_n++] = entries[i];
     }
+    entry_count = out_n;
 
-    // Print directories first, then files.
-    for (int pass = 0; pass < 2; pass++) {
-        for (int i = 0; i < entry_count; i++) {
-            if ((pass == 0) != entries[i].is_dir) {
-                continue;
-            }
-            if (entries[i].is_dir) {
-                screen_set_color(VGA_LIGHT_CYAN, VGA_BLUE);
-                screen_print(entries[i].name);
-                screen_println("/");
-            } else {
-                screen_set_color(VGA_YELLOW, VGA_BLUE);
-                screen_print_dec((int32_t)entries[i].size);
-                screen_set_color(VGA_WHITE, VGA_BLUE);
-                screen_print("  ");
-                screen_println(entries[i].name);
-            }
-        }
-    }
+    ls_sort_entries(entries, entry_count, opts);
+    ls_print_entries(entries, entry_count, opts);
     kfree(entries);
-    screen_set_color(VGA_WHITE, VGA_BLUE);
+}
+
+static void cmd_ls(const char* args) {
+    if (!vfs_is_ready()) {
+        screen_println("VFS not ready.");
+        return;
+    }
+
+    ls_opts_t opts;
+    memset(&opts, 0, sizeof(opts));
+    opts.show = LS_SHOW_DEFAULT;
+    opts.sort = LS_SORT_NAME;
+    opts.reverse = false;
+    opts.long_format = true; // default: show mtime + size (KiB)
+    opts.human = false;
+    opts.bytes = false;
+
+    char* argv[16] = {0};
+    int argc = split_args_inplace((char*)args, argv, (int)(sizeof(argv) / sizeof(argv[0])));
+
+    int argi = 0;
+    for (; argi < argc; argi++) {
+        const char* tok = argv[argi];
+        if (!tok || tok[0] == '\0') {
+            continue;
+        }
+        if (tok[0] != '-' || tok[1] == '\0') {
+            break;
+        }
+        if (strcmp(tok, "--") == 0) {
+            argi++;
+            break;
+        }
+        if (strcmp(tok, "--help") == 0) {
+            screen_println("Usage: ls [options] [path...]");
+            screen_println("Options:");
+            screen_println("  -a   show all (including . and ..)");
+            screen_println("  -A   show almost all (exclude . and ..)");
+            screen_println("  -l   long format (default)");
+            screen_println("  -1   names only");
+            screen_println("  -h   human-readable sizes");
+            screen_println("  -b   show sizes in bytes");
+            screen_println("  -t   sort by modified time");
+            screen_println("  -S   sort by size");
+            screen_println("  -r   reverse sort");
+            return;
+        }
+
+        for (const char* p = tok + 1; *p; p++) {
+            switch (*p) {
+                case 'a': opts.show = LS_SHOW_ALL; break;
+                case 'A': if (opts.show != LS_SHOW_ALL) opts.show = LS_SHOW_ALMOST_ALL; break;
+                case 'l': opts.long_format = true; break;
+                case '1': opts.long_format = false; break;
+                case 'h': opts.human = true; opts.bytes = false; break;
+                case 'b': opts.bytes = true; opts.human = false; break;
+                case 't': opts.sort = LS_SORT_TIME; break;
+                case 'S': opts.sort = LS_SORT_SIZE; break;
+                case 'r': opts.reverse = true; break;
+                default:
+                    screen_print("ls: unknown option -");
+                    screen_putchar(*p);
+                    screen_putchar('\n');
+                    screen_println("Try: ls --help");
+                    return;
+            }
+        }
+    }
+
+    bool multi = (argc - argi) > 1;
+    bool printed_any_files = false;
+
+    // First pass: print file operands.
+    for (int i = argi; i < argc; i++) {
+        const char* op = argv[i];
+        if (!op || op[0] == '\0') {
+            continue;
+        }
+
+        char abs[SHELL_PATH_MAX];
+        if (!resolve_path(shell_cwd, op, abs, sizeof(abs))) {
+            screen_println("ls: invalid path");
+            continue;
+        }
+
+        if (is_disk_path_abs(abs) && !fatdisk_is_ready()) {
+            screen_println("disk: not mounted");
+            continue;
+        }
+
+        bool is_dir = false;
+        uint32_t size = 0;
+        uint16_t wtime = 0;
+        uint16_t wdate = 0;
+        if (!ls_stat_abs(abs, &is_dir, &size, &wtime, &wdate)) {
+            screen_print("ls: cannot access ");
+            screen_println(abs);
+            continue;
+        }
+        if (is_dir) {
+            continue;
+        }
+
+        uint32_t w = ls_size_width(size, &opts);
+        ls_print_one(abs, false, size, wtime, wdate, &opts, w);
+        printed_any_files = true;
+    }
+
+    // Second pass: list directory operands.
+    bool first_dir = true;
+    for (int i = argi; i < argc; i++) {
+        const char* op = argv[i];
+        if (!op || op[0] == '\0') {
+            continue;
+        }
+
+        char abs[SHELL_PATH_MAX];
+        if (!resolve_path(shell_cwd, op, abs, sizeof(abs))) {
+            continue;
+        }
+
+        bool is_dir = false;
+        if (!ls_stat_abs(abs, &is_dir, NULL, NULL, NULL)) {
+            continue;
+        }
+        if (!is_dir) {
+            continue;
+        }
+
+        if (printed_any_files || !first_dir) {
+            screen_putchar('\n');
+        }
+        if (multi) {
+            screen_set_color(VGA_LIGHT_CYAN, VGA_BLUE);
+            screen_print(abs);
+            screen_println(":");
+            screen_set_color(VGA_WHITE, VGA_BLUE);
+        }
+
+        ls_list_dir_abs(abs, &opts);
+        first_dir = false;
+    }
+
+    // No operands: list current directory.
+    if (argc - argi <= 0) {
+        char abs[SHELL_PATH_MAX];
+        if (!resolve_path(shell_cwd, ".", abs, sizeof(abs))) {
+            screen_println("Invalid path.");
+            return;
+        }
+        ls_list_dir_abs(abs, &opts);
+    }
 }
 
 static void cmd_mkdir(const char* args) {
@@ -1919,6 +2602,7 @@ void shell_run(void) {
 
     microrl_init(&shell_rl, shell_rl_print);
     microrl_set_execute_callback(&shell_rl, shell_rl_execute);
+    microrl_set_complete_callback(&shell_rl, shell_rl_complete);
     shell_update_prompt();
     screen_set_color(VGA_WHITE, VGA_BLUE);
     microrl_print_prompt(&shell_rl);

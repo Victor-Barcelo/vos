@@ -55,11 +55,15 @@ INITRAMFS_ROOT = $(BUILD_DIR)/initramfs_root
 USER_DIR = user
 USER_BUILD_DIR = $(BUILD_DIR)/user
 USER_ASM_SOURCES = $(USER_DIR)/crt0.asm
-USER_C_SOURCES = $(USER_DIR)/init.c $(USER_DIR)/newlib_syscalls.c
 USER_ASM_OBJECTS = $(USER_BUILD_DIR)/crt0.o
-USER_C_OBJECTS = $(patsubst $(USER_DIR)/%.c,$(USER_BUILD_DIR)/%.o,$(USER_C_SOURCES))
-USER_OBJECTS = $(USER_ASM_OBJECTS) $(USER_C_OBJECTS)
+USER_RUNTIME_C_SOURCES = $(USER_DIR)/newlib_syscalls.c
+USER_RUNTIME_C_OBJECTS = $(patsubst $(USER_DIR)/%.c,$(USER_BUILD_DIR)/%.o,$(USER_RUNTIME_C_SOURCES))
+USER_RUNTIME_OBJECTS = $(USER_ASM_OBJECTS) $(USER_RUNTIME_C_OBJECTS)
+USER_INIT_OBJ = $(USER_BUILD_DIR)/init.o
+USER_ELIZA_OBJ = $(USER_BUILD_DIR)/eliza.o
 USER_INIT = $(USER_BUILD_DIR)/init.elf
+USER_ELIZA = $(USER_BUILD_DIR)/eliza.elf
+USER_BINS = $(USER_INIT) $(USER_ELIZA)
 
 # QEMU defaults
 QEMU_XRES ?= 1920
@@ -106,8 +110,12 @@ $(USER_BUILD_DIR)/%.o: $(USER_DIR)/%.c | $(USER_BUILD_DIR)
 	$(CC) -ffreestanding -fno-stack-protector -fno-pie -Wall -Wextra -O2 -I$(USER_DIR) -c $< -o $@
 
 # Link userland init (static, freestanding)
-$(USER_INIT): $(USER_OBJECTS)
-	$(CC) -nostartfiles -Wl,-T,$(USER_DIR)/linker.ld -Wl,--gc-sections -o $@ $(USER_OBJECTS) -lc -lgcc
+$(USER_INIT): $(USER_RUNTIME_OBJECTS) $(USER_INIT_OBJ)
+	$(CC) -nostartfiles -Wl,-T,$(USER_DIR)/linker.ld -Wl,--gc-sections -o $@ $^ -lc -lgcc
+
+# Link userland eliza (static, freestanding)
+$(USER_ELIZA): $(USER_RUNTIME_OBJECTS) $(USER_ELIZA_OBJ)
+	$(CC) -nostartfiles -Wl,-T,$(USER_DIR)/linker.ld -Wl,--gc-sections -o $@ $^ -lc -lgcc
 
 # Compile C files
 $(BUILD_DIR)/%.o: $(KERNEL_DIR)/%.c | $(BUILD_DIR)
@@ -122,7 +130,7 @@ $(KERNEL): $(OBJECTS)
 	$(LD) $(LDFLAGS) $(OBJECTS) -o $@
 
 # Create bootable ISO
-$(ISO): $(KERNEL) $(USER_INIT) $(FAT_IMG)
+$(ISO): $(KERNEL) $(USER_BINS) $(FAT_IMG)
 	mkdir -p $(ISO_DIR)/boot/grub
 	cp $(KERNEL) $(ISO_DIR)/boot/kernel.bin
 	rm -rf $(INITRAMFS_ROOT)
@@ -130,6 +138,7 @@ $(ISO): $(KERNEL) $(USER_INIT) $(FAT_IMG)
 	if [ -d "$(INITRAMFS_DIR)" ]; then cp -r $(INITRAMFS_DIR)/* $(INITRAMFS_ROOT)/ 2>/dev/null || true ; fi
 	mkdir -p $(INITRAMFS_ROOT)/bin
 	cp $(USER_INIT) $(INITRAMFS_ROOT)/bin/init
+	cp $(USER_ELIZA) $(INITRAMFS_ROOT)/bin/eliza
 	tar -C $(INITRAMFS_ROOT) -cf $(INITRAMFS_TAR) .
 	echo 'set timeout=0' > $(ISO_DIR)/boot/grub/grub.cfg
 	echo 'set default=0' >> $(ISO_DIR)/boot/grub/grub.cfg

@@ -10,6 +10,7 @@ bool vfs_is_ready(void);
 uint32_t vfs_file_count(void);
 const char* vfs_file_name(uint32_t idx);
 uint32_t vfs_file_size(uint32_t idx);
+bool vfs_file_mtime(uint32_t idx, uint16_t* out_wtime, uint16_t* out_wdate);
 
 bool vfs_read_file(const char* path, const uint8_t** out_data, uint32_t* out_size);
 

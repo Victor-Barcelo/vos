@@ -1,5 +1,6 @@
 #include "ramfs.h"
 #include "kheap.h"
+#include "rtc.h"
 #include "string.h"
 #include "ctype.h"
 
@@ -10,10 +11,14 @@ typedef struct ramfs_file {
     char* path;       // canonical, no leading '/'
     uint8_t* data;    // owned
     uint32_t size;
+    uint16_t wtime;
+    uint16_t wdate;
 } ramfs_file_t;
 
 typedef struct ramfs_dir {
     char* path;       // canonical, no leading '/'
+    uint16_t wtime;
+    uint16_t wdate;
 } ramfs_dir_t;
 
 static ramfs_file_t files[RAMFS_MAX_FILES];
@@ -50,6 +55,32 @@ static bool ci_starts_with(const char* s, const char* prefix) {
     return true;
 }
 
+static void ramfs_timestamp_now(uint16_t* out_wtime, uint16_t* out_wdate) {
+    if (out_wtime) *out_wtime = 0;
+    if (out_wdate) *out_wdate = 0;
+
+    rtc_datetime_t dt;
+    if (!rtc_read_datetime(&dt)) {
+        return;
+    }
+    if (dt.year < 1980 || dt.year > 2107 ||
+        dt.month < 1 || dt.month > 12 ||
+        dt.day < 1 || dt.day > 31 ||
+        dt.hour > 23 || dt.minute > 59 || dt.second > 59) {
+        return;
+    }
+
+    uint16_t wdate = (uint16_t)(((uint16_t)(dt.year - 1980) << 9) |
+                               ((uint16_t)dt.month << 5) |
+                               (uint16_t)dt.day);
+    uint16_t wtime = (uint16_t)(((uint16_t)dt.hour << 11) |
+                               ((uint16_t)dt.minute << 5) |
+                               (uint16_t)(dt.second / 2u));
+
+    if (out_wtime) *out_wtime = wtime;
+    if (out_wdate) *out_wdate = wdate;
+}
+
 static char* dup_str(const char* s) {
     if (!s) {
         s = "";
@@ -62,6 +93,42 @@ static char* dup_str(const char* s) {
     memcpy(out, s, len);
     out[len] = '\0';
     return out;
+}
+
+static bool dir_time_rel(const char* rel, uint16_t* out_wtime, uint16_t* out_wdate) {
+    if (out_wtime) *out_wtime = 0;
+    if (out_wdate) *out_wdate = 0;
+    if (!rel || rel[0] == '\0') {
+        return false;
+    }
+
+    for (int i = 0; i < RAMFS_MAX_DIRS; i++) {
+        if (dirs[i].path && ci_eq(dirs[i].path, rel)) {
+            if (out_wtime) *out_wtime = dirs[i].wtime;
+            if (out_wdate) *out_wdate = dirs[i].wdate;
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool build_child_rel(const char* parent_rel, const char* name, char* out, uint32_t out_cap) {
+    if (!parent_rel || !name || !out || out_cap == 0) {
+        return false;
+    }
+    uint32_t parent_len = (uint32_t)strlen(parent_rel);
+    uint32_t name_len = (uint32_t)strlen(name);
+    if (parent_len == 0 || name_len == 0) {
+        return false;
+    }
+    if (parent_len + 1u + name_len + 1u > out_cap) {
+        return false;
+    }
+    memcpy(out, parent_rel, parent_len);
+    out[parent_len] = '/';
+    memcpy(out + parent_len + 1u, name, name_len);
+    out[parent_len + 1u + name_len] = '\0';
+    return true;
 }
 
 static bool normalize_path(const char* in, char* out, uint32_t out_cap) {
@@ -200,12 +267,16 @@ void ramfs_init(void) {
             files[i].data = NULL;
         }
         files[i].size = 0;
+        files[i].wtime = 0;
+        files[i].wdate = 0;
     }
     for (int i = 0; i < RAMFS_MAX_DIRS; i++) {
         if (dirs[i].path) {
             kfree(dirs[i].path);
             dirs[i].path = NULL;
         }
+        dirs[i].wtime = 0;
+        dirs[i].wdate = 0;
     }
     ready = true;
 }
@@ -238,6 +309,47 @@ bool ramfs_is_file(const char* path) {
     return find_file_rel(rel) >= 0;
 }
 
+bool ramfs_stat_ex(const char* path, bool* out_is_dir, uint32_t* out_size, uint16_t* out_wtime, uint16_t* out_wdate) {
+    if (out_is_dir) *out_is_dir = false;
+    if (out_size) *out_size = 0;
+    if (out_wtime) *out_wtime = 0;
+    if (out_wdate) *out_wdate = 0;
+
+    if (!ready) {
+        return false;
+    }
+
+    char rel[128];
+    if (!normalize_path(path, rel, sizeof(rel))) {
+        return false;
+    }
+    if (!is_ram_path(rel) || rel[0] == '\0') {
+        return false;
+    }
+
+    if (ci_eq(rel, "ram")) {
+        if (out_is_dir) *out_is_dir = true;
+        return true;
+    }
+
+    if (dir_exists_rel(rel)) {
+        if (out_is_dir) *out_is_dir = true;
+        (void)dir_time_rel(rel, out_wtime, out_wdate);
+        return true;
+    }
+
+    int idx = find_file_rel(rel);
+    if (idx < 0) {
+        return false;
+    }
+
+    if (out_is_dir) *out_is_dir = false;
+    if (out_size) *out_size = files[idx].size;
+    if (out_wtime) *out_wtime = files[idx].wtime;
+    if (out_wdate) *out_wdate = files[idx].wdate;
+    return true;
+}
+
 bool ramfs_mkdir(const char* path) {
     if (!ready) {
         return false;
@@ -257,6 +369,10 @@ bool ramfs_mkdir(const char* path) {
     // Split by '/', building up prefixes.
     char cur[128];
     cur[0] = '\0';
+
+    uint16_t wtime = 0;
+    uint16_t wdate = 0;
+    ramfs_timestamp_now(&wtime, &wdate);
 
     const char* p = rel;
     uint32_t cur_len = 0;
@@ -303,6 +419,8 @@ bool ramfs_mkdir(const char* path) {
         if (!dirs[slot].path) {
             return false;
         }
+        dirs[slot].wtime = wtime;
+        dirs[slot].wdate = wdate;
     }
 
     return true;
@@ -351,6 +469,8 @@ bool ramfs_write_file(const char* path, const uint8_t* data, uint32_t size, bool
         if (!files[idx].path) {
             return false;
         }
+        files[idx].wtime = 0;
+        files[idx].wdate = 0;
     } else {
         if (files[idx].data) {
             kfree(files[idx].data);
@@ -375,6 +495,7 @@ bool ramfs_write_file(const char* path, const uint8_t* data, uint32_t size, bool
 
     files[idx].data = buf;
     files[idx].size = size;
+    ramfs_timestamp_now(&files[idx].wtime, &files[idx].wdate);
     return true;
 }
 
@@ -445,13 +566,19 @@ bool ramfs_read_file(const char* path, const uint8_t** out_data, uint32_t* out_s
     return files[idx].data != NULL;
 }
 
-static bool add_unique(ramfs_dirent_t* out, uint32_t* count, uint32_t max, const char* name, bool is_dir, uint32_t size) {
+static bool add_unique(ramfs_dirent_t* out, uint32_t* count, uint32_t max, const char* name, bool is_dir, uint32_t size, uint16_t wtime, uint16_t wdate) {
     if (!out || !count || !name || name[0] == '\0') {
         return false;
     }
     for (uint32_t i = 0; i < *count; i++) {
         if (ci_eq(out[i].name, name)) {
             out[i].is_dir = out[i].is_dir || is_dir;
+            uint32_t old_key = ((uint32_t)out[i].wdate << 16) | (uint32_t)out[i].wtime;
+            uint32_t new_key = ((uint32_t)wdate << 16) | (uint32_t)wtime;
+            if (new_key > old_key) {
+                out[i].wtime = wtime;
+                out[i].wdate = wdate;
+            }
             return true;
         }
     }
@@ -462,6 +589,8 @@ static bool add_unique(ramfs_dirent_t* out, uint32_t* count, uint32_t max, const
     out[*count].name[sizeof(out[*count].name) - 1u] = '\0';
     out[*count].is_dir = is_dir;
     out[*count].size = size;
+    out[*count].wtime = wtime;
+    out[*count].wdate = wdate;
     (*count)++;
     return true;
 }
@@ -504,7 +633,13 @@ uint32_t ramfs_list_dir(const char* path, ramfs_dirent_t* out, uint32_t max) {
             seg_len++;
         }
         seg[seg_len] = '\0';
-        add_unique(out, &count, max, seg, true, 0);
+        char child[128];
+        uint16_t wtime = 0;
+        uint16_t wdate = 0;
+        if (build_child_rel(rel, seg, child, sizeof(child))) {
+            (void)dir_time_rel(child, &wtime, &wdate);
+        }
+        add_unique(out, &count, max, seg, true, 0, wtime, wdate);
     }
 
     for (int i = 0; i < RAMFS_MAX_FILES; i++) {
@@ -527,9 +662,18 @@ uint32_t ramfs_list_dir(const char* path, ramfs_dirent_t* out, uint32_t max) {
         }
         seg[seg_len] = '\0';
         bool is_dir = rem[seg_len] == '/';
-        add_unique(out, &count, max, seg, is_dir, is_dir ? 0u : files[i].size);
+        uint16_t wtime = 0;
+        uint16_t wdate = 0;
+        if (is_dir) {
+            char child[128];
+            if (build_child_rel(rel, seg, child, sizeof(child))) {
+                (void)dir_time_rel(child, &wtime, &wdate);
+            }
+            add_unique(out, &count, max, seg, true, 0u, wtime, wdate);
+        } else {
+            add_unique(out, &count, max, seg, false, files[i].size, files[i].wtime, files[i].wdate);
+        }
     }
 
     return count;
 }
-

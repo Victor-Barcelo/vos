@@ -816,6 +816,27 @@ static uint32_t tty_encode_key(int8_t key, uint8_t seq[8]) {
     }
 }
 
+static void tty_echo_key(int8_t key) {
+    if (key == '\n' || key == '\r') {
+        screen_putchar('\n');
+        return;
+    }
+    if (key == '\b') {
+        screen_backspace();
+        return;
+    }
+
+    unsigned char uc = (unsigned char)key;
+    if (uc >= (unsigned char)' ' && uc <= (unsigned char)'~') {
+        screen_putchar((char)uc);
+        return;
+    }
+    if (key == '\t') {
+        screen_putchar('\t');
+        return;
+    }
+}
+
 int32_t tasking_fd_read(int32_t fd, void* dst_user, uint32_t len) {
     if (!current_task || !dst_user) {
         return -EFAULT;
@@ -873,6 +894,9 @@ int32_t tasking_fd_read(int32_t fd, void* dst_user, uint32_t len) {
                 }
             }
             block = false;
+
+            // Basic TTY-style echo for userland stdin.
+            tty_echo_key((int8_t)c);
 
             uint8_t seq[8];
             uint32_t seq_len = tty_encode_key((int8_t)c, seq);

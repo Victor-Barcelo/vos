@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 static void write_le16(uint8_t* p, uint16_t v) {
     p[0] = (uint8_t)(v & 0xFFu);
@@ -15,17 +16,55 @@ static void write_le32(uint8_t* p, uint32_t v) {
     p[3] = (uint8_t)((v >> 24) & 0xFFu);
 }
 
+static void fat_now(uint16_t* out_wtime, uint16_t* out_wdate) {
+    if (out_wtime) *out_wtime = 0;
+    if (out_wdate) *out_wdate = 0;
+
+    time_t t = time(NULL);
+    struct tm* tm = localtime(&t);
+    if (!tm) {
+        return;
+    }
+
+    int year = tm->tm_year + 1900;
+    int month = tm->tm_mon + 1;
+    int day = tm->tm_mday;
+    int hour = tm->tm_hour;
+    int minute = tm->tm_min;
+    int second = tm->tm_sec;
+
+    if (year < 1980 || year > 2107) {
+        return;
+    }
+
+    uint16_t wdate = (uint16_t)(((uint16_t)(year - 1980) << 9) |
+                               ((uint16_t)month << 5) |
+                               (uint16_t)day);
+    uint16_t wtime = (uint16_t)(((uint16_t)hour << 11) |
+                               ((uint16_t)minute << 5) |
+                               (uint16_t)(second / 2));
+
+    if (out_wtime) *out_wtime = wtime;
+    if (out_wdate) *out_wdate = wdate;
+}
+
 static void fat16_set(uint8_t* fat, uint16_t cluster, uint16_t value) {
     uint32_t offset = (uint32_t)cluster * 2u;
     fat[offset + 0] = (uint8_t)(value & 0xFFu);
     fat[offset + 1] = (uint8_t)((value >> 8) & 0xFFu);
 }
 
-static void dir_write_entry(uint8_t* entry, const char* name8, const char* ext3, uint8_t attr, uint16_t first_cluster, uint32_t size) {
+static void dir_write_entry(uint8_t* entry, const char* name8, const char* ext3, uint8_t attr, uint16_t first_cluster, uint32_t size, uint16_t wtime, uint16_t wdate) {
     memset(entry, 0, 32);
     memcpy(entry + 0, name8, 8);
     memcpy(entry + 8, ext3, 3);
     entry[11] = attr;
+    entry[13] = 0; // create time (tenths)
+    write_le16(entry + 14, wtime);
+    write_le16(entry + 16, wdate);
+    write_le16(entry + 18, wdate); // last access date (no time)
+    write_le16(entry + 22, wtime);
+    write_le16(entry + 24, wdate);
     write_le16(entry + 26, first_cluster);
     write_le32(entry + 28, size);
 }
@@ -131,6 +170,10 @@ int main(int argc, char** argv) {
 
     uint16_t next_cluster = 2;
 
+    uint16_t now_time = 0;
+    uint16_t now_date = 0;
+    fat_now(&now_time, &now_date);
+
     // DIR/ (directory with one file)
     {
         uint16_t dir_cluster = next_cluster++;
@@ -139,18 +182,18 @@ int main(int argc, char** argv) {
         char n[8], e[3];
         pad_83(n, "DIR");
         pad_3(e, "");
-        dir_write_entry(root + 0 * 32, n, e, 0x10, dir_cluster, 0);
+        dir_write_entry(root + 0 * 32, n, e, 0x10, dir_cluster, 0, now_time, now_date);
 
         uint32_t dir_off = (first_data_sector + (uint32_t)(dir_cluster - 2u) * sectors_per_cluster) * bytes_per_sector;
         uint8_t* dir = image + dir_off;
 
         pad_83(n, ".");
         pad_3(e, "");
-        dir_write_entry(dir + 0 * 32, n, e, 0x10, dir_cluster, 0);
+        dir_write_entry(dir + 0 * 32, n, e, 0x10, dir_cluster, 0, now_time, now_date);
 
         pad_83(n, "..");
         pad_3(e, "");
-        dir_write_entry(dir + 1 * 32, n, e, 0x10, 0, 0);
+        dir_write_entry(dir + 1 * 32, n, e, 0x10, 0, 0, now_time, now_date);
 
         uint16_t nested_cluster = next_cluster++;
         fat16_set(fat1, nested_cluster, 0xFFFFu);
@@ -159,7 +202,7 @@ int main(int argc, char** argv) {
 
         pad_83(n, "NESTED");
         pad_3(e, "TXT");
-        dir_write_entry(dir + 2 * 32, n, e, 0x20, nested_cluster, (uint32_t)(sizeof(nested_text) - 1u));
+        dir_write_entry(dir + 2 * 32, n, e, 0x20, nested_cluster, (uint32_t)(sizeof(nested_text) - 1u), now_time, now_date);
     }
 
     // HELLO.TXT (1 cluster)
@@ -172,7 +215,7 @@ int main(int argc, char** argv) {
         char n[8], e[3];
         pad_83(n, "HELLO");
         pad_3(e, "TXT");
-        dir_write_entry(root + 1 * 32, n, e, 0x20, start, (uint32_t)(sizeof(hello_text) - 1u));
+        dir_write_entry(root + 1 * 32, n, e, 0x20, start, (uint32_t)(sizeof(hello_text) - 1u), now_time, now_date);
     }
 
     // BIG.TXT (multiple clusters)
@@ -204,7 +247,7 @@ int main(int argc, char** argv) {
         char n[8], e[3];
         pad_83(n, "BIG");
         pad_3(e, "TXT");
-        dir_write_entry(root + 2 * 32, n, e, 0x20, start, size);
+        dir_write_entry(root + 2 * 32, n, e, 0x20, start, size, now_time, now_date);
     }
 
     memcpy(fat2, fat1, fat_bytes);

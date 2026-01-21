@@ -29,11 +29,89 @@ typedef struct vfs_file {
     char* name;
     const uint8_t* data;
     uint32_t size;
+    uint16_t wtime;
+    uint16_t wdate;
 } vfs_file_t;
 
 static vfs_file_t* files = NULL;
 static uint32_t file_count = 0;
 static bool ready = false;
+
+static bool is_leap_year_u32(uint32_t year) {
+    return (year % 4u == 0u && year % 100u != 0u) || (year % 400u == 0u);
+}
+
+static uint8_t days_in_month_u32(uint32_t year, uint8_t month) {
+    static const uint8_t days[] = {31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
+    if (month < 1 || month > 12) {
+        return 31;
+    }
+    uint8_t d = days[month - 1u];
+    if (month == 2 && is_leap_year_u32(year)) {
+        d = 29;
+    }
+    return d;
+}
+
+static void epoch_to_fat_ts(uint32_t epoch, uint16_t* out_wtime, uint16_t* out_wdate) {
+    if (out_wtime) *out_wtime = 0;
+    if (out_wdate) *out_wdate = 0;
+
+    if (epoch == 0) {
+        return;
+    }
+
+    uint32_t days = epoch / 86400u;
+    uint32_t rem = epoch % 86400u;
+
+    uint8_t hour = (uint8_t)(rem / 3600u);
+    rem %= 3600u;
+    uint8_t minute = (uint8_t)(rem / 60u);
+    uint8_t second = (uint8_t)(rem % 60u);
+
+    uint32_t year = 1970u;
+    while (year < 2108u) {
+        uint32_t diy = is_leap_year_u32(year) ? 366u : 365u;
+        if (days < diy) {
+            break;
+        }
+        days -= diy;
+        year++;
+    }
+
+    uint8_t month = 1;
+    while (month <= 12) {
+        uint32_t dim = days_in_month_u32(year, month);
+        if (days < dim) {
+            break;
+        }
+        days -= dim;
+        month++;
+    }
+    uint8_t day = (uint8_t)(days + 1u);
+
+    if (year < 1980u) {
+        return;
+    }
+    if (year > 2107u) {
+        year = 2107u;
+        month = 12;
+        day = 31;
+        hour = 23;
+        minute = 59;
+        second = 58;
+    }
+
+    uint16_t wdate = (uint16_t)(((uint16_t)(year - 1980u) << 9) |
+                               ((uint16_t)month << 5) |
+                               (uint16_t)day);
+    uint16_t wtime = (uint16_t)(((uint16_t)hour << 11) |
+                               ((uint16_t)minute << 5) |
+                               (uint16_t)(second / 2u));
+
+    if (out_wtime) *out_wtime = wtime;
+    if (out_wdate) *out_wdate = wdate;
+}
 
 static uint32_t align_up_512(uint32_t v) {
     return (v + 511u) & ~511u;
@@ -147,6 +225,7 @@ static uint32_t tar_fill_files(vfs_file_t* out_files, uint32_t max_files, const 
 
         const tar_header_t* h = (const tar_header_t*)block;
         uint32_t size = parse_octal_u32(h->size, sizeof(h->size));
+        uint32_t mtime = parse_octal_u32(h->mtime, sizeof(h->mtime));
         char type = h->typeflag;
         const uint8_t* data = block + 512u;
 
@@ -162,6 +241,7 @@ static uint32_t tar_fill_files(vfs_file_t* out_files, uint32_t max_files, const 
             out_files[idx].name = dup_path(prefix_buf, name_buf);
             out_files[idx].data = data;
             out_files[idx].size = size;
+            epoch_to_fat_ts(mtime, &out_files[idx].wtime, &out_files[idx].wdate);
             idx++;
         }
 
@@ -635,6 +715,8 @@ static uint32_t fat_fill_dir_chain_files(vfs_file_t* out_files, uint32_t start_i
 
             uint16_t first_cluster = read_le16(e + 26);
             uint32_t size = read_le32(e + 28);
+            uint16_t wtime = read_le16(e + 22);
+            uint16_t wdate = read_le16(e + 24);
 
             uint8_t* data = NULL;
             if (!fat_read_file_alloc(fs, first_cluster, size, &data)) {
@@ -644,6 +726,8 @@ static uint32_t fat_fill_dir_chain_files(vfs_file_t* out_files, uint32_t start_i
             out_files[idx].name = dup_path(prefix, name);
             out_files[idx].data = data;
             out_files[idx].size = size;
+            out_files[idx].wtime = wtime;
+            out_files[idx].wdate = wdate;
             idx++;
         }
 
@@ -703,6 +787,8 @@ static uint32_t fat_fill_root_files(vfs_file_t* out_files, uint32_t start_idx, u
 
         uint16_t first_cluster = read_le16(e + 26);
         uint32_t size = read_le32(e + 28);
+        uint16_t wtime = read_le16(e + 22);
+        uint16_t wdate = read_le16(e + 24);
 
         uint8_t* data = NULL;
         if (!fat_read_file_alloc(fs, first_cluster, size, &data)) {
@@ -712,6 +798,8 @@ static uint32_t fat_fill_root_files(vfs_file_t* out_files, uint32_t start_idx, u
         out_files[idx].name = dup_path("fat", name);
         out_files[idx].data = data;
         out_files[idx].size = size;
+        out_files[idx].wtime = wtime;
+        out_files[idx].wdate = wdate;
         idx++;
     }
 
@@ -807,6 +895,17 @@ uint32_t vfs_file_size(uint32_t idx) {
         return 0;
     }
     return files[idx].size;
+}
+
+bool vfs_file_mtime(uint32_t idx, uint16_t* out_wtime, uint16_t* out_wdate) {
+    if (out_wtime) *out_wtime = 0;
+    if (out_wdate) *out_wdate = 0;
+    if (idx >= file_count) {
+        return false;
+    }
+    if (out_wtime) *out_wtime = files[idx].wtime;
+    if (out_wdate) *out_wdate = files[idx].wdate;
+    return true;
 }
 
 static bool path_equals_ci(const char* a, const char* b) {

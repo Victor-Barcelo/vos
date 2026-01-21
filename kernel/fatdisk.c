@@ -3,6 +3,7 @@
 #include "ctype.h"
 #include "io.h"
 #include "kheap.h"
+#include "rtc.h"
 #include "serial.h"
 #include "string.h"
 
@@ -49,6 +50,37 @@ static uint32_t read_le32(const uint8_t* p) {
            ((uint32_t)p[1] << 8) |
            ((uint32_t)p[2] << 16) |
            ((uint32_t)p[3] << 24);
+}
+
+static void write_le16(uint8_t* p, uint16_t v) {
+    p[0] = (uint8_t)(v & 0xFFu);
+    p[1] = (uint8_t)((v >> 8) & 0xFFu);
+}
+
+static void fat_dirent_best_ts(const uint8_t e[32], uint16_t* out_wtime, uint16_t* out_wdate) {
+    if (out_wtime) *out_wtime = 0;
+    if (out_wdate) *out_wdate = 0;
+    if (!e) {
+        return;
+    }
+
+    uint16_t wtime = read_le16(e + 22);
+    uint16_t wdate = read_le16(e + 24);
+
+    if (wdate == 0) {
+        // Try create time/date.
+        wtime = read_le16(e + 14);
+        wdate = read_le16(e + 16);
+    }
+
+    if (wdate == 0) {
+        // Try last access date (no time field).
+        wtime = 0;
+        wdate = read_le16(e + 18);
+    }
+
+    if (out_wtime) *out_wtime = wtime;
+    if (out_wdate) *out_wdate = wdate;
 }
 
 static bool disk_read(uint32_t lba, uint8_t* out) {
@@ -106,6 +138,51 @@ static bool name11_eq(const uint8_t* a, const uint8_t* b) {
         }
     }
     return true;
+}
+
+static void fat_timestamp_now(uint16_t* out_wtime, uint16_t* out_wdate) {
+    if (out_wtime) *out_wtime = 0;
+    if (out_wdate) *out_wdate = 0;
+
+    rtc_datetime_t dt;
+    if (!rtc_read_datetime(&dt)) {
+        return;
+    }
+    if (dt.year < 1980 || dt.year > 2107 ||
+        dt.month < 1 || dt.month > 12 ||
+        dt.day < 1 || dt.day > 31 ||
+        dt.hour > 23 || dt.minute > 59 || dt.second > 59) {
+        return;
+    }
+
+    uint16_t wdate = (uint16_t)(((uint16_t)(dt.year - 1980) << 9) |
+                               ((uint16_t)dt.month << 5) |
+                               (uint16_t)dt.day);
+    uint16_t wtime = (uint16_t)(((uint16_t)dt.hour << 11) |
+                               ((uint16_t)dt.minute << 5) |
+                               (uint16_t)(dt.second / 2u));
+
+    if (out_wtime) *out_wtime = wtime;
+    if (out_wdate) *out_wdate = wdate;
+}
+
+static void fat_stamp_dirent(uint8_t e[32], uint16_t wtime, uint16_t wdate, bool set_create_fields) {
+    if (!e) {
+        return;
+    }
+
+    // Last access date (date only).
+    write_le16(e + 18, wdate);
+
+    // Last write time/date.
+    write_le16(e + 22, wtime);
+    write_le16(e + 24, wdate);
+
+    if (set_create_fields) {
+        e[13] = 0; // create time (tenths)
+        write_le16(e + 14, wtime);
+        write_le16(e + 16, wdate);
+    }
 }
 
 static const char* fatdisk_strip_mount(const char* abs_path) {
@@ -967,6 +1044,61 @@ bool fatdisk_stat(const char* abs_path, bool* out_is_dir, uint32_t* out_size) {
     return true;
 }
 
+bool fatdisk_stat_ex(const char* abs_path, bool* out_is_dir, uint32_t* out_size, uint16_t* out_wtime, uint16_t* out_wdate) {
+    if (out_is_dir) {
+        *out_is_dir = false;
+    }
+    if (out_size) {
+        *out_size = 0;
+    }
+    if (out_wtime) {
+        *out_wtime = 0;
+    }
+    if (out_wdate) {
+        *out_wdate = 0;
+    }
+    if (!g_fs.ready || !abs_path) {
+        return false;
+    }
+
+    if (is_root_path(abs_path)) {
+        if (out_is_dir) *out_is_dir = true;
+        if (out_size) *out_size = 0;
+        return true;
+    }
+
+    dir_loc_t loc;
+    uint8_t ent[32];
+    if (!lookup_path_entry(abs_path, &loc, ent)) {
+        return false;
+    }
+
+    bool is_dir = (ent[11] & FAT_ATTR_DIR) != 0;
+    if (out_is_dir) {
+        *out_is_dir = is_dir;
+    }
+    if (out_size) {
+        *out_size = is_dir ? 0u : read_le32(ent + 28);
+    }
+    uint16_t wtime = 0;
+    uint16_t wdate = 0;
+    fat_dirent_best_ts(ent, &wtime, &wdate);
+
+    // Backfill missing timestamps for legacy images/files that had zeros.
+    if (wdate == 0) {
+        fat_timestamp_now(&wtime, &wdate);
+        if (wdate != 0) {
+            fat_stamp_dirent(ent, wtime, wdate, true);
+            (void)write_dir_entry_at(loc, ent);
+            (void)ata_flush();
+        }
+    }
+
+    if (out_wtime) *out_wtime = wtime;
+    if (out_wdate) *out_wdate = wdate;
+    return true;
+}
+
 uint32_t fatdisk_list_dir(const char* abs_path, fatdisk_dirent_t* out, uint32_t max) {
     if (!g_fs.ready || !out || max == 0) {
         return 0;
@@ -996,6 +1128,8 @@ uint32_t fatdisk_list_dir(const char* abs_path, fatdisk_dirent_t* out, uint32_t 
     uint32_t count = 0;
     uint8_t sec[SECTOR_SIZE];
 
+    bool wrote_any = false;
+
     if (dir.is_root) {
         uint32_t total = g_fs.root_dir_sectors;
         for (uint32_t s = 0; s < total && count < max; s++) {
@@ -1003,9 +1137,16 @@ uint32_t fatdisk_list_dir(const char* abs_path, fatdisk_dirent_t* out, uint32_t 
             if (!disk_read(lba, sec)) {
                 break;
             }
+            bool dirty_sector = false;
             for (uint32_t off = 0; off + 32u <= SECTOR_SIZE && count < max; off += 32u) {
-                const uint8_t* e = sec + off;
+                uint8_t* e = sec + off;
                 if (e[0] == 0x00) {
+                    if (dirty_sector) {
+                        wrote_any |= disk_write(lba, sec);
+                    }
+                    if (wrote_any) {
+                        (void)ata_flush();
+                    }
                     return count;
                 }
                 if (!dir_entry_is_valid(e)) {
@@ -1014,8 +1155,26 @@ uint32_t fatdisk_list_dir(const char* abs_path, fatdisk_dirent_t* out, uint32_t 
                 fat_name_from_entry(e, out[count].name, sizeof(out[count].name));
                 out[count].is_dir = (e[11] & FAT_ATTR_DIR) != 0;
                 out[count].size = out[count].is_dir ? 0u : read_le32(e + 28);
+                uint16_t wtime = 0;
+                uint16_t wdate = 0;
+                fat_dirent_best_ts(e, &wtime, &wdate);
+                if (wdate == 0) {
+                    fat_timestamp_now(&wtime, &wdate);
+                    if (wdate != 0) {
+                        fat_stamp_dirent(e, wtime, wdate, true);
+                        dirty_sector = true;
+                    }
+                }
+                out[count].wtime = wtime;
+                out[count].wdate = wdate;
                 count++;
             }
+            if (dirty_sector) {
+                wrote_any |= disk_write(lba, sec);
+            }
+        }
+        if (wrote_any) {
+            (void)ata_flush();
         }
         return count;
     }
@@ -1030,11 +1189,21 @@ uint32_t fatdisk_list_dir(const char* abs_path, fatdisk_dirent_t* out, uint32_t 
         for (uint32_t si = 0; si < g_fs.sectors_per_cluster && count < max; si++) {
             uint32_t lba = base + si;
             if (!disk_read(lba, sec)) {
+                if (wrote_any) {
+                    (void)ata_flush();
+                }
                 return count;
             }
+            bool dirty_sector = false;
             for (uint32_t off = 0; off + 32u <= SECTOR_SIZE && count < max; off += 32u) {
-                const uint8_t* e = sec + off;
+                uint8_t* e = sec + off;
                 if (e[0] == 0x00) {
+                    if (dirty_sector) {
+                        wrote_any |= disk_write(lba, sec);
+                    }
+                    if (wrote_any) {
+                        (void)ata_flush();
+                    }
                     return count;
                 }
                 if (!dir_entry_is_valid(e)) {
@@ -1043,7 +1212,22 @@ uint32_t fatdisk_list_dir(const char* abs_path, fatdisk_dirent_t* out, uint32_t 
                 fat_name_from_entry(e, out[count].name, sizeof(out[count].name));
                 out[count].is_dir = (e[11] & FAT_ATTR_DIR) != 0;
                 out[count].size = out[count].is_dir ? 0u : read_le32(e + 28);
+                uint16_t wtime = 0;
+                uint16_t wdate = 0;
+                fat_dirent_best_ts(e, &wtime, &wdate);
+                if (wdate == 0) {
+                    fat_timestamp_now(&wtime, &wdate);
+                    if (wdate != 0) {
+                        fat_stamp_dirent(e, wtime, wdate, true);
+                        dirty_sector = true;
+                    }
+                }
+                out[count].wtime = wtime;
+                out[count].wdate = wdate;
                 count++;
+            }
+            if (dirty_sector) {
+                wrote_any |= disk_write(lba, sec);
             }
         }
 
@@ -1054,6 +1238,9 @@ uint32_t fatdisk_list_dir(const char* abs_path, fatdisk_dirent_t* out, uint32_t 
         cluster = next;
     }
 
+    if (wrote_any) {
+        (void)ata_flush();
+    }
     return count;
 }
 
@@ -1151,6 +1338,10 @@ bool fatdisk_write_file(const char* abs_path, const uint8_t* data, uint32_t size
         return false;
     }
 
+    uint16_t wtime = 0;
+    uint16_t wdate = 0;
+    fat_timestamp_now(&wtime, &wdate);
+
     if (!exists) {
         dir_loc_t slot;
         if (!dir_find_free_slot(parent, &slot)) {
@@ -1164,6 +1355,7 @@ bool fatdisk_write_file(const char* abs_path, const uint8_t* data, uint32_t size
         memset(newe, 0, sizeof(newe));
         memcpy(newe + 0, name11, 11);
         newe[11] = FAT_ATTR_ARCHIVE;
+        fat_stamp_dirent(newe, wtime, wdate, true);
         newe[26] = (uint8_t)(start_cluster & 0xFFu);
         newe[27] = (uint8_t)((start_cluster >> 8) & 0xFFu);
         newe[28] = (uint8_t)(size & 0xFFu);
@@ -1179,6 +1371,7 @@ bool fatdisk_write_file(const char* abs_path, const uint8_t* data, uint32_t size
         }
     } else {
         ent[11] = FAT_ATTR_ARCHIVE;
+        fat_stamp_dirent(ent, wtime, wdate, false);
         ent[26] = (uint8_t)(start_cluster & 0xFFu);
         ent[27] = (uint8_t)((start_cluster >> 8) & 0xFFu);
         ent[28] = (uint8_t)(size & 0xFFu);
@@ -1256,6 +1449,12 @@ bool fatdisk_mkdir(const char* abs_path) {
     dotdot[26] = (uint8_t)(parent_cluster & 0xFFu);
     dotdot[27] = (uint8_t)((parent_cluster >> 8) & 0xFFu);
 
+    uint16_t wtime = 0;
+    uint16_t wdate = 0;
+    fat_timestamp_now(&wtime, &wdate);
+    fat_stamp_dirent(dot, wtime, wdate, true);
+    fat_stamp_dirent(dotdot, wtime, wdate, true);
+
     memcpy(sec + 0, dot, 32);
     memcpy(sec + 32, dotdot, 32);
     if (!disk_write(base, sec)) {
@@ -1273,6 +1472,7 @@ bool fatdisk_mkdir(const char* abs_path) {
     memset(e, 0, sizeof(e));
     memcpy(e + 0, name11, 11);
     e[11] = FAT_ATTR_DIR;
+    fat_stamp_dirent(e, wtime, wdate, true);
     e[26] = (uint8_t)(new_cluster & 0xFFu);
     e[27] = (uint8_t)((new_cluster >> 8) & 0xFFu);
     if (!write_dir_entry_at(slot, e)) {

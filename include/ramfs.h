@@ -22,6 +22,8 @@ bool ramfs_stat_ex(const char* path, bool* out_is_dir, uint32_t* out_size, uint1
 bool ramfs_mkdir(const char* path);
 bool ramfs_write_file(const char* path, const uint8_t* data, uint32_t size, bool overwrite);
 bool ramfs_rename(const char* old_path, const char* new_path);
+bool ramfs_unlink(const char* path);
+bool ramfs_rmdir(const char* path);
 
 bool ramfs_read_file(const char* path, const uint8_t** out_data, uint32_t* out_size);
 uint32_t ramfs_list_dir(const char* path, ramfs_dirent_t* out, uint32_t max);

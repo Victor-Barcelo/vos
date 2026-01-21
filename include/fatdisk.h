@@ -31,5 +31,7 @@ bool fatdisk_read_file_alloc(const char* abs_path, uint8_t** out_data, uint32_t*
 bool fatdisk_write_file(const char* abs_path, const uint8_t* data, uint32_t size, bool overwrite);
 bool fatdisk_mkdir(const char* abs_path);
 bool fatdisk_rename(const char* abs_old, const char* abs_new);
+bool fatdisk_unlink(const char* abs_path);
+bool fatdisk_rmdir(const char* abs_path);
 
 #endif

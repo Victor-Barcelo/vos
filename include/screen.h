@@ -33,6 +33,7 @@ void screen_init(uint32_t multiboot_magic, uint32_t* mboot_info);
 // Current screen text dimensions (in character cells)
 int screen_cols(void);
 int screen_rows(void);
+int screen_usable_rows(void);
 
 // Clear the screen
 void screen_clear(void);

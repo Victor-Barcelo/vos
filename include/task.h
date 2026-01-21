@@ -50,8 +50,8 @@ interrupt_frame_t* tasking_sleep_until(interrupt_frame_t* frame, uint32_t wake_t
 // Wait for a task to exit (returns exit code in EAX via the syscall frame).
 interrupt_frame_t* tasking_wait(interrupt_frame_t* frame, uint32_t pid);
 
-// Kill a task by pid (best-effort).
-bool tasking_kill(uint32_t pid, int32_t exit_code);
+// Kill a task by pid. Returns 0 on success, or -errno.
+int32_t tasking_kill(uint32_t pid, int32_t exit_code);
 
 // Adjust the user heap break (sbrk-style). Returns previous brk in EAX or -1.
 interrupt_frame_t* tasking_sbrk(interrupt_frame_t* frame, int32_t increment);
@@ -68,5 +68,19 @@ int32_t tasking_mkdir(const char* path);
 int32_t tasking_readdir(int32_t fd, void* dirent_user);
 int32_t tasking_chdir(const char* path);
 int32_t tasking_getcwd(void* dst_user, uint32_t len);
+int32_t tasking_fd_ioctl(int32_t fd, uint32_t req, void* argp_user);
+int32_t tasking_unlink(const char* path);
+int32_t tasking_rename(const char* old_path, const char* new_path);
+int32_t tasking_rmdir(const char* path);
+int32_t tasking_truncate(const char* path, uint32_t new_size);
+int32_t tasking_fd_ftruncate(int32_t fd, uint32_t new_size);
+int32_t tasking_fd_fsync(int32_t fd);
+int32_t tasking_fd_dup(int32_t oldfd);
+int32_t tasking_fd_dup2(int32_t oldfd, int32_t newfd);
+int32_t tasking_pipe(void* pipefds_user);
+
+// Spawn a new user process by loading an ELF from the VFS, inheriting the
+// caller's cwd/tty settings. Returns pid (>0) on success or -errno.
+int32_t tasking_spawn_exec(const char* path, const char* const* argv, uint32_t argc);
 
 #endif

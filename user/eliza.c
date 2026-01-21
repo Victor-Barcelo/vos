@@ -173,7 +173,9 @@ static void readline(char *instr) {
     instr[slen] = '\0';
 }
 
-int main(void) {
+int main(int argc, char** argv) {
+    (void)argc;
+    (void)argv;
     int k, baseLength;
     int whichReply[NUMKEYWORDS];
     char lastinput[MAXLINELEN];

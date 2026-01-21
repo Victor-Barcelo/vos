@@ -3,6 +3,7 @@
 #include "pmm.h"
 #include "serial.h"
 #include "string.h"
+#include "usercopy.h"
 
 #define EI_NIDENT 16
 
@@ -24,6 +25,8 @@
 
 #define USER_STACK_TOP 0x02000000u
 #define USER_STACK_PAGES 8u
+
+#define ELF_ARG_MAX 32u
 
 typedef struct elf32_ehdr {
     uint8_t e_ident[EI_NIDENT];
@@ -117,6 +120,108 @@ static bool map_user_stack(uint32_t* out_user_esp) {
     if (out_user_esp) {
         *out_user_esp = stack_top;
     }
+    return true;
+}
+
+static uint32_t user_stack_bottom(void) {
+    return USER_STACK_TOP - USER_STACK_PAGES * PAGE_SIZE;
+}
+
+static bool push_u32(uint32_t* sp, uint32_t value) {
+    if (!sp || *sp < 4u) {
+        return false;
+    }
+    *sp -= 4u;
+    return copy_to_user((void*)(*sp), &value, 4u);
+}
+
+bool elf_setup_user_stack(uint32_t* inout_user_esp, const char* const* argv, uint32_t argc) {
+    if (!inout_user_esp) {
+        return false;
+    }
+    if (argc > 0 && !argv) {
+        return false;
+    }
+    if (argc > ELF_ARG_MAX) {
+        return false;
+    }
+
+    uint32_t sp = *inout_user_esp;
+    if (sp > USER_STACK_TOP) {
+        sp = USER_STACK_TOP;
+    }
+    uint32_t stack_bot = user_stack_bottom();
+    if (sp < stack_bot) {
+        return false;
+    }
+
+    uint32_t argv_ptrs[ELF_ARG_MAX];
+    for (uint32_t i = 0; i < argc; i++) {
+        argv_ptrs[i] = 0;
+    }
+
+    // Copy argument strings onto the stack (in reverse order).
+    for (uint32_t i = 0; i < argc; i++) {
+        const char* s = argv[argc - 1u - i];
+        if (!s) {
+            s = "";
+        }
+        uint32_t len = (uint32_t)strlen(s) + 1u;
+        if (len == 0) {
+            len = 1u;
+        }
+        if (sp < len || sp - len < stack_bot) {
+            return false;
+        }
+        sp -= len;
+        if (!copy_to_user((void*)sp, s, len)) {
+            return false;
+        }
+        argv_ptrs[argc - 1u - i] = sp;
+    }
+
+    // Align to 4 bytes.
+    sp &= ~3u;
+    if (sp < stack_bot) {
+        return false;
+    }
+
+    // Ensure final SP is 16-byte aligned after pushing argc/argv/envp.
+    uint32_t ptr_bytes = (argc + 3u) * 4u; // argc + argv[argc] + envp[0] + argv pointers
+    if (sp < ptr_bytes || sp - ptr_bytes < stack_bot) {
+        return false;
+    }
+    uint32_t sp_final = sp - ptr_bytes;
+    uint32_t sp_aligned = sp_final & ~0xFu;
+    uint32_t padding = sp_final - sp_aligned;
+    if (padding) {
+        if (sp < padding || sp - padding < stack_bot) {
+            return false;
+        }
+        sp -= padding;
+    }
+
+    // envp terminator (no environment)
+    if (!push_u32(&sp, 0u)) {
+        return false;
+    }
+    // argv terminator
+    if (!push_u32(&sp, 0u)) {
+        return false;
+    }
+    // argv pointers
+    for (uint32_t i = 0; i < argc; i++) {
+        uint32_t idx = argc - 1u - i;
+        if (!push_u32(&sp, argv_ptrs[idx])) {
+            return false;
+        }
+    }
+    // argc
+    if (!push_u32(&sp, argc)) {
+        return false;
+    }
+
+    *inout_user_esp = sp;
     return true;
 }
 

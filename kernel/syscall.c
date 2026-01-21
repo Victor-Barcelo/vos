@@ -3,8 +3,12 @@
 #include "task.h"
 #include "usercopy.h"
 #include "timer.h"
+#include "rtc.h"
 #include "vfs.h"
 #include "kerrno.h"
+#include "statusbar.h"
+#include "system.h"
+#include "string.h"
 
 enum {
     SYS_WRITE = 0,
@@ -25,7 +29,71 @@ enum {
     SYS_READDIR = 15,
     SYS_CHDIR = 16,
     SYS_GETCWD = 17,
+    SYS_IOCTL = 18,
+    SYS_UNLINK = 19,
+    SYS_RENAME = 20,
+    SYS_RMDIR = 21,
+    SYS_TRUNCATE = 22,
+    SYS_FTRUNCATE = 23,
+    SYS_FSYNC = 24,
+    SYS_DUP = 25,
+    SYS_DUP2 = 26,
+    SYS_PIPE = 27,
+    SYS_GETPID = 28,
+    SYS_SPAWN = 29,
+    SYS_UPTIME_MS = 30,
+    SYS_RTC_GET = 31,
+    SYS_RTC_SET = 32,
+    SYS_TASK_COUNT = 33,
+    SYS_TASK_INFO = 34,
+    SYS_SCREEN_IS_FB = 35,
+    SYS_GFX_CLEAR = 36,
+    SYS_GFX_PSET = 37,
+    SYS_GFX_LINE = 38,
+    SYS_MEM_TOTAL_KB = 39,
+    SYS_CPU_VENDOR = 40,
+    SYS_CPU_BRAND = 41,
+    SYS_VFS_FILE_COUNT = 42,
 };
+
+typedef struct vos_task_info_user {
+    uint32_t pid;
+    uint32_t user;
+    uint32_t state;
+    uint32_t cpu_ticks;
+    uint32_t eip;
+    uint32_t esp;
+    int32_t exit_code;
+    uint32_t wake_tick;
+    uint32_t wait_pid;
+    char name[16];
+} vos_task_info_user_t;
+
+static int32_t copy_kernel_string_to_user(char* dst_user, uint32_t cap, const char* src) {
+    if (cap == 0) {
+        return -EINVAL;
+    }
+    if (!dst_user) {
+        return -EFAULT;
+    }
+    if (!src) {
+        src = "";
+    }
+
+    uint32_t n = (uint32_t)strlen(src);
+    if (n >= cap) {
+        n = cap - 1u;
+    }
+
+    if (n != 0 && !copy_to_user(dst_user, src, n)) {
+        return -EFAULT;
+    }
+    char z = '\0';
+    if (!copy_to_user(dst_user + n, &z, 1u)) {
+        return -EFAULT;
+    }
+    return 0;
+}
 
 static bool copy_user_cstring(char* dst, uint32_t dst_cap, const char* src_user) {
     if (!dst || dst_cap == 0) {
@@ -97,8 +165,8 @@ interrupt_frame_t* syscall_handle(interrupt_frame_t* frame) {
         case SYS_KILL: {
             uint32_t pid = frame->ebx;
             int32_t code = (int32_t)frame->ecx;
-            bool ok = tasking_kill(pid, code);
-            frame->eax = ok ? 0u : (uint32_t)-1;
+            int32_t rc = tasking_kill(pid, code);
+            frame->eax = (uint32_t)rc;
             return frame;
         }
         case SYS_SBRK:
@@ -255,6 +323,299 @@ interrupt_frame_t* syscall_handle(interrupt_frame_t* frame) {
             uint32_t len = frame->ecx;
             int32_t rc = tasking_getcwd(buf_user, len);
             frame->eax = (uint32_t)rc;
+            return frame;
+        }
+        case SYS_IOCTL: {
+            int32_t fd = (int32_t)frame->ebx;
+            uint32_t req = frame->ecx;
+            void* argp_user = (void*)frame->edx;
+            int32_t rc = tasking_fd_ioctl(fd, req, argp_user);
+            frame->eax = (uint32_t)rc;
+            return frame;
+        }
+        case SYS_UNLINK: {
+            const char* path_user = (const char*)frame->ebx;
+
+            char path[128];
+            if (!copy_user_cstring(path, sizeof(path), path_user)) {
+                frame->eax = (uint32_t)-EINVAL;
+                return frame;
+            }
+
+            int32_t rc = tasking_unlink(path);
+            frame->eax = (uint32_t)rc;
+            return frame;
+        }
+        case SYS_RENAME: {
+            const char* old_user = (const char*)frame->ebx;
+            const char* new_user = (const char*)frame->ecx;
+
+            char oldp[128];
+            char newp[128];
+            if (!copy_user_cstring(oldp, sizeof(oldp), old_user) || !copy_user_cstring(newp, sizeof(newp), new_user)) {
+                frame->eax = (uint32_t)-EINVAL;
+                return frame;
+            }
+
+            int32_t rc = tasking_rename(oldp, newp);
+            frame->eax = (uint32_t)rc;
+            return frame;
+        }
+        case SYS_RMDIR: {
+            const char* path_user = (const char*)frame->ebx;
+
+            char path[128];
+            if (!copy_user_cstring(path, sizeof(path), path_user)) {
+                frame->eax = (uint32_t)-EINVAL;
+                return frame;
+            }
+
+            int32_t rc = tasking_rmdir(path);
+            frame->eax = (uint32_t)rc;
+            return frame;
+        }
+        case SYS_TRUNCATE: {
+            const char* path_user = (const char*)frame->ebx;
+            uint32_t new_size = frame->ecx;
+
+            char path[128];
+            if (!copy_user_cstring(path, sizeof(path), path_user)) {
+                frame->eax = (uint32_t)-EINVAL;
+                return frame;
+            }
+
+            int32_t rc = tasking_truncate(path, new_size);
+            frame->eax = (uint32_t)rc;
+            return frame;
+        }
+        case SYS_FTRUNCATE: {
+            int32_t fd = (int32_t)frame->ebx;
+            uint32_t new_size = frame->ecx;
+            int32_t rc = tasking_fd_ftruncate(fd, new_size);
+            frame->eax = (uint32_t)rc;
+            return frame;
+        }
+        case SYS_FSYNC: {
+            int32_t fd = (int32_t)frame->ebx;
+            int32_t rc = tasking_fd_fsync(fd);
+            frame->eax = (uint32_t)rc;
+            return frame;
+        }
+        case SYS_DUP: {
+            int32_t oldfd = (int32_t)frame->ebx;
+            int32_t rc = tasking_fd_dup(oldfd);
+            frame->eax = (uint32_t)rc;
+            return frame;
+        }
+        case SYS_DUP2: {
+            int32_t oldfd = (int32_t)frame->ebx;
+            int32_t newfd = (int32_t)frame->ecx;
+            int32_t rc = tasking_fd_dup2(oldfd, newfd);
+            frame->eax = (uint32_t)rc;
+            return frame;
+        }
+        case SYS_PIPE: {
+            void* pipefds_user = (void*)frame->ebx;
+            int32_t rc = tasking_pipe(pipefds_user);
+            frame->eax = (uint32_t)rc;
+            return frame;
+        }
+        case SYS_GETPID: {
+            frame->eax = tasking_current_pid();
+            return frame;
+        }
+        case SYS_SPAWN: {
+            const char* path_user = (const char*)frame->ebx;
+            const char* const* argv_user = (const char* const*)frame->ecx;
+            uint32_t argc = frame->edx;
+
+            if (argc > 32u) {
+                frame->eax = (uint32_t)-EINVAL;
+                return frame;
+            }
+
+            char path[128];
+            if (!copy_user_cstring(path, sizeof(path), path_user)) {
+                frame->eax = (uint32_t)-EFAULT;
+                return frame;
+            }
+
+            const char* kargv[32];
+            char argv_buf[32][128];
+
+            if (argc != 0 && argv_user) {
+                for (uint32_t i = 0; i < argc; i++) {
+                    const char* argp_user = NULL;
+                    if (!copy_from_user(&argp_user, argv_user + i, (uint32_t)sizeof(argp_user))) {
+                        frame->eax = (uint32_t)-EFAULT;
+                        return frame;
+                    }
+
+                    if (!argp_user) {
+                        argv_buf[i][0] = '\0';
+                        kargv[i] = argv_buf[i];
+                        continue;
+                    }
+
+                    if (!copy_user_cstring(argv_buf[i], sizeof(argv_buf[i]), argp_user)) {
+                        frame->eax = (uint32_t)-ENAMETOOLONG;
+                        return frame;
+                    }
+                    kargv[i] = argv_buf[i];
+                }
+            }
+
+            int32_t pid = tasking_spawn_exec(path, (argc != 0 && argv_user) ? kargv : NULL, argc);
+            frame->eax = (uint32_t)pid;
+            return frame;
+        }
+        case SYS_UPTIME_MS: {
+            frame->eax = timer_uptime_ms();
+            return frame;
+        }
+        case SYS_RTC_GET: {
+            void* dt_user = (void*)frame->ebx;
+            if (!dt_user) {
+                frame->eax = (uint32_t)-EFAULT;
+                return frame;
+            }
+
+            rtc_datetime_t dt;
+            if (!rtc_read_datetime(&dt)) {
+                frame->eax = (uint32_t)-EIO;
+                return frame;
+            }
+
+            if (!copy_to_user(dt_user, &dt, (uint32_t)sizeof(dt))) {
+                frame->eax = (uint32_t)-EFAULT;
+                return frame;
+            }
+
+            frame->eax = 0;
+            return frame;
+        }
+        case SYS_RTC_SET: {
+            const void* dt_user = (const void*)frame->ebx;
+            if (!dt_user) {
+                frame->eax = (uint32_t)-EFAULT;
+                return frame;
+            }
+
+            rtc_datetime_t dt;
+            if (!copy_from_user(&dt, dt_user, (uint32_t)sizeof(dt))) {
+                frame->eax = (uint32_t)-EFAULT;
+                return frame;
+            }
+
+            if (!rtc_set_datetime(&dt)) {
+                frame->eax = (uint32_t)-EINVAL;
+                return frame;
+            }
+
+            statusbar_refresh();
+            frame->eax = 0;
+            return frame;
+        }
+        case SYS_TASK_COUNT: {
+            frame->eax = tasking_task_count();
+            return frame;
+        }
+        case SYS_TASK_INFO: {
+            uint32_t index = frame->ebx;
+            void* out_user = (void*)frame->ecx;
+            if (!out_user) {
+                frame->eax = (uint32_t)-EFAULT;
+                return frame;
+            }
+
+            task_info_t info;
+            if (!tasking_get_task_info(index, &info)) {
+                frame->eax = (uint32_t)-EINVAL;
+                return frame;
+            }
+
+            vos_task_info_user_t out;
+            out.pid = info.pid;
+            out.user = info.user ? 1u : 0u;
+            out.state = (uint32_t)info.state;
+            out.cpu_ticks = info.cpu_ticks;
+            out.eip = info.eip;
+            out.esp = info.esp;
+            out.exit_code = info.exit_code;
+            out.wake_tick = info.wake_tick;
+            out.wait_pid = info.wait_pid;
+            for (uint32_t i = 0; i < (uint32_t)sizeof(out.name); i++) {
+                out.name[i] = info.name[i];
+            }
+
+            if (!copy_to_user(out_user, &out, (uint32_t)sizeof(out))) {
+                frame->eax = (uint32_t)-EFAULT;
+                return frame;
+            }
+
+            frame->eax = 0;
+            return frame;
+        }
+        case SYS_SCREEN_IS_FB: {
+            frame->eax = screen_is_framebuffer() ? 1u : 0u;
+            return frame;
+        }
+        case SYS_GFX_CLEAR: {
+            uint32_t bg = frame->ebx & 0xFFu;
+            if (!screen_is_framebuffer()) {
+                frame->eax = (uint32_t)-ENODEV;
+                return frame;
+            }
+            (void)screen_graphics_clear((uint8_t)bg);
+            frame->eax = 0;
+            return frame;
+        }
+        case SYS_GFX_PSET: {
+            int32_t x = (int32_t)frame->ebx;
+            int32_t y = (int32_t)frame->ecx;
+            uint32_t c = frame->edx & 0xFFu;
+            if (!screen_is_framebuffer()) {
+                frame->eax = (uint32_t)-ENODEV;
+                return frame;
+            }
+            bool ok = screen_graphics_putpixel(x, y, (uint8_t)c);
+            frame->eax = ok ? 0u : (uint32_t)-EINVAL;
+            return frame;
+        }
+        case SYS_GFX_LINE: {
+            int32_t x0 = (int32_t)frame->ebx;
+            int32_t y0 = (int32_t)frame->ecx;
+            int32_t x1 = (int32_t)frame->edx;
+            int32_t y1 = (int32_t)frame->esi;
+            uint32_t c = frame->edi & 0xFFu;
+            if (!screen_is_framebuffer()) {
+                frame->eax = (uint32_t)-ENODEV;
+                return frame;
+            }
+            (void)screen_graphics_line(x0, y0, x1, y1, (uint8_t)c);
+            frame->eax = 0;
+            return frame;
+        }
+        case SYS_MEM_TOTAL_KB: {
+            frame->eax = system_mem_total_kb();
+            return frame;
+        }
+        case SYS_CPU_VENDOR: {
+            char* buf_user = (char*)frame->ebx;
+            uint32_t len = frame->ecx;
+            int32_t rc = copy_kernel_string_to_user(buf_user, len, system_cpu_vendor());
+            frame->eax = (uint32_t)rc;
+            return frame;
+        }
+        case SYS_CPU_BRAND: {
+            char* buf_user = (char*)frame->ebx;
+            uint32_t len = frame->ecx;
+            int32_t rc = copy_kernel_string_to_user(buf_user, len, system_cpu_brand());
+            frame->eax = (uint32_t)rc;
+            return frame;
+        }
+        case SYS_VFS_FILE_COUNT: {
+            frame->eax = vfs_file_count();
             return frame;
         }
         default:

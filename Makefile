@@ -61,8 +61,24 @@ USER_RUNTIME_C_OBJECTS = $(patsubst $(USER_DIR)/%.c,$(USER_BUILD_DIR)/%.o,$(USER
 USER_RUNTIME_OBJECTS = $(USER_ASM_OBJECTS) $(USER_RUNTIME_C_OBJECTS)
 USER_INIT_OBJ = $(USER_BUILD_DIR)/init.o
 USER_ELIZA_OBJ = $(USER_BUILD_DIR)/eliza.o
+USER_LSH_OBJ = $(USER_BUILD_DIR)/lsh.o
+USER_SH_OBJ = $(USER_BUILD_DIR)/sh.o
+USER_UPTIME_OBJ = $(USER_BUILD_DIR)/uptime.o
+USER_DATE_OBJ = $(USER_BUILD_DIR)/date.o
+USER_SETDATE_OBJ = $(USER_BUILD_DIR)/setdate.o
+USER_PS_OBJ = $(USER_BUILD_DIR)/ps.o
+USER_TOP_OBJ = $(USER_BUILD_DIR)/top.o
+USER_NEOFETCH_OBJ = $(USER_BUILD_DIR)/neofetch.o
 USER_INIT = $(USER_BUILD_DIR)/init.elf
 USER_ELIZA = $(USER_BUILD_DIR)/eliza.elf
+USER_LSH = $(USER_BUILD_DIR)/lsh.elf
+USER_SH = $(USER_BUILD_DIR)/sh.elf
+USER_UPTIME = $(USER_BUILD_DIR)/uptime.elf
+USER_DATE = $(USER_BUILD_DIR)/date.elf
+USER_SETDATE = $(USER_BUILD_DIR)/setdate.elf
+USER_PS = $(USER_BUILD_DIR)/ps.elf
+USER_TOP = $(USER_BUILD_DIR)/top.elf
+USER_NEOFETCH = $(USER_BUILD_DIR)/neofetch.elf
 # Zork I (userland)
 USER_ZORK_DIR = $(USER_DIR)/zork1c
 USER_ZORK_C_SOURCES = $(USER_ZORK_DIR)/_parser.c $(USER_ZORK_DIR)/_game.c $(USER_ZORK_DIR)/_villains.c \
@@ -70,7 +86,15 @@ USER_ZORK_C_SOURCES = $(USER_ZORK_DIR)/_parser.c $(USER_ZORK_DIR)/_game.c $(USER
 USER_ZORK_OBJECTS = $(patsubst $(USER_DIR)/%.c,$(USER_BUILD_DIR)/%.o,$(USER_ZORK_C_SOURCES))
 USER_ZORK = $(USER_BUILD_DIR)/zork.elf
 
-USER_BINS = $(USER_INIT) $(USER_ELIZA) $(USER_ZORK)
+USER_LINENOISE_OBJ = $(USER_BUILD_DIR)/linenoise.o
+
+# BASIC (userland)
+USER_BASIC_DIR = $(USER_DIR)/basic
+USER_BASIC_C_SOURCES = $(USER_BASIC_DIR)/basic.c $(USER_BASIC_DIR)/ubasic.c $(USER_BASIC_DIR)/tokenizer.c $(USER_BASIC_DIR)/basic_programs.c
+USER_BASIC_OBJECTS = $(patsubst $(USER_DIR)/%.c,$(USER_BUILD_DIR)/%.o,$(USER_BASIC_C_SOURCES))
+USER_BASIC = $(USER_BUILD_DIR)/basic.elf
+
+USER_BINS = $(USER_INIT) $(USER_ELIZA) $(USER_LSH) $(USER_SH) $(USER_UPTIME) $(USER_DATE) $(USER_SETDATE) $(USER_PS) $(USER_TOP) $(USER_NEOFETCH) $(USER_BASIC) $(USER_ZORK)
 
 # QEMU defaults
 QEMU_XRES ?= 1920
@@ -116,7 +140,11 @@ $(USER_BUILD_DIR)/%.o: $(USER_DIR)/%.asm | $(USER_BUILD_DIR)
 # Compile userland C
 $(USER_BUILD_DIR)/%.o: $(USER_DIR)/%.c | $(USER_BUILD_DIR)
 	mkdir -p $(dir $@)
-	$(CC) -ffreestanding -fno-stack-protector -fno-pie -Wall -Wextra -O2 -I$(USER_DIR) -c $< -o $@
+	$(CC) -ffreestanding -fno-stack-protector -fno-pie -Wall -Wextra -O2 -I$(USER_DIR) -I$(THIRD_PARTY_DIR)/linenoise -c $< -o $@
+
+# Vendored linenoise (userland line editing)
+$(USER_LINENOISE_OBJ): $(THIRD_PARTY_DIR)/linenoise/linenoise.c | $(USER_BUILD_DIR)
+	$(CC) -ffreestanding -fno-stack-protector -fno-pie -Wall -Wextra -O2 -I$(USER_DIR) -I$(THIRD_PARTY_DIR)/linenoise -c $< -o $@
 
 # Link userland init (static, freestanding)
 $(USER_INIT): $(USER_RUNTIME_OBJECTS) $(USER_INIT_OBJ)
@@ -124,6 +152,38 @@ $(USER_INIT): $(USER_RUNTIME_OBJECTS) $(USER_INIT_OBJ)
 
 # Link userland eliza (static, freestanding)
 $(USER_ELIZA): $(USER_RUNTIME_OBJECTS) $(USER_ELIZA_OBJ)
+	$(CC) -nostartfiles -Wl,-T,$(USER_DIR)/linker.ld -Wl,--gc-sections -o $@ $^ -lc -lgcc
+
+# Link userland linenoise demo
+$(USER_LSH): $(USER_RUNTIME_OBJECTS) $(USER_LINENOISE_OBJ) $(USER_LSH_OBJ)
+	$(CC) -nostartfiles -Wl,-T,$(USER_DIR)/linker.ld -Wl,--gc-sections -o $@ $^ -lc -lgcc
+
+# Link userland shell (linenoise)
+$(USER_SH): $(USER_RUNTIME_OBJECTS) $(USER_LINENOISE_OBJ) $(USER_SH_OBJ)
+	$(CC) -nostartfiles -Wl,-T,$(USER_DIR)/linker.ld -Wl,--gc-sections -o $@ $^ -lc -lgcc
+
+# Link userland uptime/date/setdate/ps/top (static, freestanding)
+$(USER_UPTIME): $(USER_RUNTIME_OBJECTS) $(USER_UPTIME_OBJ)
+	$(CC) -nostartfiles -Wl,-T,$(USER_DIR)/linker.ld -Wl,--gc-sections -o $@ $^ -lc -lgcc
+
+$(USER_DATE): $(USER_RUNTIME_OBJECTS) $(USER_DATE_OBJ)
+	$(CC) -nostartfiles -Wl,-T,$(USER_DIR)/linker.ld -Wl,--gc-sections -o $@ $^ -lc -lgcc
+
+$(USER_SETDATE): $(USER_RUNTIME_OBJECTS) $(USER_SETDATE_OBJ)
+	$(CC) -nostartfiles -Wl,-T,$(USER_DIR)/linker.ld -Wl,--gc-sections -o $@ $^ -lc -lgcc
+
+$(USER_PS): $(USER_RUNTIME_OBJECTS) $(USER_PS_OBJ)
+	$(CC) -nostartfiles -Wl,-T,$(USER_DIR)/linker.ld -Wl,--gc-sections -o $@ $^ -lc -lgcc
+
+$(USER_TOP): $(USER_RUNTIME_OBJECTS) $(USER_TOP_OBJ)
+	$(CC) -nostartfiles -Wl,-T,$(USER_DIR)/linker.ld -Wl,--gc-sections -o $@ $^ -lc -lgcc
+
+# Link userland neofetch (static, freestanding)
+$(USER_NEOFETCH): $(USER_RUNTIME_OBJECTS) $(USER_NEOFETCH_OBJ)
+	$(CC) -nostartfiles -Wl,-T,$(USER_DIR)/linker.ld -Wl,--gc-sections -o $@ $^ -lc -lgcc
+
+# Link userland BASIC interpreter
+$(USER_BASIC): $(USER_RUNTIME_OBJECTS) $(USER_BASIC_OBJECTS)
 	$(CC) -nostartfiles -Wl,-T,$(USER_DIR)/linker.ld -Wl,--gc-sections -o $@ $^ -lc -lgcc
 
 # Link userland zork (static, freestanding)
@@ -152,6 +212,15 @@ $(ISO): $(KERNEL) $(USER_BINS) $(FAT_IMG)
 	mkdir -p $(INITRAMFS_ROOT)/bin
 	cp $(USER_INIT) $(INITRAMFS_ROOT)/bin/init
 	cp $(USER_ELIZA) $(INITRAMFS_ROOT)/bin/eliza
+	cp $(USER_LSH) $(INITRAMFS_ROOT)/bin/lsh
+	cp $(USER_SH) $(INITRAMFS_ROOT)/bin/sh
+	cp $(USER_UPTIME) $(INITRAMFS_ROOT)/bin/uptime
+	cp $(USER_DATE) $(INITRAMFS_ROOT)/bin/date
+	cp $(USER_SETDATE) $(INITRAMFS_ROOT)/bin/setdate
+	cp $(USER_PS) $(INITRAMFS_ROOT)/bin/ps
+	cp $(USER_TOP) $(INITRAMFS_ROOT)/bin/top
+	cp $(USER_NEOFETCH) $(INITRAMFS_ROOT)/bin/neofetch
+	cp $(USER_BASIC) $(INITRAMFS_ROOT)/bin/basic
 	cp $(USER_ZORK) $(INITRAMFS_ROOT)/bin/zork
 	tar -C $(INITRAMFS_ROOT) -cf $(INITRAMFS_TAR) .
 	echo 'set timeout=0' > $(ISO_DIR)/boot/grub/grub.cfg

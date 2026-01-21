@@ -3,6 +3,8 @@
 #include <stddef.h>
 #include <sys/stat.h>
 #include <sys/types.h>
+#include <sys/ioctl.h>
+#include <termios.h>
 #include <unistd.h>
 
 // VOS syscall numbers (kernel/syscall.c)
@@ -25,6 +27,18 @@ enum {
     SYS_READDIR = 15,
     SYS_CHDIR = 16,
     SYS_GETCWD = 17,
+    SYS_IOCTL = 18,
+    SYS_UNLINK = 19,
+    SYS_RENAME = 20,
+    SYS_RMDIR = 21,
+    SYS_TRUNCATE = 22,
+    SYS_FTRUNCATE = 23,
+    SYS_FSYNC = 24,
+    SYS_DUP = 25,
+    SYS_DUP2 = 26,
+    SYS_PIPE = 27,
+    SYS_GETPID = 28,
+    SYS_SPAWN = 29,
 };
 
 typedef struct vos_stat {
@@ -174,6 +188,138 @@ static inline int vos_sys_getcwd(char* buf, unsigned int len) {
     return ret;
 }
 
+static inline int vos_sys_ioctl(int fd, unsigned int req, void* argp) {
+    int ret;
+    __asm__ volatile (
+        "int $0x80"
+        : "=a"(ret)
+        : "a"(SYS_IOCTL), "b"(fd), "c"(req), "d"(argp)
+        : "memory"
+    );
+    return ret;
+}
+
+static inline int vos_sys_unlink(const char* path) {
+    int ret;
+    __asm__ volatile (
+        "int $0x80"
+        : "=a"(ret)
+        : "a"(SYS_UNLINK), "b"(path)
+        : "memory"
+    );
+    return ret;
+}
+
+static inline int vos_sys_rename(const char* oldp, const char* newp) {
+    int ret;
+    __asm__ volatile (
+        "int $0x80"
+        : "=a"(ret)
+        : "a"(SYS_RENAME), "b"(oldp), "c"(newp)
+        : "memory"
+    );
+    return ret;
+}
+
+static inline int vos_sys_rmdir(const char* path) {
+    int ret;
+    __asm__ volatile (
+        "int $0x80"
+        : "=a"(ret)
+        : "a"(SYS_RMDIR), "b"(path)
+        : "memory"
+    );
+    return ret;
+}
+
+static inline int vos_sys_truncate(const char* path, unsigned int size) {
+    int ret;
+    __asm__ volatile (
+        "int $0x80"
+        : "=a"(ret)
+        : "a"(SYS_TRUNCATE), "b"(path), "c"(size)
+        : "memory"
+    );
+    return ret;
+}
+
+static inline int vos_sys_ftruncate(int fd, unsigned int size) {
+    int ret;
+    __asm__ volatile (
+        "int $0x80"
+        : "=a"(ret)
+        : "a"(SYS_FTRUNCATE), "b"(fd), "c"(size)
+        : "memory"
+    );
+    return ret;
+}
+
+static inline int vos_sys_fsync(int fd) {
+    int ret;
+    __asm__ volatile (
+        "int $0x80"
+        : "=a"(ret)
+        : "a"(SYS_FSYNC), "b"(fd)
+        : "memory"
+    );
+    return ret;
+}
+
+static inline int vos_sys_dup(int oldfd) {
+    int ret;
+    __asm__ volatile (
+        "int $0x80"
+        : "=a"(ret)
+        : "a"(SYS_DUP), "b"(oldfd)
+        : "memory"
+    );
+    return ret;
+}
+
+static inline int vos_sys_dup2(int oldfd, int newfd) {
+    int ret;
+    __asm__ volatile (
+        "int $0x80"
+        : "=a"(ret)
+        : "a"(SYS_DUP2), "b"(oldfd), "c"(newfd)
+        : "memory"
+    );
+    return ret;
+}
+
+static inline int vos_sys_pipe(int* fds) {
+    int ret;
+    __asm__ volatile (
+        "int $0x80"
+        : "=a"(ret)
+        : "a"(SYS_PIPE), "b"(fds)
+        : "memory"
+    );
+    return ret;
+}
+
+static inline int vos_sys_getpid(void) {
+    int ret;
+    __asm__ volatile (
+        "int $0x80"
+        : "=a"(ret)
+        : "a"(SYS_GETPID)
+        : "memory"
+    );
+    return ret;
+}
+
+static inline int vos_sys_kill(int pid, int sig) {
+    int ret;
+    __asm__ volatile (
+        "int $0x80"
+        : "=a"(ret)
+        : "a"(SYS_KILL), "b"(pid), "c"(sig)
+        : "memory"
+    );
+    return ret;
+}
+
 int open(const char* name, int flags, ...) {
     va_list ap;
     va_start(ap, flags);
@@ -236,10 +382,18 @@ int fstat(int file, struct stat* st) {
         return -1;
     }
 
-    if (file >= 0 && file <= 2) {
-        st->st_mode = S_IFCHR;
-        st->st_size = 0;
-        return 0;
+    // Prefer treating actual TTY fds as character devices, but allow stdin/out/err
+    // to be redirected via dup2/open.
+    if (file >= 0) {
+        int saved = errno;
+        struct termios t;
+        if (ioctl(file, TCGETS, &t) == 0) {
+            errno = saved;
+            st->st_mode = S_IFCHR;
+            st->st_size = 0;
+            return 0;
+        }
+        errno = saved;
     }
 
     vos_stat_t vst;
@@ -255,7 +409,14 @@ int fstat(int file, struct stat* st) {
 }
 
 int isatty(int file) {
-    return (file >= 0 && file <= 2) ? 1 : 0;
+    if (file < 0) {
+        return 0;
+    }
+    int saved = errno;
+    struct termios t;
+    int rc = ioctl(file, TCGETS, &t);
+    errno = saved;
+    return (rc == 0) ? 1 : 0;
 }
 
 off_t lseek(int file, off_t ptr, int dir) {
@@ -299,6 +460,84 @@ int mkdir(const char* path, mode_t mode) {
     return 0;
 }
 
+int unlink(const char* path) {
+    if (!path) {
+        errno = EINVAL;
+        return -1;
+    }
+    int rc = vos_sys_unlink(path);
+    if (rc < 0) {
+        errno = -rc;
+        return -1;
+    }
+    return 0;
+}
+
+int rmdir(const char* path) {
+    if (!path) {
+        errno = EINVAL;
+        return -1;
+    }
+    int rc = vos_sys_rmdir(path);
+    if (rc < 0) {
+        errno = -rc;
+        return -1;
+    }
+    return 0;
+}
+
+int rename(const char* oldp, const char* newp) {
+    if (!oldp || !newp) {
+        errno = EINVAL;
+        return -1;
+    }
+    int rc = vos_sys_rename(oldp, newp);
+    if (rc < 0) {
+        errno = -rc;
+        return -1;
+    }
+    return 0;
+}
+
+int truncate(const char* path, off_t length) {
+    if (!path) {
+        errno = EINVAL;
+        return -1;
+    }
+    if (length < 0 || (unsigned long)length > 0xFFFFFFFFul) {
+        errno = EINVAL;
+        return -1;
+    }
+    int rc = vos_sys_truncate(path, (unsigned int)length);
+    if (rc < 0) {
+        errno = -rc;
+        return -1;
+    }
+    return 0;
+}
+
+int ftruncate(int fd, off_t length) {
+    if (length < 0 || (unsigned long)length > 0xFFFFFFFFul) {
+        errno = EINVAL;
+        return -1;
+    }
+    int rc = vos_sys_ftruncate(fd, (unsigned int)length);
+    if (rc < 0) {
+        errno = -rc;
+        return -1;
+    }
+    return 0;
+}
+
+int fsync(int fd) {
+    int rc = vos_sys_fsync(fd);
+    if (rc < 0) {
+        errno = -rc;
+        return -1;
+    }
+    return 0;
+}
+
 int chdir(const char* path) {
     if (!path) {
         errno = EINVAL;
@@ -325,15 +564,116 @@ char* getcwd(char* buf, size_t size) {
     return buf;
 }
 
+int ioctl(int fd, unsigned long request, ...) {
+    va_list ap;
+    va_start(ap, request);
+    void* argp = va_arg(ap, void*);
+    va_end(ap);
+
+    int rc = vos_sys_ioctl(fd, (unsigned int)request, argp);
+    if (rc < 0) {
+        errno = -rc;
+        return -1;
+    }
+    return rc;
+}
+
+int dup(int oldfd) {
+    int rc = vos_sys_dup(oldfd);
+    if (rc < 0) {
+        errno = -rc;
+        return -1;
+    }
+    return rc;
+}
+
+int dup2(int oldfd, int newfd) {
+    int rc = vos_sys_dup2(oldfd, newfd);
+    if (rc < 0) {
+        errno = -rc;
+        return -1;
+    }
+    return rc;
+}
+
+int pipe(int fds[2]) {
+    if (!fds) {
+        errno = EINVAL;
+        return -1;
+    }
+    int rc = vos_sys_pipe(fds);
+    if (rc < 0) {
+        errno = -rc;
+        return -1;
+    }
+    return 0;
+}
+
+int tcgetattr(int fd, struct termios* termios_p) {
+    if (!termios_p) {
+        errno = EINVAL;
+        return -1;
+    }
+    return ioctl(fd, TCGETS, termios_p);
+}
+
+int tcsetattr(int fd, int optional_actions, const struct termios* termios_p) {
+    if (!termios_p) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    unsigned long req = TCSETS;
+    if (optional_actions == TCSADRAIN) {
+        req = TCSETSW;
+    } else if (optional_actions == TCSAFLUSH) {
+        req = TCSETSF;
+    }
+
+    return ioctl(fd, req, termios_p);
+}
+
+void cfmakeraw(struct termios* t) {
+    if (!t) {
+        return;
+    }
+
+    t->c_iflag &= (tcflag_t) ~(BRKINT | ICRNL | INPCK | ISTRIP | IXON);
+    t->c_oflag &= (tcflag_t) ~(OPOST);
+    t->c_lflag &= (tcflag_t) ~(ECHO | ICANON | IEXTEN | ISIG);
+    t->c_cflag |= (tcflag_t)CS8;
+
+    if (VMIN >= 0 && VMIN < NCCS) {
+        t->c_cc[VMIN] = 1;
+    }
+    if (VTIME >= 0 && VTIME < NCCS) {
+        t->c_cc[VTIME] = 0;
+    }
+}
+
 int kill(int pid, int sig) {
-    (void)pid;
-    (void)sig;
-    errno = ENOSYS;
-    return -1;
+    int rc = vos_sys_kill(pid, sig);
+    if (rc < 0) {
+        errno = -rc;
+        return -1;
+    }
+    return 0;
 }
 
 int getpid(void) {
-    return 1;
+    return vos_sys_getpid();
+}
+
+mode_t umask(mode_t mask) {
+    (void)mask;
+    return 0;
+}
+
+int fchmod(int fd, mode_t mode) {
+    (void)fd;
+    (void)mode;
+    errno = ENOSYS;
+    return -1;
 }
 
 __attribute__((noreturn)) void _exit(int code) {

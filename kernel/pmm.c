@@ -10,6 +10,7 @@ static uint32_t frame_bitmap_bytes = 0;
 static uint32_t frames_total = 0;
 static uint32_t frames_free = 0;
 static uint32_t early_reserved_end = 0;
+static uint32_t alloc_cursor = 0;
 
 static bool bitmap_test(uint32_t frame) {
     uint32_t byte = frame / 8u;
@@ -193,6 +194,11 @@ void pmm_init(uint32_t multiboot_magic, const multiboot_info_t* mbi, uint32_t ke
     serial_write_string(" free=");
     serial_write_dec((int32_t)frames_free);
     serial_write_char('\n');
+
+    // Allocate from the top of RAM by default. Early allocator metadata (page
+    // tables, directories) lives in low memory and continues after pmm_init(),
+    // so allocating frames bottom-up risks physical overlap.
+    alloc_cursor = (frames_total > 0) ? (frames_total - 1u) : 0u;
 }
 
 static void pmm_reserve_new_early_alloc(void) {
@@ -211,11 +217,20 @@ uint32_t pmm_alloc_frame(void) {
     // after pmm_init(). Make sure those frames stay reserved.
     pmm_reserve_new_early_alloc();
 
-    for (uint32_t frame = 0; frame < frames_total; frame++) {
+    if (frames_total == 0) {
+        return 0;
+    }
+
+    // Search from the current cursor downwards, wrapping once.
+    for (uint32_t scanned = 0; scanned < frames_total; scanned++) {
+        uint32_t frame = alloc_cursor;
         if (!bitmap_test(frame)) {
             mark_frame_used(frame);
+            alloc_cursor = (frame == 0) ? (frames_total - 1u) : (frame - 1u);
             return frame * PAGE_SIZE;
         }
+
+        alloc_cursor = (alloc_cursor == 0) ? (frames_total - 1u) : (alloc_cursor - 1u);
     }
     return 0;
 }

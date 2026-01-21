@@ -2261,12 +2261,24 @@ static void cmd_run(const char* args) {
         return;
     }
     if (!args || args[0] == '\0') {
-        screen_println("Usage: run <file>");
+        screen_println("Usage: run <elf> [args...]");
         return;
     }
 
+    char args_copy[MAX_COMMAND_LENGTH];
+    strncpy(args_copy, args, sizeof(args_copy) - 1u);
+    args_copy[sizeof(args_copy) - 1u] = '\0';
+
+    char* argv[32] = {0};
+    int argc = split_args_inplace(args_copy, argv, (int)(sizeof(argv) / sizeof(argv[0])));
+    if (argc <= 0 || !argv[0] || argv[0][0] == '\0') {
+        screen_println("Usage: run <elf> [args...]");
+        return;
+    }
+
+    const char* prog = argv[0];
     char path[SHELL_PATH_MAX];
-    if (!resolve_path(shell_cwd, args, path, sizeof(path))) {
+    if (!resolve_path(shell_cwd, prog, path, sizeof(path))) {
         screen_println("Invalid path.");
         return;
     }
@@ -2300,9 +2312,21 @@ static void cmd_run(const char* args) {
         return;
     }
 
+    const char* uargv[32];
+    uint32_t uargc = 0;
+    uargv[uargc++] = path;
+    for (int i = 1; i < argc && uargc < (uint32_t)(sizeof(uargv) / sizeof(uargv[0])); i++) {
+        if (argv[i] && argv[i][0] != '\0') {
+            uargv[uargc++] = argv[i];
+        }
+    }
+
     uint32_t flags = irq_save();
     paging_switch_directory(user_dir);
     bool ok = elf_load_user_image(data, size, &entry, &user_esp, &brk);
+    if (ok) {
+        ok = elf_setup_user_stack(&user_esp, uargv, uargc);
+    }
     paging_switch_directory(paging_kernel_directory());
     irq_restore(flags);
     if (!ok) {
@@ -2424,8 +2448,8 @@ static void cmd_kill(const char* args) {
         code = atoi(args);
     }
 
-    bool ok = tasking_kill((uint32_t)pid, (int32_t)code);
-    screen_println(ok ? "OK" : "Failed");
+    int32_t rc = tasking_kill((uint32_t)pid, (int32_t)code);
+    screen_println((rc == 0) ? "OK" : "Failed");
 }
 
 static void cmd_wait(const char* args) {

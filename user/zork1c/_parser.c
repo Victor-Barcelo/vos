@@ -2701,11 +2701,16 @@ void RestartGame(void)
 
 
 
-int main(void)
+int main(int argc, char *argv[])
 {
-  // VOS doesn't pass argv/argc yet; always read from stdin.
+  // process command line arguments
   atexit(Shutdown);
-  InputStream = stdin;
+  if (argc < 2) InputStream = stdin;
+  else
+  {
+    InputStream = fopen(argv[1], "r");
+    if (InputStream == NULL) InputStream = stdin;
+  }
 
 #ifndef NO_STATUS_LINE
   VTMode = EnableVTMode();

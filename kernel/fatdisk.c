@@ -1525,3 +1525,153 @@ bool fatdisk_rename(const char* abs_old, const char* abs_new) {
     (void)ata_flush();
     return true;
 }
+
+static bool dirent_is_dots(const uint8_t ent[32]) {
+    if (!ent) {
+        return false;
+    }
+    if (ent[0] != '.') {
+        return false;
+    }
+    // "." entry: ".          "
+    if (ent[1] == ' ') {
+        for (int i = 2; i < 11; i++) {
+            if (ent[i] != ' ') {
+                return false;
+            }
+        }
+        return true;
+    }
+    // ".." entry: "..         "
+    if (ent[1] == '.' && ent[2] == ' ') {
+        for (int i = 3; i < 11; i++) {
+            if (ent[i] != ' ') {
+                return false;
+            }
+        }
+        return true;
+    }
+    return false;
+}
+
+static bool dir_is_empty(uint16_t start_cluster) {
+    if (!g_fs.ready) {
+        return false;
+    }
+    if (start_cluster < 2u) {
+        return true;
+    }
+
+    uint16_t cluster = start_cluster;
+    uint8_t sec[SECTOR_SIZE];
+    uint32_t max_steps = g_fs.cluster_count + 4u;
+
+    for (uint32_t step = 0; step < max_steps; step++) {
+        if (cluster < 2u || cluster >= (uint16_t)(g_fs.cluster_count + 2u)) {
+            return true;
+        }
+
+        uint32_t base = cluster_to_lba(cluster);
+        for (uint32_t si = 0; si < g_fs.sectors_per_cluster; si++) {
+            uint32_t lba = base + si;
+            if (!disk_read(lba, sec)) {
+                return false;
+            }
+
+            for (uint32_t off = 0; off + 32u <= SECTOR_SIZE; off += 32u) {
+                const uint8_t* e = sec + off;
+                if (e[0] == 0x00) {
+                    return true; // end of directory
+                }
+                if (e[0] == 0xE5) {
+                    continue; // deleted
+                }
+                if (!dir_entry_is_valid(e)) {
+                    continue;
+                }
+                if (dirent_is_dots(e)) {
+                    continue;
+                }
+                return false;
+            }
+        }
+
+        uint16_t next = 0;
+        if (!fat_get(cluster, &next) || fat_is_eoc(next)) {
+            break;
+        }
+        cluster = next;
+    }
+
+    return true;
+}
+
+bool fatdisk_unlink(const char* abs_path) {
+    if (!g_fs.ready || !abs_path) {
+        return false;
+    }
+    if (is_root_path(abs_path)) {
+        return false;
+    }
+
+    dir_loc_t loc;
+    uint8_t ent[32];
+    if (!lookup_path_entry(abs_path, &loc, ent)) {
+        return false;
+    }
+    if (ent[11] & FAT_ATTR_DIR) {
+        return false;
+    }
+
+    uint16_t start = read_le16(ent + 26);
+    if (start >= 2u) {
+        if (!free_cluster_chain(start)) {
+            return false;
+        }
+    }
+
+    ent[0] = 0xE5; // deleted
+    if (!write_dir_entry_at(loc, ent)) {
+        return false;
+    }
+
+    (void)ata_flush();
+    return true;
+}
+
+bool fatdisk_rmdir(const char* abs_path) {
+    if (!g_fs.ready || !abs_path) {
+        return false;
+    }
+    if (is_root_path(abs_path)) {
+        return false;
+    }
+
+    dir_loc_t loc;
+    uint8_t ent[32];
+    if (!lookup_path_entry(abs_path, &loc, ent)) {
+        return false;
+    }
+    if ((ent[11] & FAT_ATTR_DIR) == 0) {
+        return false;
+    }
+
+    uint16_t start = read_le16(ent + 26);
+    if (!dir_is_empty(start)) {
+        return false;
+    }
+
+    if (start >= 2u) {
+        if (!free_cluster_chain(start)) {
+            return false;
+        }
+    }
+
+    ent[0] = 0xE5; // deleted
+    if (!write_dir_entry_at(loc, ent)) {
+        return false;
+    }
+
+    (void)ata_flush();
+    return true;
+}

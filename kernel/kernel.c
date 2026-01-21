@@ -19,6 +19,7 @@
 #include "elf.h"
 #include "fatdisk.h"
 #include "string.h"
+#include "statusbar.h"
 
 // Multiboot magic number
 #define MULTIBOOT_MAGIC 0x2BADB002
@@ -70,6 +71,32 @@ static void keyboard_irq_handler(interrupt_frame_t* frame) {
     keyboard_handler();
 }
 
+static void kernel_idle_hook(void) {
+    statusbar_tick();
+
+    static bool cursor_on = true;
+    static uint32_t next_toggle_tick = 0;
+
+    uint32_t hz = timer_get_hz();
+    if (hz == 0) {
+        return;
+    }
+
+    uint32_t now = timer_get_ticks();
+    if ((int32_t)(now - next_toggle_tick) < 0) {
+        return;
+    }
+
+    cursor_on = !cursor_on;
+    screen_cursor_set_enabled(cursor_on);
+
+    uint32_t interval = hz / 2u;
+    if (interval == 0) {
+        interval = 1;
+    }
+    next_toggle_tick = now + interval;
+}
+
 static void try_start_init(void) {
     if (!vfs_is_ready()) {
         return;
@@ -92,6 +119,10 @@ static void try_start_init(void) {
     uint32_t flags = irq_save();
     paging_switch_directory(user_dir);
     bool ok = elf_load_user_image(data, size, &entry, &user_esp, &brk);
+    if (ok) {
+        const char* const init_argv[] = {"/bin/init"};
+        ok = elf_setup_user_stack(&user_esp, init_argv, 1);
+    }
     paging_switch_directory(paging_kernel_directory());
     irq_restore(flags);
     if (!ok) {
@@ -147,6 +178,10 @@ static void kernel_main_continued(uint32_t magic, uint32_t* mboot_info) {
     screen_print("[OK] ");
     screen_set_color(VGA_WHITE, VGA_BLUE);
     screen_println("Interrupts enabled");
+
+    // UI helpers used across kernel + userland (status bar + blinking cursor).
+    statusbar_init();
+    keyboard_set_idle_hook(kernel_idle_hook);
 
     try_start_init();
 

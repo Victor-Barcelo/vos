@@ -4,6 +4,8 @@
 #include <string.h>
 #include <unistd.h>
 
+#include "syscall.h"
+
 static void cat_file(const char* path) {
     int fd = open(path, O_RDONLY);
     if (fd < 0) {
@@ -23,7 +25,9 @@ static void cat_file(const char* path) {
     close(fd);
 }
 
-int main(void) {
+int main(int argc, char** argv) {
+    (void)argc;
+    (void)argv;
     printf("Hello from user mode (init)!\n");
 
     printf("\n[init] Reading fat/hello.txt:\n");
@@ -49,5 +53,19 @@ int main(void) {
     }
 
     printf("\n[init] done.\n");
-    return 0;
+
+    // Keep init (PID 1) alive and supervise the user shell.
+    for (;;) {
+        const char* const sh_argv[] = {"/bin/sh"};
+        int pid = sys_spawn("/bin/sh", sh_argv, 1u);
+        if (pid < 0) {
+            errno = -pid;
+            printf("[init] spawn /bin/sh failed: %s\n", strerror(errno));
+            (void)sys_sleep(1000u);
+            continue;
+        }
+
+        int code = sys_wait((uint32_t)pid);
+        printf("[init] /bin/sh exited (%d), restarting...\n", code);
+    }
 }

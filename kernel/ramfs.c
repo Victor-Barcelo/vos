@@ -545,6 +545,89 @@ bool ramfs_rename(const char* old_path, const char* new_path) {
     return true;
 }
 
+bool ramfs_unlink(const char* path) {
+    if (!ready) {
+        return false;
+    }
+
+    char rel[128];
+    if (!normalize_path(path, rel, sizeof(rel))) {
+        return false;
+    }
+    if (!is_ram_path(rel) || ci_eq(rel, "ram")) {
+        return false;
+    }
+
+    int idx = find_file_rel(rel);
+    if (idx < 0) {
+        return false;
+    }
+
+    if (files[idx].path) {
+        kfree(files[idx].path);
+        files[idx].path = NULL;
+    }
+    if (files[idx].data) {
+        kfree(files[idx].data);
+        files[idx].data = NULL;
+    }
+    files[idx].size = 0;
+    files[idx].wtime = 0;
+    files[idx].wdate = 0;
+    return true;
+}
+
+bool ramfs_rmdir(const char* path) {
+    if (!ready) {
+        return false;
+    }
+
+    char rel[128];
+    if (!normalize_path(path, rel, sizeof(rel))) {
+        return false;
+    }
+    if (!is_ram_path(rel) || ci_eq(rel, "ram")) {
+        return false;
+    }
+    if (!dir_exists_rel(rel)) {
+        return false;
+    }
+
+    uint32_t rel_len = (uint32_t)strlen(rel);
+    if (rel_len + 2u > sizeof(rel)) {
+        return false;
+    }
+
+    char prefix[128];
+    memcpy(prefix, rel, rel_len);
+    prefix[rel_len] = '/';
+    prefix[rel_len + 1u] = '\0';
+
+    for (int i = 0; i < RAMFS_MAX_FILES; i++) {
+        if (files[i].path && ci_starts_with(files[i].path, prefix)) {
+            return false;
+        }
+    }
+    for (int i = 0; i < RAMFS_MAX_DIRS; i++) {
+        if (dirs[i].path && ci_starts_with(dirs[i].path, prefix)) {
+            return false;
+        }
+    }
+
+    // Remove explicit directory entry if present.
+    for (int i = 0; i < RAMFS_MAX_DIRS; i++) {
+        if (dirs[i].path && ci_eq(dirs[i].path, rel)) {
+            kfree(dirs[i].path);
+            dirs[i].path = NULL;
+            dirs[i].wtime = 0;
+            dirs[i].wdate = 0;
+            break;
+        }
+    }
+
+    return true;
+}
+
 bool ramfs_read_file(const char* path, const uint8_t** out_data, uint32_t* out_size) {
     if (!ready) {
         return false;

@@ -6,6 +6,7 @@
 #include "font.h"
 #include "font_terminus_psf2.h"
 #include "font_vga_psf2.h"
+#include "statusbar.h"
 
 typedef enum {
     SCREEN_BACKEND_VGA_TEXT = 0,
@@ -50,11 +51,17 @@ static int ansi_current = -1;
 static bool ansi_private = false;
 static int ansi_saved_x = 0;
 static int ansi_saved_y = 0;
+static int ansi_scroll_top = 0;
+static int ansi_scroll_bottom = 0;
 
 static inline int screen_phys_x(int x);
 static inline int screen_phys_y(int y);
 static void fb_render_cell(int x, int y);
 static void update_cursor(void);
+static void vga_scroll(void);
+static void fb_scroll(void);
+static void vga_scroll_down(void);
+static void fb_scroll_down(void);
 
 // "Safe area" padding (in character cells).
 static int pad_left_cols = 0;
@@ -86,6 +93,26 @@ static uint8_t fb_b_size = 0;
 static font_t fb_font;
 
 static uint16_t fb_cells[FB_MAX_COLS * FB_MAX_ROWS];
+
+// UTF-8 decoding for framebuffer text console (so userland can print Unicode).
+typedef struct {
+    uint32_t codepoint;
+    uint32_t min;
+    uint8_t remaining;
+} utf8_state_t;
+
+static utf8_state_t utf8_state;
+
+#define FB_UNICODE_MAP_MAX 2048u
+typedef struct {
+    uint32_t codepoint;
+    uint8_t glyph;
+} fb_unicode_map_entry_t;
+
+static fb_unicode_map_entry_t fb_unicode_map[FB_UNICODE_MAP_MAX];
+static uint32_t fb_unicode_map_count = 0;
+static uint8_t fb_unicode_replacement_glyph = (uint8_t)'?';
+static bool fb_unicode_ready = false;
 
 #define SCROLLBACK_MAX_LINES 1024
 static uint16_t scrollback_cells[SCROLLBACK_MAX_LINES * FB_MAX_COLS];
@@ -136,6 +163,190 @@ static void scrollback_reset(void) {
     scrollback_view_offset = 0;
     scrollback_cols = screen_cols_value;
     cursor_force_hidden = false;
+}
+
+static uint32_t utf8_decode_one(const uint8_t* bytes, uint32_t len, bool* ok) {
+    if (ok) {
+        *ok = false;
+    }
+    if (!bytes || len == 0) {
+        return 0;
+    }
+
+    uint8_t b0 = bytes[0];
+    if (b0 < 0x80u) {
+        if (ok) *ok = true;
+        return (uint32_t)b0;
+    }
+    if (b0 >= 0xC2u && b0 <= 0xDFu) {
+        if (len < 2) return 0;
+        uint8_t b1 = bytes[1];
+        if ((b1 & 0xC0u) != 0x80u) return 0;
+        uint32_t cp = ((uint32_t)(b0 & 0x1Fu) << 6) | (uint32_t)(b1 & 0x3Fu);
+        if (cp < 0x80u) return 0;
+        if (ok) *ok = true;
+        return cp;
+    }
+    if (b0 >= 0xE0u && b0 <= 0xEFu) {
+        if (len < 3) return 0;
+        uint8_t b1 = bytes[1];
+        uint8_t b2 = bytes[2];
+        if ((b1 & 0xC0u) != 0x80u || (b2 & 0xC0u) != 0x80u) return 0;
+        uint32_t cp = ((uint32_t)(b0 & 0x0Fu) << 12) | ((uint32_t)(b1 & 0x3Fu) << 6) | (uint32_t)(b2 & 0x3Fu);
+        if (cp < 0x800u) return 0;
+        if (cp >= 0xD800u && cp <= 0xDFFFu) return 0;
+        if (ok) *ok = true;
+        return cp;
+    }
+    if (b0 >= 0xF0u && b0 <= 0xF4u) {
+        if (len < 4) return 0;
+        uint8_t b1 = bytes[1];
+        uint8_t b2 = bytes[2];
+        uint8_t b3 = bytes[3];
+        if ((b1 & 0xC0u) != 0x80u || (b2 & 0xC0u) != 0x80u || (b3 & 0xC0u) != 0x80u) return 0;
+        uint32_t cp = ((uint32_t)(b0 & 0x07u) << 18) | ((uint32_t)(b1 & 0x3Fu) << 12) | ((uint32_t)(b2 & 0x3Fu) << 6) | (uint32_t)(b3 & 0x3Fu);
+        if (cp < 0x10000u || cp > 0x10FFFFu) return 0;
+        if (ok) *ok = true;
+        return cp;
+    }
+    return 0;
+}
+
+static void fb_unicode_map_sort(void) {
+    // Insertion sort: the map is small (hundreds of entries).
+    for (uint32_t i = 1; i < fb_unicode_map_count; i++) {
+        fb_unicode_map_entry_t key = fb_unicode_map[i];
+        uint32_t j = i;
+        while (j > 0 && fb_unicode_map[j - 1u].codepoint > key.codepoint) {
+            fb_unicode_map[j] = fb_unicode_map[j - 1u];
+            j--;
+        }
+        fb_unicode_map[j] = key;
+    }
+}
+
+static bool fb_unicode_lookup(uint32_t codepoint, uint8_t* out_glyph) {
+    if (!fb_unicode_ready || fb_unicode_map_count == 0 || !out_glyph) {
+        return false;
+    }
+
+    uint32_t lo = 0;
+    uint32_t hi = fb_unicode_map_count;
+    while (lo < hi) {
+        uint32_t mid = lo + (hi - lo) / 2u;
+        uint32_t cp = fb_unicode_map[mid].codepoint;
+        if (cp == codepoint) {
+            *out_glyph = fb_unicode_map[mid].glyph;
+            return true;
+        }
+        if (cp < codepoint) {
+            lo = mid + 1u;
+        } else {
+            hi = mid;
+        }
+    }
+    return false;
+}
+
+static void fb_unicode_build_map(void) {
+    fb_unicode_map_count = 0;
+    fb_unicode_ready = false;
+    fb_unicode_replacement_glyph = (uint8_t)'?';
+
+    if (backend != SCREEN_BACKEND_FRAMEBUFFER) {
+        return;
+    }
+    if (!fb_font.data || fb_font.data_len < fb_font.headersize) {
+        return;
+    }
+    if ((fb_font.flags & 0x1u) == 0) {
+        return; // no Unicode table
+    }
+
+    uint32_t glyph_bytes = fb_font.glyph_count * fb_font.bytes_per_glyph;
+    uint32_t table_off = fb_font.headersize + glyph_bytes;
+    if (table_off < fb_font.headersize || table_off > fb_font.data_len) {
+        return;
+    }
+
+    const uint8_t* p = fb_font.data + table_off;
+    uint32_t remaining = fb_font.data_len - table_off;
+
+    uint32_t glyph = 0;
+    uint8_t seq[8];
+    uint32_t seq_len = 0;
+
+    while (glyph < fb_font.glyph_count && remaining > 0) {
+        uint8_t b = *p++;
+        remaining--;
+
+        if (b == 0xFFu) {
+            // End of this glyph's entries.
+            seq_len = 0;
+            glyph++;
+            continue;
+        }
+
+        if (b == 0xFEu) {
+            // Sequence separator (used for multi-codepoint sequences). Ignore these.
+            seq_len = 0;
+            continue;
+        }
+
+        if (seq_len < (uint32_t)sizeof(seq)) {
+            seq[seq_len++] = b;
+        } else {
+            // Too long/invalid: drop this entry.
+            seq_len = 0;
+        }
+
+        bool ok = false;
+        uint32_t cp = utf8_decode_one(seq, seq_len, &ok);
+        if (!ok) {
+            continue;
+        }
+        seq_len = 0;
+
+        if (cp == 0) {
+            continue;
+        }
+        if (glyph > 0xFFu) {
+            // Our cell storage is 8-bit. Ignore glyphs beyond 255 for now.
+            continue;
+        }
+
+        bool exists = false;
+        for (uint32_t i = 0; i < fb_unicode_map_count; i++) {
+            if (fb_unicode_map[i].codepoint == cp) {
+                exists = true;
+                break;
+            }
+        }
+        if (exists) {
+            continue;
+        }
+
+        if (fb_unicode_map_count < FB_UNICODE_MAP_MAX) {
+            fb_unicode_map[fb_unicode_map_count++] = (fb_unicode_map_entry_t){
+                .codepoint = cp,
+                .glyph = (uint8_t)glyph,
+            };
+        }
+    }
+
+    if (fb_unicode_map_count == 0) {
+        return;
+    }
+
+    fb_unicode_map_sort();
+    fb_unicode_ready = true;
+
+    uint8_t repl = 0;
+    if (fb_unicode_lookup(0xFFFDu, &repl)) {
+        fb_unicode_replacement_glyph = repl;
+    } else {
+        fb_unicode_replacement_glyph = (uint8_t)'?';
+    }
 }
 
 static uint16_t* scrollback_line_ptr(uint32_t idx) {
@@ -191,6 +402,37 @@ static void cursor_clamp(void) {
     if (cursor_y > max_y) cursor_y = max_y;
 }
 
+static void ansi_scroll_region_reset(void) {
+    ansi_scroll_top = 0;
+    ansi_scroll_bottom = usable_height() - 1;
+    if (ansi_scroll_bottom < 0) {
+        ansi_scroll_bottom = 0;
+    }
+}
+
+static void ansi_scroll_region_clamp(void) {
+    int height = usable_height();
+    if (height < 1) {
+        height = 1;
+    }
+    if (ansi_scroll_top < 0) {
+        ansi_scroll_top = 0;
+    }
+    if (ansi_scroll_bottom < 0) {
+        ansi_scroll_bottom = height - 1;
+    }
+    if (ansi_scroll_top >= height) {
+        ansi_scroll_top = 0;
+    }
+    if (ansi_scroll_bottom >= height) {
+        ansi_scroll_bottom = height - 1;
+    }
+    if (ansi_scroll_top > ansi_scroll_bottom) {
+        ansi_scroll_top = 0;
+        ansi_scroll_bottom = height - 1;
+    }
+}
+
 static void ansi_erase_to_eol(void) {
     int y = cursor_y;
     if (y < 0 || y >= usable_height()) {
@@ -203,17 +445,112 @@ static void ansi_erase_to_eol(void) {
         return;
     }
 
+    bool render_now = !(backend == SCREEN_BACKEND_FRAMEBUFFER && scrollback_view_offset > 0);
+
     if (backend == SCREEN_BACKEND_FRAMEBUFFER) {
         uint16_t blank = vga_entry(' ', current_color);
         uint16_t* row = &fb_cells[y * screen_cols_value];
         for (int x = cursor_x; x < screen_cols_value; x++) {
             row[x] = blank;
-            fb_render_cell(x, y);
+            if (render_now) {
+                fb_render_cell(x, y);
+            }
         }
     } else {
         for (int x = cursor_x; x < screen_cols_value; x++) {
             VGA_BUFFER[screen_phys_y(y) * VGA_WIDTH + screen_phys_x(x)] = vga_entry(' ', current_color);
         }
+    }
+}
+
+static void ansi_erase_line(int mode) {
+    int y = cursor_y;
+    if (y < 0 || y >= usable_height()) {
+        return;
+    }
+    int x0 = 0;
+    int x1 = screen_cols_value - 1;
+    if (x1 < 0) {
+        return;
+    }
+
+    if (mode == 0) {
+        x0 = cursor_x;
+    } else if (mode == 1) {
+        x1 = cursor_x;
+    } else if (mode == 2) {
+        x0 = 0;
+        x1 = screen_cols_value - 1;
+    } else {
+        return;
+    }
+
+    if (x0 < 0) x0 = 0;
+    if (x1 < 0) x1 = 0;
+    if (x0 >= screen_cols_value) return;
+    if (x1 >= screen_cols_value) x1 = screen_cols_value - 1;
+    if (x0 > x1) return;
+
+    bool render_now = !(backend == SCREEN_BACKEND_FRAMEBUFFER && scrollback_view_offset > 0);
+
+    if (backend == SCREEN_BACKEND_FRAMEBUFFER) {
+        uint16_t blank = vga_entry(' ', current_color);
+        uint16_t* row = &fb_cells[y * screen_cols_value];
+        for (int x = x0; x <= x1; x++) {
+            row[x] = blank;
+            if (render_now) {
+                fb_render_cell(x, y);
+            }
+        }
+    } else {
+        for (int x = x0; x <= x1; x++) {
+            VGA_BUFFER[screen_phys_y(y) * VGA_WIDTH + screen_phys_x(x)] = vga_entry(' ', current_color);
+        }
+    }
+}
+
+static void ansi_erase_display(int mode) {
+    int height = usable_height();
+    if (height < 1) {
+        height = 1;
+    }
+
+    if (mode == 2) {
+        screen_clear();
+        // Keep the status bar visible after a full-screen clear (common in
+        // userland tools that rely on ANSI sequences).
+        statusbar_refresh();
+        return;
+    }
+
+    if (mode == 0) {
+        // Cursor to end of screen.
+        ansi_erase_line(0);
+        for (int y = cursor_y + 1; y < height; y++) {
+            int saved_y = cursor_y;
+            int saved_x = cursor_x;
+            cursor_y = y;
+            cursor_x = 0;
+            ansi_erase_line(2);
+            cursor_y = saved_y;
+            cursor_x = saved_x;
+        }
+        return;
+    }
+
+    if (mode == 1) {
+        // Start of screen to cursor.
+        for (int y = 0; y < cursor_y; y++) {
+            int saved_y = cursor_y;
+            int saved_x = cursor_x;
+            cursor_y = y;
+            cursor_x = 0;
+            ansi_erase_line(2);
+            cursor_y = saved_y;
+            cursor_x = saved_x;
+        }
+        ansi_erase_line(1);
+        return;
     }
 }
 
@@ -427,16 +764,70 @@ static bool ansi_handle_char(char c) {
             break;
         }
         case 'K': { // erase in line (0 = to end)
-            ansi_erase_to_eol();
+            int mode = ansi_get_param(0, 0);
+            if (mode == 0) {
+                ansi_erase_to_eol();
+            } else {
+                ansi_erase_line(mode);
+            }
             update_cursor();
             break;
         }
         case 'J': { // erase in display (2 = clear)
             int mode = ansi_get_param(0, 0);
-            if (mode == 2) {
-                screen_clear();
-                update_cursor();
+            ansi_erase_display(mode);
+            update_cursor();
+            break;
+        }
+        case 'r': { // set scrolling region
+            int height = usable_height();
+            if (height < 1) height = 1;
+
+            int top = ansi_get_param(0, 1);
+            int bottom = ansi_get_param(1, height);
+            if (top <= 0) top = 1;
+            if (bottom <= 0) bottom = height;
+
+            ansi_scroll_top = top - 1;
+            ansi_scroll_bottom = bottom - 1;
+            ansi_scroll_region_clamp();
+
+            cursor_x = 0;
+            cursor_y = 0;
+            cursor_clamp();
+            update_cursor();
+            break;
+        }
+        case 'S': { // scroll up
+            int n = ansi_get_param(0, 1);
+            if (n < 1) n = 1;
+            int saved_x = cursor_x;
+            int saved_y = cursor_y;
+            for (int i = 0; i < n; i++) {
+                if (backend == SCREEN_BACKEND_FRAMEBUFFER) {
+                    fb_scroll();
+                } else {
+                    vga_scroll();
+                }
             }
+            cursor_x = saved_x;
+            cursor_y = saved_y;
+            cursor_clamp();
+            update_cursor();
+            break;
+        }
+        case 'T': { // scroll down
+            int n = ansi_get_param(0, 1);
+            if (n < 1) n = 1;
+            for (int i = 0; i < n; i++) {
+                if (backend == SCREEN_BACKEND_FRAMEBUFFER) {
+                    fb_scroll_down();
+                } else {
+                    vga_scroll_down();
+                }
+            }
+            cursor_clamp();
+            update_cursor();
             break;
         }
         case 's': { // save cursor
@@ -489,6 +880,10 @@ int screen_cols(void) {
 
 int screen_rows(void) {
     return screen_rows_value;
+}
+
+int screen_usable_rows(void) {
+    return usable_height();
 }
 
 static inline int screen_phys_x(int x) {
@@ -703,41 +1098,65 @@ static void update_cursor(void) {
 }
 
 static void vga_scroll(void) {
+    ansi_scroll_region_clamp();
+    int top = ansi_scroll_top;
+    int bottom = ansi_scroll_bottom;
     int height = usable_height();
-    int phys_top = pad_top_rows;
+    if (height < 1) height = 1;
 
-    // Save the line that is about to scroll out (top visible line).
+    if (top < 0) top = 0;
+    if (bottom < 0) bottom = 0;
+    if (top >= height) top = 0;
+    if (bottom >= height) bottom = height - 1;
+
+    if (bottom <= top) {
+        cursor_y = top;
+        return;
+    }
+
+    // Save the line that is about to scroll out (top of the scroll region).
     int cols = screen_cols_value;
     if (cols > FB_MAX_COLS) cols = FB_MAX_COLS;
     if (cols > 0) {
         uint16_t line[FB_MAX_COLS];
         for (int x = 0; x < cols; x++) {
-            line[x] = VGA_BUFFER[screen_phys_y(0) * VGA_WIDTH + screen_phys_x(x)];
+            line[x] = VGA_BUFFER[screen_phys_y(top) * VGA_WIDTH + screen_phys_x(x)];
         }
         scrollback_push_line(line, cols);
     }
 
-    // Move all lines up by one
-    for (int y = 0; y < height - 1; y++) {
-        int dst_y = phys_top + y;
-        int src_y = phys_top + y + 1;
+    // Move all lines in the scroll region up by one.
+    for (int y = top; y < bottom; y++) {
+        int dst_y = screen_phys_y(y);
+        int src_y = screen_phys_y(y + 1);
         for (int x = 0; x < VGA_WIDTH; x++) {
             VGA_BUFFER[dst_y * VGA_WIDTH + x] = VGA_BUFFER[src_y * VGA_WIDTH + x];
         }
     }
 
-    // Clear the last line
-    int last_y = phys_top + (height - 1);
+    // Clear the last line in the scroll region.
+    int last_y = screen_phys_y(bottom);
     for (int x = 0; x < VGA_WIDTH; x++) {
         VGA_BUFFER[last_y * VGA_WIDTH + x] = vga_entry(' ', current_color);
     }
 
-    cursor_y = height - 1;
+    cursor_y = bottom;
 }
 
 static void fb_scroll(void) {
+    ansi_scroll_region_clamp();
+    int top = ansi_scroll_top;
+    int bottom = ansi_scroll_bottom;
     int height = usable_height();
-    if (height <= 1) {
+    if (height < 1) height = 1;
+
+    if (top < 0) top = 0;
+    if (bottom < 0) bottom = 0;
+    if (top >= height) top = 0;
+    if (bottom >= height) bottom = height - 1;
+
+    if (bottom <= top) {
+        cursor_y = top;
         return;
     }
 
@@ -752,30 +1171,112 @@ static void fb_scroll(void) {
 
     int cols = screen_cols_value;
     if (cols > 0) {
-        scrollback_push_line(&fb_cells[0], cols);
+        scrollback_push_line(&fb_cells[top * cols], cols);
     }
     size_t row_bytes = (size_t)cols * sizeof(uint16_t);
-    memcpy(&fb_cells[0], &fb_cells[cols], row_bytes * (size_t)(height - 1));
+    memmove(&fb_cells[top * cols], &fb_cells[(top + 1) * cols], row_bytes * (size_t)(bottom - top));
 
     uint16_t blank = vga_entry(' ', current_color);
     for (int x = 0; x < cols; x++) {
-        fb_cells[(height - 1) * cols + x] = blank;
+        fb_cells[bottom * cols + x] = blank;
     }
 
     if (scrollback_view_offset == 0) {
-        uint32_t usable_px_height = (uint32_t)height * fb_font.height;
-        uint32_t copy_bytes = (usable_px_height - fb_font.height) * fb_pitch;
-        uint8_t* dst = fb_addr + fb_origin_y * fb_pitch;
+        uint32_t region_rows = (uint32_t)(bottom - top + 1);
+        uint32_t region_px_height = region_rows * fb_font.height;
+        uint32_t copy_bytes = (region_px_height - fb_font.height) * fb_pitch;
+        uint32_t region_y = fb_origin_y + (uint32_t)top * fb_font.height;
+
+        uint8_t* dst = fb_addr + region_y * fb_pitch;
         uint8_t* src = dst + fb_font.height * fb_pitch;
-        memcpy(dst, src, copy_bytes);
+        memmove(dst, src, copy_bytes);
 
         uint8_t bg = (uint8_t)((current_color >> 4) & 0x0Fu);
         uint32_t bg_px = fb_color_from_vga(bg);
-        uint32_t clear_y = fb_origin_y + (uint32_t)(height - 1) * fb_font.height;
+        uint32_t clear_y = fb_origin_y + (uint32_t)bottom * fb_font.height;
         fb_fill_rect(0, clear_y, fb_width, fb_font.height, bg_px);
     }
 
-    cursor_y = height - 1;
+    cursor_y = bottom;
+}
+
+static void vga_scroll_down(void) {
+    ansi_scroll_region_clamp();
+    int top = ansi_scroll_top;
+    int bottom = ansi_scroll_bottom;
+    int height = usable_height();
+    if (height < 1) height = 1;
+
+    if (top < 0) top = 0;
+    if (bottom < 0) bottom = 0;
+    if (top >= height) top = 0;
+    if (bottom >= height) bottom = height - 1;
+
+    if (bottom <= top) {
+        return;
+    }
+
+    // Move all lines in the scroll region down by one.
+    for (int y = bottom; y > top; y--) {
+        int dst_y = screen_phys_y(y);
+        int src_y = screen_phys_y(y - 1);
+        for (int x = 0; x < VGA_WIDTH; x++) {
+            VGA_BUFFER[dst_y * VGA_WIDTH + x] = VGA_BUFFER[src_y * VGA_WIDTH + x];
+        }
+    }
+
+    // Clear the first line in the scroll region.
+    int first_y = screen_phys_y(top);
+    for (int x = 0; x < VGA_WIDTH; x++) {
+        VGA_BUFFER[first_y * VGA_WIDTH + x] = vga_entry(' ', current_color);
+    }
+}
+
+static void fb_scroll_down(void) {
+    ansi_scroll_region_clamp();
+    int top = ansi_scroll_top;
+    int bottom = ansi_scroll_bottom;
+    int height = usable_height();
+    if (height < 1) height = 1;
+
+    if (top < 0) top = 0;
+    if (bottom < 0) bottom = 0;
+    if (top >= height) top = 0;
+    if (bottom >= height) bottom = height - 1;
+
+    if (bottom <= top) {
+        return;
+    }
+
+    if (cursor_drawn_x >= 0 && cursor_drawn_y >= 0) {
+        fb_render_cell(cursor_drawn_x, cursor_drawn_y);
+        cursor_drawn_x = -1;
+        cursor_drawn_y = -1;
+    }
+
+    int cols = screen_cols_value;
+    size_t row_bytes = (size_t)cols * sizeof(uint16_t);
+    memmove(&fb_cells[(top + 1) * cols], &fb_cells[top * cols], row_bytes * (size_t)(bottom - top));
+
+    uint16_t blank = vga_entry(' ', current_color);
+    for (int x = 0; x < cols; x++) {
+        fb_cells[top * cols + x] = blank;
+    }
+
+    if (scrollback_view_offset == 0) {
+        uint32_t region_rows = (uint32_t)(bottom - top + 1);
+        uint32_t region_px_height = region_rows * fb_font.height;
+        uint32_t copy_bytes = (region_px_height - fb_font.height) * fb_pitch;
+        uint32_t region_y = fb_origin_y + (uint32_t)top * fb_font.height;
+
+        uint8_t* src = fb_addr + region_y * fb_pitch;
+        uint8_t* dst = src + fb_font.height * fb_pitch;
+        memmove(dst, src, copy_bytes);
+
+        uint8_t bg = (uint8_t)((current_color >> 4) & 0x0Fu);
+        uint32_t bg_px = fb_color_from_vga(bg);
+        fb_fill_rect(0, region_y, fb_width, fb_font.height, bg_px);
+    }
 }
 
 static void scrollback_render_view(void) {
@@ -927,6 +1428,10 @@ void screen_init(uint32_t multiboot_magic, uint32_t* mboot_info) {
     cursor_enabled = true;
     cursor_drawn_x = -1;
     cursor_drawn_y = -1;
+    utf8_state = (utf8_state_t){0};
+    fb_unicode_map_count = 0;
+    fb_unicode_replacement_glyph = (uint8_t)'?';
+    fb_unicode_ready = false;
 
     backend = SCREEN_BACKEND_VGA_TEXT;
     pad_left_cols = 1;
@@ -962,6 +1467,10 @@ void screen_init(uint32_t multiboot_magic, uint32_t* mboot_info) {
         .glyph_count = 0,
         .bytes_per_glyph = 0,
         .glyphs = NULL,
+        .data = NULL,
+        .data_len = 0,
+        .headersize = 0,
+        .flags = 0,
     };
 
     if (multiboot_magic == MULTIBOOT_BOOTLOADER_MAGIC && mboot_info) {
@@ -1043,6 +1552,7 @@ void screen_init(uint32_t multiboot_magic, uint32_t* mboot_info) {
                         fb_origin_x = (uint32_t)pad_left_cols * fb_font.width;
                         fb_origin_y = (uint32_t)pad_top_rows * fb_font.height;
                         backend = SCREEN_BACKEND_FRAMEBUFFER;
+                        fb_unicode_build_map();
 
                         serial_write_string("[OK] Framebuffer ");
                         serial_write_dec((int32_t)fb_width);
@@ -1074,28 +1584,41 @@ void screen_init(uint32_t multiboot_magic, uint32_t* mboot_info) {
     }
 
     scrollback_reset();
+    ansi_scroll_region_reset();
     screen_clear();
 }
 
-void screen_putchar(char c) {
-    if (ansi_handle_char(c)) {
-        // Mirror ANSI escape bytes to serial so VT100-style userland (microrl, etc.)
-        // remains usable over a host terminal connected to COM1.
-        serial_write_char(c);
-        return;
+static uint8_t screen_glyph_for_codepoint(uint32_t cp) {
+    uint8_t glyph = (uint8_t)'?';
+
+    if (backend == SCREEN_BACKEND_FRAMEBUFFER && fb_unicode_ready) {
+        if (fb_unicode_lookup(cp, &glyph)) {
+            return glyph;
+        }
+        if (cp < fb_font.glyph_count) {
+            return (uint8_t)cp;
+        }
+        return fb_unicode_replacement_glyph;
     }
 
+    if (cp < 256u) {
+        return (uint8_t)cp;
+    }
+    return (uint8_t)'?';
+}
+
+static void screen_put_codepoint(uint32_t cp) {
     int height = usable_height();
     bool render_now = !(backend == SCREEN_BACKEND_FRAMEBUFFER && scrollback_view_offset > 0);
 
-    if (c == '\n') {
+    if (cp == (uint32_t)'\n') {
         cursor_x = 0;
         cursor_y++;
-    } else if (c == '\r') {
+    } else if (cp == (uint32_t)'\r') {
         cursor_x = 0;
-    } else if (c == '\t') {
+    } else if (cp == (uint32_t)'\t') {
         cursor_x = (cursor_x + 8) & ~7;
-    } else if (c == '\b') {
+    } else if (cp == (uint32_t)'\b') {
         if (cursor_x > 0) {
             cursor_x--;
             if (backend == SCREEN_BACKEND_FRAMEBUFFER) {
@@ -1108,25 +1631,25 @@ void screen_putchar(char c) {
             }
         }
     } else {
+        uint8_t glyph = screen_glyph_for_codepoint(cp);
         if (backend == SCREEN_BACKEND_FRAMEBUFFER) {
-            fb_cells[cursor_y * screen_cols_value + cursor_x] = vga_entry(c, current_color);
+            fb_cells[cursor_y * screen_cols_value + cursor_x] = vga_entry((char)glyph, current_color);
             if (render_now) {
                 fb_render_cell(cursor_x, cursor_y);
             }
         } else {
-            VGA_BUFFER[screen_phys_y(cursor_y) * VGA_WIDTH + screen_phys_x(cursor_x)] = vga_entry(c, current_color);
+            VGA_BUFFER[screen_phys_y(cursor_y) * VGA_WIDTH + screen_phys_x(cursor_x)] = vga_entry((char)glyph, current_color);
         }
         cursor_x++;
     }
 
-    // Handle line wrap
     if (cursor_x >= screen_cols_value) {
         cursor_x = 0;
         cursor_y++;
     }
 
-    // Handle scrolling
-    if (cursor_y >= height) {
+    ansi_scroll_region_clamp();
+    if (cursor_y > ansi_scroll_bottom || cursor_y >= height) {
         if (backend == SCREEN_BACKEND_FRAMEBUFFER) {
             fb_scroll();
         } else {
@@ -1135,6 +1658,77 @@ void screen_putchar(char c) {
     }
 
     update_cursor();
+}
+
+static void screen_utf8_process_byte(uint8_t b) {
+    for (;;) {
+        if (utf8_state.remaining == 0) {
+            if (b < 0x80u) {
+                screen_put_codepoint((uint32_t)b);
+                return;
+            }
+
+            if (b >= 0xC2u && b <= 0xDFu) {
+                utf8_state.codepoint = (uint32_t)(b & 0x1Fu);
+                utf8_state.min = 0x80u;
+                utf8_state.remaining = 1;
+                return;
+            }
+            if (b >= 0xE0u && b <= 0xEFu) {
+                utf8_state.codepoint = (uint32_t)(b & 0x0Fu);
+                utf8_state.min = 0x800u;
+                utf8_state.remaining = 2;
+                return;
+            }
+            if (b >= 0xF0u && b <= 0xF4u) {
+                utf8_state.codepoint = (uint32_t)(b & 0x07u);
+                utf8_state.min = 0x10000u;
+                utf8_state.remaining = 3;
+                return;
+            }
+
+            // Invalid start: treat as a single-byte codepoint.
+            screen_put_codepoint((uint32_t)b);
+            return;
+        }
+
+        if ((b & 0xC0u) != 0x80u) {
+            // Broken sequence: emit replacement and restart with this byte.
+            utf8_state = (utf8_state_t){0};
+            screen_put_codepoint(0xFFFDu);
+            continue;
+        }
+
+        utf8_state.codepoint = (utf8_state.codepoint << 6) | (uint32_t)(b & 0x3Fu);
+        utf8_state.remaining--;
+
+        if (utf8_state.remaining != 0) {
+            return;
+        }
+
+        uint32_t cp = utf8_state.codepoint;
+        uint32_t min = utf8_state.min;
+        utf8_state = (utf8_state_t){0};
+
+        if (cp < min || cp > 0x10FFFFu || (cp >= 0xD800u && cp <= 0xDFFFu)) {
+            cp = 0xFFFDu;
+        }
+
+        screen_put_codepoint(cp);
+        return;
+    }
+}
+
+void screen_putchar(char c) {
+    if (ansi_handle_char(c)) {
+        // Mirror ANSI escape bytes to serial so VT100-style userland (microrl, etc.)
+        // remains usable over a host terminal connected to COM1.
+        utf8_state = (utf8_state_t){0};
+        serial_write_char(c);
+        return;
+    }
+
+    screen_utf8_process_byte((uint8_t)c);
 
     // Mirror VGA output to serial for debugging/logging.
     serial_write_char(c);
@@ -1229,6 +1823,7 @@ void screen_set_reserved_bottom_rows(int rows) {
         rows = screen_rows_value - 1;
     }
     reserved_bottom_rows = rows;
+    ansi_scroll_region_clamp();
     if (cursor_y >= usable_height()) {
         cursor_y = usable_height() - 1;
         if (cursor_y < 0) cursor_y = 0;

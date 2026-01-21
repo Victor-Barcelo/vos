@@ -60,6 +60,9 @@ bool font_psf2_parse(const uint8_t* data, uint32_t len, font_t* out) {
     out->glyph_count = hdr->length;
     out->bytes_per_glyph = hdr->charsize;
     out->glyphs = data + hdr->headersize;
+    out->data = data;
+    out->data_len = len;
+    out->headersize = hdr->headersize;
+    out->flags = hdr->flags;
     return true;
 }
-

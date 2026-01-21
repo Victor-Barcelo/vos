@@ -42,6 +42,7 @@ struct vfs_handle {
     vfs_backend_t backend;
     uint32_t flags;
     uint32_t off;
+    uint32_t refcount;
     char abs_path[VFS_PATH_MAX];
 
     // File state.
@@ -489,6 +490,7 @@ static int32_t handle_alloc(vfs_handle_t** out) {
     if (!h) {
         return -ENOMEM;
     }
+    h->refcount = 1;
     *out = h;
     return 0;
 }
@@ -834,9 +836,25 @@ int32_t vfs_open_path(const char* cwd, const char* path, uint32_t flags, vfs_han
     return open_file_handle(VFS_BACKEND_INITRAMFS, abs, flags, data, size, out);
 }
 
+void vfs_ref(vfs_handle_t* h) {
+    if (!h) {
+        return;
+    }
+    if (h->refcount == 0) {
+        h->refcount = 1;
+        return;
+    }
+    h->refcount++;
+}
+
 int32_t vfs_close(vfs_handle_t* h) {
     if (!h) {
         return -EINVAL;
+    }
+
+    if (h->refcount > 1u) {
+        h->refcount--;
+        return 0;
     }
 
     int32_t rc = 0;
@@ -1019,4 +1037,310 @@ int32_t vfs_readdir(vfs_handle_t* h, vfs_dirent_t* out_ent) {
     }
     *out_ent = h->ents[h->ent_index++];
     return 1;
+}
+
+static void abs_dirname(const char* abs, char out[VFS_PATH_MAX]) {
+    if (!out) {
+        return;
+    }
+    if (!abs || abs[0] != '/') {
+        out[0] = '/';
+        out[1] = '\0';
+        return;
+    }
+
+    strncpy(out, abs, VFS_PATH_MAX - 1u);
+    out[VFS_PATH_MAX - 1u] = '\0';
+
+    char* last = strrchr(out, '/');
+    if (!last) {
+        out[0] = '/';
+        out[1] = '\0';
+        return;
+    }
+    if (last == out) {
+        out[1] = '\0';
+        return;
+    }
+    *last = '\0';
+}
+
+int32_t vfs_unlink_path(const char* cwd, const char* path) {
+    char abs[VFS_PATH_MAX];
+    int32_t rc = vfs_path_resolve(cwd, path, abs);
+    if (rc < 0) {
+        return rc;
+    }
+    if (ci_eq(abs, "/") || ci_eq(abs, "/ram") || ci_eq(abs, "/disk")) {
+        return -EPERM;
+    }
+
+    if (abs_is_mount(abs, "/disk")) {
+        if (!fatdisk_is_ready()) {
+            return -EIO;
+        }
+        bool is_dir = false;
+        uint32_t size = 0;
+        if (!fatdisk_stat(abs, &is_dir, &size)) {
+            return -ENOENT;
+        }
+        if (is_dir) {
+            return -EISDIR;
+        }
+        if (!fatdisk_unlink(abs)) {
+            return -EIO;
+        }
+        return 0;
+    }
+
+    if (abs_is_mount(abs, "/ram")) {
+        if (ramfs_is_dir(abs)) {
+            return -EISDIR;
+        }
+        if (!ramfs_is_file(abs)) {
+            return -ENOENT;
+        }
+        if (!ramfs_unlink(abs)) {
+            return -EIO;
+        }
+        return 0;
+    }
+
+    return -EROFS;
+}
+
+int32_t vfs_rmdir_path(const char* cwd, const char* path) {
+    char abs[VFS_PATH_MAX];
+    int32_t rc = vfs_path_resolve(cwd, path, abs);
+    if (rc < 0) {
+        return rc;
+    }
+    if (ci_eq(abs, "/") || ci_eq(abs, "/ram") || ci_eq(abs, "/disk")) {
+        return -EPERM;
+    }
+
+    if (abs_is_mount(abs, "/disk")) {
+        if (!fatdisk_is_ready()) {
+            return -EIO;
+        }
+        bool is_dir = false;
+        uint32_t size = 0;
+        if (!fatdisk_stat(abs, &is_dir, &size)) {
+            return -ENOENT;
+        }
+        if (!is_dir) {
+            return -ENOTDIR;
+        }
+
+        fatdisk_dirent_t* dents = (fatdisk_dirent_t*)kcalloc(VFS_MAX_DIR_ENTRIES, sizeof(fatdisk_dirent_t));
+        if (!dents) {
+            return -ENOMEM;
+        }
+        uint32_t n = fatdisk_list_dir(abs, dents, VFS_MAX_DIR_ENTRIES);
+        for (uint32_t i = 0; i < n; i++) {
+            if (ci_eq(dents[i].name, ".") || ci_eq(dents[i].name, "..")) {
+                continue;
+            }
+            kfree(dents);
+            return -ENOTEMPTY;
+        }
+        kfree(dents);
+
+        if (!fatdisk_rmdir(abs)) {
+            return -EIO;
+        }
+        return 0;
+    }
+
+    if (abs_is_mount(abs, "/ram")) {
+        if (!ramfs_is_dir(abs)) {
+            return ramfs_is_file(abs) ? -ENOTDIR : -ENOENT;
+        }
+
+        ramfs_dirent_t* dents = (ramfs_dirent_t*)kcalloc(VFS_MAX_DIR_ENTRIES, sizeof(ramfs_dirent_t));
+        if (!dents) {
+            return -ENOMEM;
+        }
+        uint32_t n = ramfs_list_dir(abs, dents, VFS_MAX_DIR_ENTRIES);
+        kfree(dents);
+        if (n != 0) {
+            return -ENOTEMPTY;
+        }
+
+        if (!ramfs_rmdir(abs)) {
+            return -EIO;
+        }
+        return 0;
+    }
+
+    return -EROFS;
+}
+
+int32_t vfs_rename_path(const char* cwd, const char* old_path, const char* new_path) {
+    if (!old_path || !new_path) {
+        return -EINVAL;
+    }
+
+    char abs_old[VFS_PATH_MAX];
+    char abs_new[VFS_PATH_MAX];
+    int32_t rc = vfs_path_resolve(cwd, old_path, abs_old);
+    if (rc < 0) {
+        return rc;
+    }
+    rc = vfs_path_resolve(cwd, new_path, abs_new);
+    if (rc < 0) {
+        return rc;
+    }
+    if (ci_eq(abs_old, "/") || ci_eq(abs_old, "/ram") || ci_eq(abs_old, "/disk")) {
+        return -EPERM;
+    }
+    if (ci_eq(abs_new, "/") || ci_eq(abs_new, "/ram") || ci_eq(abs_new, "/disk")) {
+        return -EPERM;
+    }
+
+    vfs_stat_t st_old;
+    rc = vfs_stat_path("/", abs_old, &st_old);
+    if (rc < 0) {
+        return rc;
+    }
+
+    vfs_stat_t st_new;
+    rc = vfs_stat_path("/", abs_new, &st_new);
+    if (rc == 0) {
+        return -EEXIST;
+    }
+    if (rc != -ENOENT) {
+        return rc;
+    }
+
+    bool old_disk = abs_is_mount(abs_old, "/disk");
+    bool old_ram = abs_is_mount(abs_old, "/ram");
+    bool new_disk = abs_is_mount(abs_new, "/disk");
+    bool new_ram = abs_is_mount(abs_new, "/ram");
+
+    if ((old_disk && !new_disk) || (old_ram && !new_ram) || (!old_disk && !old_ram) || (!new_disk && !new_ram)) {
+        return -EXDEV;
+    }
+
+    if (old_disk) {
+        if (!fatdisk_is_ready()) {
+            return -EIO;
+        }
+
+        // fatdisk_rename currently can't move across directories.
+        char old_dir[VFS_PATH_MAX];
+        char new_dir[VFS_PATH_MAX];
+        abs_dirname(abs_old, old_dir);
+        abs_dirname(abs_new, new_dir);
+        if (!ci_eq(old_dir, new_dir)) {
+            return -EXDEV;
+        }
+
+        if (!fatdisk_rename(abs_old, abs_new)) {
+            return -EIO;
+        }
+        return 0;
+    }
+
+    // /ram
+    if (!ramfs_rename(abs_old, abs_new)) {
+        return -EIO;
+    }
+    return 0;
+}
+
+int32_t vfs_ftruncate(vfs_handle_t* h, uint32_t new_size) {
+    if (!h) {
+        return -EINVAL;
+    }
+    if (h->kind != VFS_HANDLE_FILE) {
+        return -EISDIR;
+    }
+    if (!handle_writable(h)) {
+        return -EBADF;
+    }
+    if (h->backend == VFS_BACKEND_INITRAMFS) {
+        return -EROFS;
+    }
+
+    int32_t rc = handle_ensure_buf(h);
+    if (rc < 0) {
+        return rc;
+    }
+
+    if (new_size > h->cap) {
+        rc = handle_grow(h, new_size);
+        if (rc < 0) {
+            return rc;
+        }
+    }
+
+    if (new_size > h->size) {
+        memset(h->buf + h->size, 0, (size_t)(new_size - h->size));
+    }
+
+    h->size = new_size;
+    if (h->off > new_size) {
+        h->off = new_size;
+    }
+    h->dirty = true;
+    return 0;
+}
+
+int32_t vfs_fsync(vfs_handle_t* h) {
+    if (!h) {
+        return -EINVAL;
+    }
+    if (h->kind != VFS_HANDLE_FILE) {
+        return 0;
+    }
+    if (!handle_writable(h)) {
+        return -EBADF;
+    }
+    if (h->backend == VFS_BACKEND_INITRAMFS) {
+        return -EROFS;
+    }
+    if (!h->dirty) {
+        return 0;
+    }
+
+    int32_t rc = 0;
+    if (h->backend == VFS_BACKEND_FATDISK) {
+        if (!fatdisk_write_file(h->abs_path, h->buf, h->size, true)) {
+            rc = -EIO;
+        }
+    } else if (h->backend == VFS_BACKEND_RAMFS) {
+        if (!ramfs_write_file(h->abs_path, h->buf, h->size, true)) {
+            rc = -EIO;
+        }
+    } else {
+        rc = -EROFS;
+    }
+
+    if (rc == 0) {
+        h->dirty = false;
+    }
+    return rc;
+}
+
+int32_t vfs_truncate_path(const char* cwd, const char* path, uint32_t new_size) {
+    if (!path) {
+        return -EINVAL;
+    }
+
+    vfs_handle_t* h = NULL;
+    int32_t rc = vfs_open_path(cwd, path, VFS_O_RDWR, &h);
+    if (rc < 0) {
+        return rc;
+    }
+    if (!h) {
+        return -EIO;
+    }
+
+    rc = vfs_ftruncate(h, new_size);
+    int32_t rc_close = vfs_close(h);
+    if (rc == 0 && rc_close < 0) {
+        rc = rc_close;
+    }
+    return rc;
 }

@@ -7,6 +7,7 @@
 #include "font_terminus_psf2.h"
 #include "font_vga_psf2.h"
 #include "statusbar.h"
+#include "kerrno.h"
 
 typedef enum {
     SCREEN_BACKEND_VGA_TEXT = 0,
@@ -91,6 +92,128 @@ static uint8_t fb_g_size = 0;
 static uint8_t fb_b_pos = 0;
 static uint8_t fb_b_size = 0;
 static font_t fb_font;
+static int fb_font_current_index = -1;
+
+// Extra fonts embedded as binary objects by the build.
+extern const uint8_t _binary_third_party_fonts_spleen_spleen_12x24_psf_start[];
+extern const uint8_t _binary_third_party_fonts_spleen_spleen_12x24_psf_end[];
+extern const uint8_t _binary_third_party_fonts_spleen_spleen_16x32_psf_start[];
+extern const uint8_t _binary_third_party_fonts_spleen_spleen_16x32_psf_end[];
+extern const uint8_t _binary_third_party_fonts_spleen_spleen_32x64_psf_start[];
+extern const uint8_t _binary_third_party_fonts_spleen_spleen_32x64_psf_end[];
+extern const uint8_t _binary_third_party_fonts_terminus_Uni3_Terminus28x14_psf_start[];
+extern const uint8_t _binary_third_party_fonts_terminus_Uni3_Terminus28x14_psf_end[];
+extern const uint8_t _binary_third_party_fonts_terminus_Uni3_TerminusBold32x16_psf_start[];
+extern const uint8_t _binary_third_party_fonts_terminus_Uni3_TerminusBold32x16_psf_end[];
+
+typedef struct {
+    const char* name;
+    const uint8_t* data;
+    const uint8_t* end;
+    uint32_t len;
+} fb_font_source_t;
+
+static uint32_t fb_blob_len(const uint8_t* start, const uint8_t* end) {
+    if (!start || !end) {
+        return 0;
+    }
+    if (end < start) {
+        return 0;
+    }
+    return (uint32_t)(end - start);
+}
+
+enum {
+    FB_FONT_VGA_28X16 = 0,
+    FB_FONT_VGA_32X16 = 1,
+    FB_FONT_TERMINUS_24X12 = 2,
+    FB_FONT_TERMINUS_32X16 = 3,
+    FB_FONT_TERMINUS_28X14 = 4,
+    FB_FONT_TERMINUS_BOLD_32X16 = 5,
+    FB_FONT_SPLEEN_12X24 = 6,
+    FB_FONT_SPLEEN_16X32 = 7,
+    FB_FONT_SPLEEN_32X64 = 8,
+};
+
+static const fb_font_source_t fb_fonts[] = {
+    [FB_FONT_VGA_28X16] = {"vga-28x16", font_vga28x16_psf2, NULL, 0},
+    [FB_FONT_VGA_32X16] = {"vga-32x16", font_vga32x16_psf2, NULL, 0},
+    [FB_FONT_TERMINUS_24X12] = {"terminus-24x12", font_terminus24x12_psf2, NULL, 0},
+    [FB_FONT_TERMINUS_32X16] = {"terminus-32x16", font_terminus32x16_psf2, NULL, 0},
+    [FB_FONT_TERMINUS_28X14] = {"terminus-28x14", _binary_third_party_fonts_terminus_Uni3_Terminus28x14_psf_start,
+                                _binary_third_party_fonts_terminus_Uni3_Terminus28x14_psf_end, 0},
+    [FB_FONT_TERMINUS_BOLD_32X16] = {"terminus-bold-32x16", _binary_third_party_fonts_terminus_Uni3_TerminusBold32x16_psf_start,
+                                     _binary_third_party_fonts_terminus_Uni3_TerminusBold32x16_psf_end, 0},
+    [FB_FONT_SPLEEN_12X24] = {"spleen-12x24", _binary_third_party_fonts_spleen_spleen_12x24_psf_start,
+                              _binary_third_party_fonts_spleen_spleen_12x24_psf_end, 0},
+    [FB_FONT_SPLEEN_16X32] = {"spleen-16x32", _binary_third_party_fonts_spleen_spleen_16x32_psf_start,
+                              _binary_third_party_fonts_spleen_spleen_16x32_psf_end, 0},
+    [FB_FONT_SPLEEN_32X64] = {"spleen-32x64", _binary_third_party_fonts_spleen_spleen_32x64_psf_start,
+                              _binary_third_party_fonts_spleen_spleen_32x64_psf_end, 0},
+};
+
+static int fb_font_count_value(void) {
+    return (int)(sizeof(fb_fonts) / sizeof(fb_fonts[0]));
+}
+
+static bool fb_font_source_get(int index, const fb_font_source_t** out_src, const uint8_t** out_data, uint32_t* out_len) {
+    if (out_src) {
+        *out_src = NULL;
+    }
+    if (out_data) {
+        *out_data = NULL;
+    }
+    if (out_len) {
+        *out_len = 0;
+    }
+    int count = fb_font_count_value();
+    if (index < 0 || index >= count) {
+        return false;
+    }
+
+    const fb_font_source_t* src = &fb_fonts[index];
+    if (!src->data) {
+        return false;
+    }
+
+    uint32_t len = src->len;
+    if (len == 0) {
+        if (src->end) {
+            len = fb_blob_len(src->data, src->end);
+        } else {
+            switch (index) {
+                case FB_FONT_VGA_28X16:
+                    len = font_vga28x16_psf2_len;
+                    break;
+                case FB_FONT_VGA_32X16:
+                    len = font_vga32x16_psf2_len;
+                    break;
+                case FB_FONT_TERMINUS_24X12:
+                    len = font_terminus24x12_psf2_len;
+                    break;
+                case FB_FONT_TERMINUS_32X16:
+                    len = font_terminus32x16_psf2_len;
+                    break;
+                default:
+                    break;
+            }
+        }
+    }
+    if (len == 0) {
+        return false;
+    }
+
+    if (out_src) {
+        *out_src = src;
+    }
+    if (out_data) {
+        *out_data = src->data;
+    }
+    if (out_len) {
+        *out_len = len;
+    }
+    return true;
+}
 
 static uint16_t fb_cells[FB_MAX_COLS * FB_MAX_ROWS];
 
@@ -1494,24 +1617,56 @@ void screen_init(uint32_t multiboot_magic, uint32_t* mboot_info) {
                     fb_b_pos = mbi->framebuffer_blue_field_position;
                     fb_b_size = mbi->framebuffer_blue_mask_size;
 
-                    const uint8_t* font_data = font_vga28x16_psf2;
-                    uint32_t font_len = font_vga28x16_psf2_len;
-                    const uint8_t* fallback_font_data = font_terminus24x12_psf2;
-                    uint32_t fallback_font_len = font_terminus24x12_psf2_len;
+                    // Prefer larger, high-quality framebuffer fonts by default.
+                    const int* candidates = NULL;
+                    int candidates_count = 0;
+
+                    const int large_candidates[] = {
+                        FB_FONT_TERMINUS_32X16,
+                        FB_FONT_TERMINUS_BOLD_32X16,
+                        FB_FONT_SPLEEN_16X32,
+                        FB_FONT_VGA_32X16,
+                    };
+                    const int small_candidates[] = {
+                        FB_FONT_TERMINUS_24X12,
+                        FB_FONT_SPLEEN_12X24,
+                        FB_FONT_VGA_28X16,
+                    };
+
                     if (fb_width >= 1024 && fb_height >= 768) {
-                        font_data = font_vga32x16_psf2;
-                        font_len = font_vga32x16_psf2_len;
-                        fallback_font_data = font_terminus32x16_psf2;
-                        fallback_font_len = font_terminus32x16_psf2_len;
+                        candidates = large_candidates;
+                        candidates_count = (int)(sizeof(large_candidates) / sizeof(large_candidates[0]));
+                    } else {
+                        candidates = small_candidates;
+                        candidates_count = (int)(sizeof(small_candidates) / sizeof(small_candidates[0]));
                     }
 
-                    bool font_ok = font_psf2_parse(font_data, font_len, &fb_font);
-                    if (!font_ok) {
-                        font_ok = font_psf2_parse(fallback_font_data, fallback_font_len, &fb_font);
+                    bool font_ok = false;
+                    fb_font_current_index = -1;
+                    for (int i = 0; i < candidates_count; i++) {
+                        const int idx = candidates[i];
+                        const uint8_t* font_data = NULL;
+                        uint32_t font_len = 0;
+                        if (!fb_font_source_get(idx, NULL, &font_data, &font_len)) {
+                            continue;
+                        }
+                        if (!font_psf2_parse(font_data, font_len, &fb_font)) {
+                            continue;
+                        }
+                        if (fb_font.width == 0 || fb_font.height == 0) {
+                            continue;
+                        }
+                        if ((fb_width / fb_font.width) < 1u || (fb_height / fb_font.height) < 1u) {
+                            continue;
+                        }
+                        font_ok = true;
+                        fb_font_current_index = idx;
+                        break;
                     }
 
                     if (!font_ok || fb_font.width == 0 || fb_font.height == 0) {
                         serial_write_string("[WARN] Framebuffer font unavailable, using VGA text\n");
+                        fb_font_current_index = -1;
                         fb_addr = 0;
                         fb_pitch = 0;
                         fb_width = 0;
@@ -1914,6 +2069,124 @@ uint32_t screen_font_height(void) {
         return 0;
     }
     return fb_font.height;
+}
+
+int screen_font_count(void) {
+    return fb_font_count_value();
+}
+
+int screen_font_get_current(void) {
+    if (backend != SCREEN_BACKEND_FRAMEBUFFER) {
+        return -ENOTTY;
+    }
+    return fb_font_current_index;
+}
+
+int screen_font_get_info(int index, screen_font_info_t* out) {
+    if (!out) {
+        return -EINVAL;
+    }
+
+    const fb_font_source_t* src = NULL;
+    const uint8_t* data = NULL;
+    uint32_t len = 0;
+    if (!fb_font_source_get(index, &src, &data, &len)) {
+        return -EINVAL;
+    }
+
+    font_t parsed;
+    if (!font_psf2_parse(data, len, &parsed)) {
+        return -EINVAL;
+    }
+
+    memset(out, 0, sizeof(*out));
+    strncpy(out->name, src->name, sizeof(out->name) - 1u);
+    out->width = parsed.width;
+    out->height = parsed.height;
+    return 0;
+}
+
+static int fb_apply_font(const font_t* font) {
+    if (!font) {
+        return -EINVAL;
+    }
+    if (backend != SCREEN_BACKEND_FRAMEBUFFER) {
+        return -ENOTTY;
+    }
+    if (font->width == 0 || font->height == 0) {
+        return -EINVAL;
+    }
+
+    int cols_total = (int)(fb_width / font->width);
+    int rows_total = (int)(fb_height / font->height);
+    if (cols_total < 1 || rows_total < 1) {
+        return -EINVAL;
+    }
+
+    int fb_pad_left = 1;
+    int fb_pad_right = 1;
+    int fb_pad_top = 1;
+    int fb_pad_bottom = 1;
+
+    if (cols_total <= (fb_pad_left + fb_pad_right)) {
+        fb_pad_left = 0;
+        fb_pad_right = 0;
+    }
+    if (rows_total <= (fb_pad_top + fb_pad_bottom)) {
+        fb_pad_top = 0;
+        fb_pad_bottom = 0;
+    }
+
+    int cols = cols_total - fb_pad_left - fb_pad_right;
+    int rows = rows_total - fb_pad_top - fb_pad_bottom;
+    if (cols < 1) cols = 1;
+    if (rows < 1) rows = 1;
+    if (cols > FB_MAX_COLS) cols = FB_MAX_COLS;
+    if (rows > FB_MAX_ROWS) rows = FB_MAX_ROWS;
+
+    fb_font = *font;
+    pad_left_cols = fb_pad_left;
+    pad_right_cols = fb_pad_right;
+    pad_top_rows = fb_pad_top;
+    pad_bottom_rows = fb_pad_bottom;
+    screen_cols_value = cols;
+    screen_rows_value = rows;
+    fb_origin_x = (uint32_t)pad_left_cols * fb_font.width;
+    fb_origin_y = (uint32_t)pad_top_rows * fb_font.height;
+
+    // Keep the status bar reservation if possible.
+    screen_set_reserved_bottom_rows(reserved_bottom_rows);
+    scrollback_reset();
+    ansi_scroll_region_reset();
+    fb_unicode_build_map();
+    screen_clear();
+    statusbar_refresh();
+    return 0;
+}
+
+int screen_font_set(int index) {
+    if (backend != SCREEN_BACKEND_FRAMEBUFFER) {
+        return -ENOTTY;
+    }
+
+    const uint8_t* data = NULL;
+    uint32_t len = 0;
+    if (!fb_font_source_get(index, NULL, &data, &len)) {
+        return -EINVAL;
+    }
+
+    font_t parsed;
+    if (!font_psf2_parse(data, len, &parsed)) {
+        return -EINVAL;
+    }
+
+    uint32_t flags = irq_save();
+    int rc = fb_apply_font(&parsed);
+    if (rc == 0) {
+        fb_font_current_index = index;
+    }
+    irq_restore(flags);
+    return rc;
 }
 
 static inline bool fb_xy_in_bounds(int32_t x, int32_t y) {

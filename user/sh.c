@@ -165,8 +165,82 @@ static void cmd_cat(int argc, char** argv) {
     close(fd);
 }
 
+static int is_elf_file(const char* dir, const char* name) {
+    if (!name || name[0] == '\0') {
+        return 0;
+    }
+
+    char full[512];
+    if (!dir || dir[0] == '\0' || strcmp(dir, ".") == 0) {
+        snprintf(full, sizeof(full), "%s", name);
+    } else {
+        char d[256];
+        strncpy(d, dir, sizeof(d) - 1u);
+        d[sizeof(d) - 1u] = '\0';
+        size_t len = strlen(d);
+        while (len > 1 && d[len - 1u] == '/') {
+            d[len - 1u] = '\0';
+            len--;
+        }
+        if (strcmp(d, "/") == 0) {
+            snprintf(full, sizeof(full), "/%s", name);
+        } else {
+            snprintf(full, sizeof(full), "%s/%s", d, name);
+        }
+    }
+
+    int fd = open(full, O_RDONLY);
+    if (fd < 0) {
+        return 0;
+    }
+
+    unsigned char hdr[4];
+    int n = (int)read(fd, hdr, sizeof(hdr));
+    close(fd);
+    if (n != (int)sizeof(hdr)) {
+        return 0;
+    }
+    return (hdr[0] == 0x7F && hdr[1] == 'E' && hdr[2] == 'L' && hdr[3] == 'F') ? 1 : 0;
+}
+
 static void cmd_ls(int argc, char** argv) {
     const char* path = (argc >= 2) ? argv[1] : ".";
+
+    const char* CLR_RESET = "\x1b[0m";
+    const char* CLR_DIR = "\x1b[94m";   // bright blue
+    const char* CLR_EXEC = "\x1b[92m";  // bright green (used for /bin entries)
+
+    char cwd[256];
+    if (!getcwd(cwd, sizeof(cwd))) {
+        strcpy(cwd, "/");
+    }
+
+    char abs[512];
+    const char* list_dir = NULL;
+    if (path[0] == '/') {
+        list_dir = path;
+    } else if (strcmp(path, ".") == 0) {
+        list_dir = cwd;
+    } else {
+        if (strcmp(cwd, "/") == 0) {
+            snprintf(abs, sizeof(abs), "/%s", path);
+        } else {
+            snprintf(abs, sizeof(abs), "%s/%s", cwd, path);
+        }
+        list_dir = abs;
+    }
+
+    // Trim trailing slashes for comparisons like "/bin/".
+    char list_dir_trim[512];
+    strncpy(list_dir_trim, list_dir, sizeof(list_dir_trim) - 1u);
+    list_dir_trim[sizeof(list_dir_trim) - 1u] = '\0';
+    size_t tlen = strlen(list_dir_trim);
+    while (tlen > 1 && list_dir_trim[tlen - 1u] == '/') {
+        list_dir_trim[tlen - 1u] = '\0';
+        tlen--;
+    }
+
+    int in_bin = (strcmp(list_dir_trim, "/bin") == 0);
 
     struct stat st;
     if (stat(path, &st) < 0) {
@@ -175,7 +249,14 @@ static void cmd_ls(int argc, char** argv) {
     }
 
     if (!S_ISDIR(st.st_mode)) {
-        puts(path);
+        // When listing a file, colorize it if it's under /bin.
+        if (strncmp(list_dir_trim, "/bin/", 5) == 0 ||
+            (strcmp(cwd, "/bin") == 0 && strchr(path, '/') == NULL) ||
+            is_elf_file(".", path)) {
+            printf("%s%s%s\n", CLR_EXEC, path, CLR_RESET);
+        } else {
+            puts(path);
+        }
         return;
     }
 
@@ -189,9 +270,13 @@ static void cmd_ls(int argc, char** argv) {
     while (sys_readdir(fd, &de) > 0) {
         if (de.name[0] == '\0') continue;
         if (de.is_dir) {
-            printf("%s/\n", de.name);
+            printf("%s%s/%s\n", CLR_DIR, de.name, CLR_RESET);
         } else {
-            printf("%s\n", de.name);
+            if (in_bin || (de.size >= 4u && is_elf_file(path, de.name))) {
+                printf("%s%s%s\n", CLR_EXEC, de.name, CLR_RESET);
+            } else {
+                printf("%s\n", de.name);
+            }
         }
     }
 

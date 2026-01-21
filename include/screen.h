@@ -85,6 +85,18 @@ uint32_t screen_framebuffer_bpp(void);
 uint32_t screen_font_width(void);
 uint32_t screen_font_height(void);
 
+// Framebuffer font registry (only available in framebuffer text console mode).
+typedef struct screen_font_info {
+    char name[32];
+    uint32_t width;
+    uint32_t height;
+} screen_font_info_t;
+
+int screen_font_count(void);
+int screen_font_get_current(void);
+int screen_font_get_info(int index, screen_font_info_t* out);
+int screen_font_set(int index);
+
 // Simple framebuffer pixel primitives (no-op in VGA text mode).
 bool screen_graphics_clear(uint8_t bg_vga);
 bool screen_graphics_putpixel(int32_t x, int32_t y, uint8_t vga_color);

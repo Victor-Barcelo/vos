@@ -54,6 +54,10 @@ enum {
     SYS_CPU_VENDOR = 40,
     SYS_CPU_BRAND = 41,
     SYS_VFS_FILE_COUNT = 42,
+    SYS_FONT_COUNT = 43,
+    SYS_FONT_GET = 44,
+    SYS_FONT_INFO = 45,
+    SYS_FONT_SET = 46,
 };
 
 typedef struct vos_task_info_user {
@@ -68,6 +72,12 @@ typedef struct vos_task_info_user {
     uint32_t wait_pid;
     char name[16];
 } vos_task_info_user_t;
+
+typedef struct vos_font_info_user {
+    char name[32];
+    uint32_t width;
+    uint32_t height;
+} vos_font_info_user_t;
 
 static int32_t copy_kernel_string_to_user(char* dst_user, uint32_t cap, const char* src) {
     if (cap == 0) {
@@ -616,6 +626,43 @@ interrupt_frame_t* syscall_handle(interrupt_frame_t* frame) {
         }
         case SYS_VFS_FILE_COUNT: {
             frame->eax = vfs_file_count();
+            return frame;
+        }
+        case SYS_FONT_COUNT: {
+            frame->eax = (uint32_t)screen_font_count();
+            return frame;
+        }
+        case SYS_FONT_GET: {
+            frame->eax = (uint32_t)screen_font_get_current();
+            return frame;
+        }
+        case SYS_FONT_INFO: {
+            uint32_t idx = frame->ebx;
+            vos_font_info_user_t* out_user = (vos_font_info_user_t*)frame->ecx;
+
+            screen_font_info_t info;
+            int rc = screen_font_get_info((int)idx, &info);
+            if (rc < 0) {
+                frame->eax = (uint32_t)rc;
+                return frame;
+            }
+
+            vos_font_info_user_t out;
+            memset(&out, 0, sizeof(out));
+            strncpy(out.name, info.name, sizeof(out.name) - 1u);
+            out.width = info.width;
+            out.height = info.height;
+
+            if (!copy_to_user(out_user, &out, (uint32_t)sizeof(out))) {
+                frame->eax = (uint32_t)-EFAULT;
+                return frame;
+            }
+            frame->eax = 0;
+            return frame;
+        }
+        case SYS_FONT_SET: {
+            uint32_t idx = frame->ebx;
+            frame->eax = (uint32_t)screen_font_set((int)idx);
             return frame;
         }
         default:

@@ -25,6 +25,12 @@ typedef struct vos_task_info {
     char name[16];
 } vos_task_info_t;
 
+typedef struct vos_font_info {
+    char name[32];
+    uint32_t width;
+    uint32_t height;
+} vos_font_info_t;
+
 enum {
     SYS_WRITE = 0,
     SYS_EXIT = 1,
@@ -69,6 +75,10 @@ enum {
     SYS_CPU_VENDOR = 40,
     SYS_CPU_BRAND = 41,
     SYS_VFS_FILE_COUNT = 42,
+    SYS_FONT_COUNT = 43,
+    SYS_FONT_GET = 44,
+    SYS_FONT_INFO = 45,
+    SYS_FONT_SET = 46,
 };
 
 static inline int sys_write(int fd, const char* buf, uint32_t len) {
@@ -340,6 +350,50 @@ static inline int sys_vfs_file_count(void) {
         "int $0x80"
         : "=a"(ret)
         : "a"(SYS_VFS_FILE_COUNT)
+        : "memory"
+    );
+    return ret;
+}
+
+static inline int sys_font_count(void) {
+    int ret;
+    __asm__ volatile (
+        "int $0x80"
+        : "=a"(ret)
+        : "a"(SYS_FONT_COUNT)
+        : "memory"
+    );
+    return ret;
+}
+
+static inline int sys_font_get_current(void) {
+    int ret;
+    __asm__ volatile (
+        "int $0x80"
+        : "=a"(ret)
+        : "a"(SYS_FONT_GET)
+        : "memory"
+    );
+    return ret;
+}
+
+static inline int sys_font_info(uint32_t index, vos_font_info_t* out) {
+    int ret;
+    __asm__ volatile (
+        "int $0x80"
+        : "=a"(ret)
+        : "a"(SYS_FONT_INFO), "b"(index), "c"(out)
+        : "memory"
+    );
+    return ret;
+}
+
+static inline int sys_font_set(uint32_t index) {
+    int ret;
+    __asm__ volatile (
+        "int $0x80"
+        : "=a"(ret)
+        : "a"(SYS_FONT_SET), "b"(index)
         : "memory"
     );
     return ret;

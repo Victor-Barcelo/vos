@@ -25,6 +25,8 @@ BUILD_DIR = build
 ISO_DIR = iso
 TOOLS_DIR = tools
 TOOLS_BUILD_DIR = $(BUILD_DIR)/tools
+FONTS_DIR = $(THIRD_PARTY_DIR)/fonts
+FONTS_BUILD_DIR = $(BUILD_DIR)/fonts
 
 # Flags
 ASFLAGS = -f elf32
@@ -40,7 +42,18 @@ C_SOURCES = $(wildcard $(KERNEL_DIR)/*.c)
 ASM_OBJECTS = $(BUILD_DIR)/boot.o
 C_OBJECTS = $(patsubst $(KERNEL_DIR)/%.c,$(BUILD_DIR)/%.o,$(C_SOURCES))
 MICRORL_OBJ = $(BUILD_DIR)/microrl.o
-OBJECTS = $(ASM_OBJECTS) $(C_OBJECTS) $(MICRORL_OBJ)
+
+# Additional PSF2 fonts (embedded as binary objects).
+EXTRA_FONT_PSF = \
+	$(FONTS_DIR)/spleen/spleen-12x24.psf \
+	$(FONTS_DIR)/spleen/spleen-16x32.psf \
+	$(FONTS_DIR)/spleen/spleen-32x64.psf \
+	$(FONTS_DIR)/terminus/Uni3-Terminus28x14.psf \
+	$(FONTS_DIR)/terminus/Uni3-TerminusBold32x16.psf
+
+EXTRA_FONT_OBJS = $(patsubst $(FONTS_DIR)/%.psf,$(FONTS_BUILD_DIR)/%.o,$(EXTRA_FONT_PSF))
+
+OBJECTS = $(ASM_OBJECTS) $(C_OBJECTS) $(MICRORL_OBJ) $(EXTRA_FONT_OBJS)
 
 # Output
 KERNEL = $(BUILD_DIR)/kernel.bin
@@ -69,6 +82,7 @@ USER_SETDATE_OBJ = $(USER_BUILD_DIR)/setdate.o
 USER_PS_OBJ = $(USER_BUILD_DIR)/ps.o
 USER_TOP_OBJ = $(USER_BUILD_DIR)/top.o
 USER_NEOFETCH_OBJ = $(USER_BUILD_DIR)/neofetch.o
+USER_FONT_OBJ = $(USER_BUILD_DIR)/font.o
 USER_INIT = $(USER_BUILD_DIR)/init.elf
 USER_ELIZA = $(USER_BUILD_DIR)/eliza.elf
 USER_LSH = $(USER_BUILD_DIR)/lsh.elf
@@ -79,6 +93,7 @@ USER_SETDATE = $(USER_BUILD_DIR)/setdate.elf
 USER_PS = $(USER_BUILD_DIR)/ps.elf
 USER_TOP = $(USER_BUILD_DIR)/top.elf
 USER_NEOFETCH = $(USER_BUILD_DIR)/neofetch.elf
+USER_FONT = $(USER_BUILD_DIR)/font.elf
 # Zork I (userland)
 USER_ZORK_DIR = $(USER_DIR)/zork1c
 USER_ZORK_C_SOURCES = $(USER_ZORK_DIR)/_parser.c $(USER_ZORK_DIR)/_game.c $(USER_ZORK_DIR)/_villains.c \
@@ -94,7 +109,7 @@ USER_BASIC_C_SOURCES = $(USER_BASIC_DIR)/basic.c $(USER_BASIC_DIR)/ubasic.c $(US
 USER_BASIC_OBJECTS = $(patsubst $(USER_DIR)/%.c,$(USER_BUILD_DIR)/%.o,$(USER_BASIC_C_SOURCES))
 USER_BASIC = $(USER_BUILD_DIR)/basic.elf
 
-USER_BINS = $(USER_INIT) $(USER_ELIZA) $(USER_LSH) $(USER_SH) $(USER_UPTIME) $(USER_DATE) $(USER_SETDATE) $(USER_PS) $(USER_TOP) $(USER_NEOFETCH) $(USER_BASIC) $(USER_ZORK)
+USER_BINS = $(USER_INIT) $(USER_ELIZA) $(USER_LSH) $(USER_SH) $(USER_UPTIME) $(USER_DATE) $(USER_SETDATE) $(USER_PS) $(USER_TOP) $(USER_NEOFETCH) $(USER_FONT) $(USER_BASIC) $(USER_ZORK)
 
 # QEMU defaults
 QEMU_XRES ?= 1920
@@ -118,6 +133,15 @@ $(USER_BUILD_DIR): | $(BUILD_DIR)
 # Create tools build directory
 $(TOOLS_BUILD_DIR): | $(BUILD_DIR)
 	mkdir -p $(TOOLS_BUILD_DIR)
+
+# Create fonts build directory
+$(FONTS_BUILD_DIR): | $(BUILD_DIR)
+	mkdir -p $(FONTS_BUILD_DIR)
+
+# Embed PSF2 fonts as binary objects
+$(FONTS_BUILD_DIR)/%.o: $(FONTS_DIR)/%.psf | $(FONTS_BUILD_DIR)
+	mkdir -p $(dir $@)
+	$(LD) -r -b binary $< -o $@
 
 # Build host tool to generate a FAT image
 $(MKFAT): $(TOOLS_DIR)/mkfat.c | $(TOOLS_BUILD_DIR)
@@ -182,6 +206,10 @@ $(USER_TOP): $(USER_RUNTIME_OBJECTS) $(USER_TOP_OBJ)
 $(USER_NEOFETCH): $(USER_RUNTIME_OBJECTS) $(USER_NEOFETCH_OBJ)
 	$(CC) -nostartfiles -Wl,-T,$(USER_DIR)/linker.ld -Wl,--gc-sections -o $@ $^ -lc -lgcc
 
+# Link userland font selector
+$(USER_FONT): $(USER_RUNTIME_OBJECTS) $(USER_FONT_OBJ)
+	$(CC) -nostartfiles -Wl,-T,$(USER_DIR)/linker.ld -Wl,--gc-sections -o $@ $^ -lc -lgcc
+
 # Link userland BASIC interpreter
 $(USER_BASIC): $(USER_RUNTIME_OBJECTS) $(USER_BASIC_OBJECTS)
 	$(CC) -nostartfiles -Wl,-T,$(USER_DIR)/linker.ld -Wl,--gc-sections -o $@ $^ -lc -lgcc
@@ -220,6 +248,7 @@ $(ISO): $(KERNEL) $(USER_BINS) $(FAT_IMG)
 	cp $(USER_PS) $(INITRAMFS_ROOT)/bin/ps
 	cp $(USER_TOP) $(INITRAMFS_ROOT)/bin/top
 	cp $(USER_NEOFETCH) $(INITRAMFS_ROOT)/bin/neofetch
+	cp $(USER_FONT) $(INITRAMFS_ROOT)/bin/font
 	cp $(USER_BASIC) $(INITRAMFS_ROOT)/bin/basic
 	cp $(USER_ZORK) $(INITRAMFS_ROOT)/bin/zork
 	tar -C $(INITRAMFS_ROOT) -cf $(INITRAMFS_TAR) .

@@ -45,6 +45,8 @@ typedef struct vos_stat {
     unsigned char is_dir;
     unsigned char _pad[3];
     unsigned int size;
+    unsigned short wtime;
+    unsigned short wdate;
 } vos_stat_t;
 
 #define VOS_NAME_MAX 64
@@ -53,6 +55,8 @@ typedef struct vos_dirent {
     unsigned char is_dir;
     unsigned char _pad[3];
     unsigned int size;
+    unsigned short wtime;
+    unsigned short wdate;
 } vos_dirent_t;
 
 static inline int vos_sys_write(int fd, const void* buf, unsigned int len) {

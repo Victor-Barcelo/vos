@@ -7,8 +7,13 @@
 #include "syscall.h"
 
 #define CLR_RESET "\x1b[0m"
-#define CLR_LOGO  "\x1b[96m"  // bright cyan
-#define CLR_KEY   "\x1b[93m"  // bright yellow
+
+// Theme: VOS console default is white-on-blue, so prefer bright fg colors.
+#define CLR_LOGO  "\x1b[36;1m" // bright cyan (logo)
+#define CLR_KEY   "\x1b[33;1m" // bright yellow (labels)
+#define CLR_HDR   "\x1b[37;1m" // bright white (header)
+#define CLR_DIM   "\x1b[37m"   // light grey (secondary)
+#define CLR_ACCENT "\x1b[35;1m" // bright magenta (accent)
 
 static void print_uptime_human(uint32_t ms) {
     uint32_t total = ms / 1000u;
@@ -89,10 +94,11 @@ int main(int argc, char** argv) {
     int tasks = sys_task_count();
     if (tasks < 0) tasks = 0;
 
-    // Some "emoji" / Unicode symbols (may render as '?' depending on the font).
-    const char* mood = "☺ ⚡ 🚀";
+    // "Emoji-like" symbols. Full Unicode emoji (e.g. U+1F680 🚀) aren't available
+    // in our current 256-glyph PSF2 fonts / 8-bit cell storage.
+    const char* mood = "☺ ☼ ♦ ♠ ♣";
 
-    const int info_lines = 13;
+    const int info_lines = 14;
     int lines = (logo_lines > info_lines) ? logo_lines : info_lines;
 
     for (int line = 0; line < lines; line++) {
@@ -106,10 +112,10 @@ int main(int argc, char** argv) {
 
         switch (line) {
             case 0:
-                printf("user@vos %s\n", mood);
+                printf(CLR_HDR "user@vos" CLR_RESET " " CLR_ACCENT "%s" CLR_RESET "\n", mood);
                 break;
             case 1:
-                printf("----------\n");
+                printf(CLR_DIM "----------" CLR_RESET "\n");
                 break;
             case 2:
                 print_key("OS");
@@ -191,8 +197,18 @@ int main(int argc, char** argv) {
                 printf(": %d\n", tasks);
                 break;
             case 12:
-                print_key("Emoji");
-                printf(": %s\n", mood);
+                print_key("Symbols");
+                printf(": " CLR_ACCENT "%s" CLR_RESET "\n", mood);
+                break;
+            case 13:
+                print_key("Colors");
+                printf(": ");
+                // 16-color palette (background blocks).
+                fputs("\x1b[40m  \x1b[41m  \x1b[42m  \x1b[43m  \x1b[44m  \x1b[45m  \x1b[46m  \x1b[47m  "
+                      "\x1b[100m  \x1b[101m  \x1b[102m  \x1b[103m  \x1b[104m  \x1b[105m  \x1b[106m  \x1b[107m  "
+                      CLR_RESET,
+                      stdout);
+                putchar('\n');
                 break;
             default:
                 putchar('\n');
@@ -203,4 +219,3 @@ int main(int argc, char** argv) {
     putchar('\n');
     return 0;
 }
-

@@ -1671,8 +1671,7 @@ int32_t tasking_fd_fstat(int32_t fd, void* st_user) {
     irq_restore(irq_flags);
 
     vfs_stat_t st;
-    st.is_dir = false;
-    st.size = 0;
+    memset(&st, 0, sizeof(st));
 
     if (kind == FD_KIND_VFS && h) {
         int32_t rc = vfs_fstat(h, &st);

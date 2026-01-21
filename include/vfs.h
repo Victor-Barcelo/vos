@@ -28,14 +28,22 @@ bool vfs_read_file(const char* path, const uint8_t** out_data, uint32_t* out_siz
 #define VFS_MAX_DIR_ENTRIES 256u
 
 typedef struct vfs_stat {
-    bool is_dir;
+    uint8_t is_dir;
+    uint8_t _pad[3];
     uint32_t size;
+    // FAT-style "last write" timestamp (raw on-disk format). 0 means unknown/unset.
+    uint16_t wtime;
+    uint16_t wdate;
 } vfs_stat_t;
 
 typedef struct vfs_dirent {
     char name[VFS_NAME_MAX];
-    bool is_dir;
+    uint8_t is_dir;
+    uint8_t _pad[3];
     uint32_t size;
+    // FAT-style "last write" timestamp (raw on-disk format). 0 means unknown/unset.
+    uint16_t wtime;
+    uint16_t wdate;
 } vfs_dirent_t;
 
 typedef struct vfs_handle vfs_handle_t;

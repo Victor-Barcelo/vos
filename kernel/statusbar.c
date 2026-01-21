@@ -7,7 +7,8 @@
 static uint32_t last_drawn_minute = 0xFFFFFFFFu;
 
 static uint8_t status_color(void) {
-    return (uint8_t)(VGA_BLUE | (VGA_LIGHT_GREY << 4));
+    // High-contrast bar that remains readable over the default blue console.
+    return (uint8_t)(VGA_BLACK | (VGA_LIGHT_GREY << 4));
 }
 
 static void append_char(char* buf, int* pos, int max, char c) {

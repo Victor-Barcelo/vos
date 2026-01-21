@@ -17,7 +17,17 @@ typedef struct vos_dirent {
     unsigned char is_dir;
     unsigned char _pad[3];
     unsigned int size;
+    unsigned short wtime;
+    unsigned short wdate;
 } vos_dirent_t;
+
+typedef struct vos_stat {
+    unsigned char is_dir;
+    unsigned char _pad[3];
+    unsigned int size;
+    unsigned short wtime;
+    unsigned short wdate;
+} vos_stat_t;
 
 static int sys_readdir(int fd, vos_dirent_t* out) {
     int ret;
@@ -25,6 +35,17 @@ static int sys_readdir(int fd, vos_dirent_t* out) {
         "int $0x80"
         : "=a"(ret)
         : "a"(SYS_READDIR), "b"(fd), "c"(out)
+        : "memory"
+    );
+    return ret;
+}
+
+static int sys_stat_raw(const char* path, vos_stat_t* out) {
+    int ret;
+    __asm__ volatile (
+        "int $0x80"
+        : "=a"(ret)
+        : "a"(SYS_STAT), "b"(path), "c"(out)
         : "memory"
     );
     return ret;
@@ -206,9 +227,10 @@ static int is_elf_file(const char* dir, const char* name) {
 typedef struct ls_entry {
     char name[64];
     unsigned char is_dir;
-    unsigned int size;
     unsigned char is_exec;
-    unsigned char _pad[3];
+    unsigned short wtime;
+    unsigned short wdate;
+    unsigned int size;
 } ls_entry_t;
 
 typedef struct ls_opts {
@@ -292,6 +314,29 @@ static void ls_format_size(char* out, size_t cap, unsigned int bytes, const ls_o
     snprintf(out, cap, "%uK", kib);
 }
 
+static void ls_print_mtime(unsigned short wdate, unsigned short wtime) {
+    if (wdate == 0) {
+        fputs("????", stdout);
+        fputc('-', stdout);
+        fputs("??", stdout);
+        fputc('-', stdout);
+        fputs("??", stdout);
+        fputc(' ', stdout);
+        fputs("??", stdout);
+        fputc(':', stdout);
+        fputs("??", stdout);
+        return;
+    }
+
+    unsigned int year = 1980u + (unsigned int)((wdate >> 9) & 0x7Fu);
+    unsigned int month = (unsigned int)((wdate >> 5) & 0x0Fu);
+    unsigned int day = (unsigned int)(wdate & 0x1Fu);
+    unsigned int hour = (unsigned int)((wtime >> 11) & 0x1Fu);
+    unsigned int minute = (unsigned int)((wtime >> 5) & 0x3Fu);
+
+    printf("%04u-%02u-%02u %02u:%02u", year, month, day, hour, minute);
+}
+
 static const char* ls_color_for(const ls_entry_t* e) {
     if (!e) return "";
 
@@ -315,7 +360,7 @@ static const char* ls_color_for(const ls_entry_t* e) {
     }
 
     if (has_ext_ci(name, ".txt") || has_ext_ci(name, ".md") || has_ext_ci(name, ".cfg") || has_ext_ci(name, ".ini")) {
-        return "\x1b[37m"; // light grey
+        return "\x1b[37;1m"; // bright white
     }
 
     if (has_ext_ci(name, ".img") || has_ext_ci(name, ".iso") || has_ext_ci(name, ".tar") || has_ext_ci(name, ".gz") ||
@@ -398,24 +443,35 @@ static void cmd_ls(int argc, char** argv) {
             path = ".";
         }
 
-        struct stat st;
-        if (stat(path, &st) < 0) {
+        vos_stat_t st;
+        int st_rc = sys_stat_raw(path, &st);
+        if (st_rc < 0) {
+            errno = -st_rc;
             print_errno("ls");
             continue;
         }
 
-        if (!S_ISDIR(st.st_mode)) {
+        if (!st.is_dir) {
             ls_entry_t e;
             memset(&e, 0, sizeof(e));
             strncpy(e.name, path, sizeof(e.name) - 1u);
             e.name[sizeof(e.name) - 1u] = '\0';
             e.is_dir = 0;
-            e.size = (unsigned int)st.st_size;
+            e.size = st.size;
+            e.wtime = st.wtime;
+            e.wdate = st.wdate;
             e.is_exec = (e.size >= 4u && is_elf_file(".", path)) ? 1u : 0u;
             if (opts.long_format) {
                 char sbuf[16];
                 ls_format_size(sbuf, sizeof(sbuf), e.size, &opts);
-                printf("%c %6s ", e.is_exec ? 'x' : '-', sbuf);
+                const char* tclr = e.is_exec ? "\x1b[32;1m" : "\x1b[37m";
+                printf("%s%c\x1b[0m ", tclr, e.is_exec ? 'x' : '-');
+                fputs("\x1b[37m", stdout);
+                ls_print_mtime(e.wdate, e.wtime);
+                fputs("\x1b[0m  ", stdout);
+                fputs("\x1b[33;1m", stdout);
+                printf("%6s", sbuf);
+                fputs("\x1b[0m ", stdout);
             }
             ls_print_name(&e);
             putchar('\n');
@@ -442,6 +498,8 @@ static void cmd_ls(int argc, char** argv) {
             strcpy(dot->name, ".");
             dot->is_dir = 1;
             dot->size = 0;
+            dot->wtime = 0;
+            dot->wdate = 0;
 
             if (entry_count < 256) {
                 ls_entry_t* dotdot = &entries[entry_count++];
@@ -449,6 +507,8 @@ static void cmd_ls(int argc, char** argv) {
                 strcpy(dotdot->name, "..");
                 dotdot->is_dir = 1;
                 dotdot->size = 0;
+                dotdot->wtime = 0;
+                dotdot->wdate = 0;
             }
         }
 
@@ -463,6 +523,8 @@ static void cmd_ls(int argc, char** argv) {
             e->name[sizeof(e->name) - 1u] = '\0';
             e->is_dir = de.is_dir ? 1u : 0u;
             e->size = de.size;
+            e->wtime = de.wtime;
+            e->wdate = de.wdate;
             e->is_exec = (!e->is_dir && e->size >= 4u && is_elf_file(path, e->name)) ? 1u : 0u;
         }
         close(fd);
@@ -494,7 +556,13 @@ static void cmd_ls(int argc, char** argv) {
 
                 char t = e->is_dir ? 'd' : (e->is_exec ? 'x' : '-');
                 const char* tclr = e->is_dir ? "\x1b[36;1m" : (e->is_exec ? "\x1b[32;1m" : "\x1b[0m");
-                printf("%s%c\x1b[0m %*s ", tclr, t, (int)sizew, sbuf);
+                printf("%s%c\x1b[0m ", tclr, t);
+                fputs("\x1b[37m", stdout);
+                ls_print_mtime(e->wdate, e->wtime);
+                fputs("\x1b[0m  ", stdout);
+                fputs("\x1b[33;1m", stdout);
+                printf("%*s", (int)sizew, sbuf);
+                fputs("\x1b[0m ", stdout);
             }
 
             ls_print_name(e);

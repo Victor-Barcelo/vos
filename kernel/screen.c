@@ -1545,6 +1545,7 @@ void screen_clear(void) {
 
 void screen_init(uint32_t multiboot_magic, uint32_t* mboot_info) {
     current_color = vga_color(VGA_WHITE, VGA_BLUE);
+    default_color = current_color;
     reserved_bottom_rows = 0;
     cursor_x = 0;
     cursor_y = 0;
@@ -1622,8 +1623,8 @@ void screen_init(uint32_t multiboot_magic, uint32_t* mboot_info) {
                     int candidates_count = 0;
 
                     const int large_candidates[] = {
-                        FB_FONT_TERMINUS_32X16,
                         FB_FONT_TERMINUS_BOLD_32X16,
+                        FB_FONT_TERMINUS_32X16,
                         FB_FONT_SPLEEN_16X32,
                         FB_FONT_VGA_32X16,
                     };

@@ -246,22 +246,97 @@ int32_t vfs_path_resolve(const char* cwd, const char* path, char out_abs[VFS_PAT
     return 0;
 }
 
+static void fat_ts_max_update(uint16_t* io_wtime, uint16_t* io_wdate, uint16_t wtime, uint16_t wdate) {
+    if (!io_wtime || !io_wdate) {
+        return;
+    }
+    uint32_t old_key = ((uint32_t)(*io_wdate) << 16) | (uint32_t)(*io_wtime);
+    uint32_t new_key = ((uint32_t)wdate << 16) | (uint32_t)wtime;
+    if (new_key > old_key) {
+        *io_wtime = wtime;
+        *io_wdate = wdate;
+    }
+}
+
+static bool initramfs_lookup_mtime_abs(const char* abs_path, uint16_t* out_wtime, uint16_t* out_wdate) {
+    if (out_wtime) *out_wtime = 0;
+    if (out_wdate) *out_wdate = 0;
+    if (!abs_path) {
+        return false;
+    }
+
+    const char* rel = abs_path;
+    while (*rel == '/') rel++;
+
+    uint32_t n = vfs_file_count();
+    for (uint32_t i = 0; i < n; i++) {
+        const char* name = vfs_file_name(i);
+        if (!name) continue;
+        while (*name == '/') name++;
+        if (ci_eq(name, rel)) {
+            return vfs_file_mtime(i, out_wtime, out_wdate);
+        }
+    }
+    return false;
+}
+
+static bool initramfs_max_mtime_under_abs(const char* abs_dir, uint16_t* out_wtime, uint16_t* out_wdate) {
+    if (out_wtime) *out_wtime = 0;
+    if (out_wdate) *out_wdate = 0;
+    if (!abs_dir) {
+        return false;
+    }
+
+    const char* rel = abs_dir;
+    while (*rel == '/') rel++;
+    uint32_t rel_len = (uint32_t)strlen(rel);
+
+    bool found = false;
+    uint32_t n = vfs_file_count();
+    for (uint32_t i = 0; i < n; i++) {
+        const char* name = vfs_file_name(i);
+        if (!name) continue;
+        while (*name == '/') name++;
+        if (*name == '\0') continue;
+
+        if (rel_len != 0) {
+            if (!ci_starts_with(name, rel) || name[rel_len] != '/') {
+                continue;
+            }
+        }
+
+        uint16_t wtime = 0;
+        uint16_t wdate = 0;
+        (void)vfs_file_mtime(i, &wtime, &wdate);
+        if (wdate == 0) {
+            continue;
+        }
+        fat_ts_max_update(out_wtime, out_wdate, wtime, wdate);
+        found = true;
+    }
+
+    return found;
+}
+
 static int32_t initramfs_stat_abs(const char* abs_path, vfs_stat_t* out) {
     if (!abs_path || !out) {
         return -EINVAL;
     }
 
     if (ci_eq(abs_path, "/")) {
-        out->is_dir = true;
+        out->is_dir = 1;
         out->size = 0;
+        out->wtime = 0;
+        out->wdate = 0;
         return 0;
     }
 
     const uint8_t* data = NULL;
     uint32_t size = 0;
     if (vfs_read_file(abs_path, &data, &size) && data) {
-        out->is_dir = false;
+        out->is_dir = 0;
         out->size = size;
+        (void)initramfs_lookup_mtime_abs(abs_path, &out->wtime, &out->wdate);
         return 0;
     }
 
@@ -269,8 +344,10 @@ static int32_t initramfs_stat_abs(const char* abs_path, vfs_stat_t* out) {
     const char* rel = abs_path;
     while (*rel == '/') rel++;
     if (*rel == '\0') {
-        out->is_dir = true;
+        out->is_dir = 1;
         out->size = 0;
+        out->wtime = 0;
+        out->wdate = 0;
         return 0;
     }
 
@@ -281,36 +358,45 @@ static int32_t initramfs_stat_abs(const char* abs_path, vfs_stat_t* out) {
         if (!name) continue;
         while (*name == '/') name++;
         if (ci_starts_with(name, rel) && name[rel_len] == '/') {
-            out->is_dir = true;
+            out->is_dir = 1;
             out->size = 0;
+            (void)initramfs_max_mtime_under_abs(abs_path, &out->wtime, &out->wdate);
             return 0;
         }
     }
 
     // Mountpoints exposed at root even if initramfs doesn't have them.
     if (ci_eq(abs_path, "/ram")) {
-        out->is_dir = true;
+        out->is_dir = 1;
         out->size = 0;
+        out->wtime = 0;
+        out->wdate = 0;
         return 0;
     }
     if (ci_eq(abs_path, "/disk")) {
-        out->is_dir = true;
+        out->is_dir = 1;
         out->size = 0;
+        out->wtime = 0;
+        out->wdate = 0;
         return 0;
     }
 
     return -ENOENT;
 }
 
-static uint32_t add_unique_dirent(vfs_dirent_t* out, uint32_t count, uint32_t max, const char* name, bool is_dir, uint32_t size) {
+static uint32_t add_unique_dirent(vfs_dirent_t* out, uint32_t count, uint32_t max, const char* name, bool is_dir, uint32_t size,
+                                  uint16_t wtime, uint16_t wdate) {
     if (!out || !name || name[0] == '\0') {
         return count;
     }
     for (uint32_t i = 0; i < count; i++) {
         if (ci_eq(out[i].name, name)) {
             if (is_dir) {
-                out[i].is_dir = true;
+                out[i].is_dir = 1;
                 out[i].size = 0;
+            }
+            if (wdate != 0) {
+                fat_ts_max_update(&out[i].wtime, &out[i].wdate, wtime, wdate);
             }
             return count;
         }
@@ -320,8 +406,10 @@ static uint32_t add_unique_dirent(vfs_dirent_t* out, uint32_t count, uint32_t ma
     }
     strncpy(out[count].name, name, VFS_NAME_MAX - 1u);
     out[count].name[VFS_NAME_MAX - 1u] = '\0';
-    out[count].is_dir = is_dir;
+    out[count].is_dir = is_dir ? 1u : 0u;
     out[count].size = is_dir ? 0 : size;
+    out[count].wtime = wtime;
+    out[count].wdate = wdate;
     return count + 1u;
 }
 
@@ -353,8 +441,8 @@ static uint32_t initramfs_list_dir_abs(const char* abs_path, vfs_dirent_t* out, 
 
     // Root mountpoints.
     if (dir_len == 0) {
-        count = add_unique_dirent(out, count, max, "disk", true, 0);
-        count = add_unique_dirent(out, count, max, "ram", true, 0);
+        count = add_unique_dirent(out, count, max, "disk", true, 0, 0, 0);
+        count = add_unique_dirent(out, count, max, "ram", true, 0, 0, 0);
     }
 
     uint32_t n = vfs_file_count();
@@ -389,7 +477,10 @@ static uint32_t initramfs_list_dir_abs(const char* abs_path, vfs_dirent_t* out, 
 
         bool is_dir = child[seg_len] == '/';
         uint32_t size = is_dir ? 0u : vfs_file_size(i);
-        count = add_unique_dirent(out, count, max, seg, is_dir, size);
+        uint16_t wtime = 0;
+        uint16_t wdate = 0;
+        (void)vfs_file_mtime(i, &wtime, &wdate);
+        count = add_unique_dirent(out, count, max, seg, is_dir, size, wtime, wdate);
     }
 
     return count;
@@ -412,31 +503,31 @@ int32_t vfs_stat_path(const char* cwd, const char* path, vfs_stat_t* out) {
         }
         bool is_dir = false;
         uint32_t size = 0;
-        if (!fatdisk_stat(abs, &is_dir, &size)) {
+        uint16_t wtime = 0;
+        uint16_t wdate = 0;
+        if (!fatdisk_stat_ex(abs, &is_dir, &size, &wtime, &wdate)) {
             return -ENOENT;
         }
-        out->is_dir = is_dir;
+        out->is_dir = is_dir ? 1u : 0u;
         out->size = size;
+        out->wtime = wtime;
+        out->wdate = wdate;
         return 0;
     }
 
     if (abs_is_mount(abs, "/ram")) {
-        if (ramfs_is_dir(abs)) {
-            out->is_dir = true;
-            out->size = 0;
-            return 0;
+        bool is_dir = false;
+        uint32_t size = 0;
+        uint16_t wtime = 0;
+        uint16_t wdate = 0;
+        if (!ramfs_stat_ex(abs, &is_dir, &size, &wtime, &wdate)) {
+            return -ENOENT;
         }
-        if (ramfs_is_file(abs)) {
-            const uint8_t* data = NULL;
-            uint32_t size = 0;
-            if (!ramfs_read_file(abs, &data, &size)) {
-                return -EIO;
-            }
-            out->is_dir = false;
-            out->size = size;
-            return 0;
-        }
-        return -ENOENT;
+        out->is_dir = is_dir ? 1u : 0u;
+        out->size = size;
+        out->wtime = wtime;
+        out->wdate = wdate;
+        return 0;
     }
 
     return initramfs_stat_abs(abs, out);
@@ -530,8 +621,10 @@ static int32_t open_dir_handle(vfs_backend_t backend, const char* abs_path, uint
             for (uint32_t i = 0; i < count; i++) {
                 strncpy(h->ents[i].name, dents[i].name, VFS_NAME_MAX - 1u);
                 h->ents[i].name[VFS_NAME_MAX - 1u] = '\0';
-                h->ents[i].is_dir = dents[i].is_dir;
+                h->ents[i].is_dir = dents[i].is_dir ? 1u : 0u;
                 h->ents[i].size = dents[i].size;
+                h->ents[i].wtime = dents[i].wtime;
+                h->ents[i].wdate = dents[i].wdate;
             }
         }
         kfree(dents);
@@ -552,8 +645,10 @@ static int32_t open_dir_handle(vfs_backend_t backend, const char* abs_path, uint
             for (uint32_t i = 0; i < count; i++) {
                 strncpy(h->ents[i].name, dents[i].name, VFS_NAME_MAX - 1u);
                 h->ents[i].name[VFS_NAME_MAX - 1u] = '\0';
-                h->ents[i].is_dir = dents[i].is_dir;
+                h->ents[i].is_dir = dents[i].is_dir ? 1u : 0u;
                 h->ents[i].size = dents[i].size;
+                h->ents[i].wtime = dents[i].wtime;
+                h->ents[i].wdate = dents[i].wdate;
             }
         }
         kfree(dents);
@@ -1020,8 +1115,36 @@ int32_t vfs_fstat(vfs_handle_t* h, vfs_stat_t* out) {
     if (!h || !out) {
         return -EINVAL;
     }
-    out->is_dir = h->kind == VFS_HANDLE_DIR;
+    memset(out, 0, sizeof(*out));
+    out->is_dir = (h->kind == VFS_HANDLE_DIR) ? 1u : 0u;
     out->size = (h->kind == VFS_HANDLE_FILE) ? h->size : 0;
+
+    uint16_t wtime = 0;
+    uint16_t wdate = 0;
+
+    if (h->backend == VFS_BACKEND_FATDISK) {
+        bool is_dir = false;
+        uint32_t size = 0;
+        if (fatdisk_stat_ex(h->abs_path, &is_dir, &size, &wtime, &wdate)) {
+            out->wtime = wtime;
+            out->wdate = wdate;
+        }
+    } else if (h->backend == VFS_BACKEND_RAMFS) {
+        bool is_dir = false;
+        uint32_t size = 0;
+        if (ramfs_stat_ex(h->abs_path, &is_dir, &size, &wtime, &wdate)) {
+            out->wtime = wtime;
+            out->wdate = wdate;
+        }
+    } else {
+        if (out->is_dir) {
+            (void)initramfs_max_mtime_under_abs(h->abs_path, &wtime, &wdate);
+        } else {
+            (void)initramfs_lookup_mtime_abs(h->abs_path, &wtime, &wdate);
+        }
+        out->wtime = wtime;
+        out->wdate = wdate;
+    }
     return 0;
 }
 

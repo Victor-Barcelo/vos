@@ -63,7 +63,14 @@ USER_INIT_OBJ = $(USER_BUILD_DIR)/init.o
 USER_ELIZA_OBJ = $(USER_BUILD_DIR)/eliza.o
 USER_INIT = $(USER_BUILD_DIR)/init.elf
 USER_ELIZA = $(USER_BUILD_DIR)/eliza.elf
-USER_BINS = $(USER_INIT) $(USER_ELIZA)
+# Zork I (userland)
+USER_ZORK_DIR = $(USER_DIR)/zork1c
+USER_ZORK_C_SOURCES = $(USER_ZORK_DIR)/_parser.c $(USER_ZORK_DIR)/_game.c $(USER_ZORK_DIR)/_villains.c \
+                      $(USER_ZORK_DIR)/_data.c $(USER_ZORK_DIR)/tables.c $(USER_ZORK_DIR)/mt.c $(USER_ZORK_DIR)/compress.c
+USER_ZORK_OBJECTS = $(patsubst $(USER_DIR)/%.c,$(USER_BUILD_DIR)/%.o,$(USER_ZORK_C_SOURCES))
+USER_ZORK = $(USER_BUILD_DIR)/zork.elf
+
+USER_BINS = $(USER_INIT) $(USER_ELIZA) $(USER_ZORK)
 
 # QEMU defaults
 QEMU_XRES ?= 1920
@@ -103,10 +110,12 @@ $(BUILD_DIR)/boot.o: $(BOOT_DIR)/boot.asm | $(BUILD_DIR)
 
 # Compile userland assembly
 $(USER_BUILD_DIR)/%.o: $(USER_DIR)/%.asm | $(USER_BUILD_DIR)
+	mkdir -p $(dir $@)
 	$(AS) $(ASFLAGS) $< -o $@
 
 # Compile userland C
 $(USER_BUILD_DIR)/%.o: $(USER_DIR)/%.c | $(USER_BUILD_DIR)
+	mkdir -p $(dir $@)
 	$(CC) -ffreestanding -fno-stack-protector -fno-pie -Wall -Wextra -O2 -I$(USER_DIR) -c $< -o $@
 
 # Link userland init (static, freestanding)
@@ -115,6 +124,10 @@ $(USER_INIT): $(USER_RUNTIME_OBJECTS) $(USER_INIT_OBJ)
 
 # Link userland eliza (static, freestanding)
 $(USER_ELIZA): $(USER_RUNTIME_OBJECTS) $(USER_ELIZA_OBJ)
+	$(CC) -nostartfiles -Wl,-T,$(USER_DIR)/linker.ld -Wl,--gc-sections -o $@ $^ -lc -lgcc
+
+# Link userland zork (static, freestanding)
+$(USER_ZORK): $(USER_RUNTIME_OBJECTS) $(USER_ZORK_OBJECTS)
 	$(CC) -nostartfiles -Wl,-T,$(USER_DIR)/linker.ld -Wl,--gc-sections -o $@ $^ -lc -lgcc
 
 # Compile C files
@@ -139,6 +152,7 @@ $(ISO): $(KERNEL) $(USER_BINS) $(FAT_IMG)
 	mkdir -p $(INITRAMFS_ROOT)/bin
 	cp $(USER_INIT) $(INITRAMFS_ROOT)/bin/init
 	cp $(USER_ELIZA) $(INITRAMFS_ROOT)/bin/eliza
+	cp $(USER_ZORK) $(INITRAMFS_ROOT)/bin/zork
 	tar -C $(INITRAMFS_ROOT) -cf $(INITRAMFS_TAR) .
 	echo 'set timeout=0' > $(ISO_DIR)/boot/grub/grub.cfg
 	echo 'set default=0' >> $(ISO_DIR)/boot/grub/grub.cfg

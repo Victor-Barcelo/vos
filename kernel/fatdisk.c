@@ -185,6 +185,74 @@ static void fat_stamp_dirent(uint8_t e[32], uint16_t wtime, uint16_t wdate, bool
     }
 }
 
+static void fat_root_best_ts(uint16_t* out_wtime, uint16_t* out_wdate) {
+    if (out_wtime) *out_wtime = 0;
+    if (out_wdate) *out_wdate = 0;
+    if (!g_fs.ready) {
+        return;
+    }
+
+    uint16_t best_time = 0;
+    uint16_t best_date = 0;
+
+    for (uint32_t s = 0; s < g_fs.root_dir_sectors; s++) {
+        uint32_t lba = g_fs.first_root_lba + s;
+        uint8_t sec[SECTOR_SIZE];
+        if (!disk_read(lba, sec)) {
+            break;
+        }
+
+        bool changed = false;
+
+        for (uint32_t off = 0; off + 32u <= SECTOR_SIZE; off += 32u) {
+            uint8_t* e = sec + off;
+            if (e[0] == 0x00) {
+                // End-of-directory marker.
+                s = g_fs.root_dir_sectors;
+                break;
+            }
+            if (e[0] == 0xE5) {
+                continue;
+            }
+            uint8_t attr = e[11];
+            if (attr == FAT_ATTR_LFN) {
+                continue;
+            }
+            if (attr & FAT_ATTR_VOLUME) {
+                continue;
+            }
+
+            uint16_t wtime = 0;
+            uint16_t wdate = 0;
+            fat_dirent_best_ts(e, &wtime, &wdate);
+
+            if (wdate == 0) {
+                // Backfill missing timestamps for legacy images/files that had zeros.
+                fat_timestamp_now(&wtime, &wdate);
+                if (wdate != 0) {
+                    fat_stamp_dirent(e, wtime, wdate, true);
+                    changed = true;
+                }
+            }
+
+            uint32_t best_key = ((uint32_t)best_date << 16) | (uint32_t)best_time;
+            uint32_t key = ((uint32_t)wdate << 16) | (uint32_t)wtime;
+            if (key > best_key) {
+                best_time = wtime;
+                best_date = wdate;
+            }
+        }
+
+        if (changed) {
+            (void)disk_write(lba, sec);
+            (void)ata_flush();
+        }
+    }
+
+    if (out_wtime) *out_wtime = best_time;
+    if (out_wdate) *out_wdate = best_date;
+}
+
 static const char* fatdisk_strip_mount(const char* abs_path) {
     if (!abs_path || abs_path[0] != '/') {
         return NULL;
@@ -1064,6 +1132,7 @@ bool fatdisk_stat_ex(const char* abs_path, bool* out_is_dir, uint32_t* out_size,
     if (is_root_path(abs_path)) {
         if (out_is_dir) *out_is_dir = true;
         if (out_size) *out_size = 0;
+        fat_root_best_ts(out_wtime, out_wdate);
         return true;
     }
 

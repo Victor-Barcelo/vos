@@ -441,8 +441,22 @@ static uint32_t initramfs_list_dir_abs(const char* abs_path, vfs_dirent_t* out, 
 
     // Root mountpoints.
     if (dir_len == 0) {
-        count = add_unique_dirent(out, count, max, "disk", true, 0, 0, 0);
-        count = add_unique_dirent(out, count, max, "ram", true, 0, 0, 0);
+        uint16_t wtime = 0;
+        uint16_t wdate = 0;
+        bool is_dir = false;
+        uint32_t size = 0;
+
+        if (fatdisk_is_ready()) {
+            (void)fatdisk_stat_ex("/disk", &is_dir, &size, &wtime, &wdate);
+        }
+        count = add_unique_dirent(out, count, max, "disk", true, 0, wtime, wdate);
+
+        wtime = 0;
+        wdate = 0;
+        is_dir = false;
+        size = 0;
+        (void)ramfs_stat_ex("/ram", &is_dir, &size, &wtime, &wdate);
+        count = add_unique_dirent(out, count, max, "ram", true, 0, wtime, wdate);
     }
 
     uint32_t n = vfs_file_count();

@@ -278,6 +278,16 @@ void ramfs_init(void) {
         dirs[i].wtime = 0;
         dirs[i].wdate = 0;
     }
+
+    // Create a timestamped root directory entry for /ram so it can appear in listings/stat.
+    uint16_t wtime = 0;
+    uint16_t wdate = 0;
+    ramfs_timestamp_now(&wtime, &wdate);
+    dirs[0].path = dup_str("ram");
+    if (dirs[0].path) {
+        dirs[0].wtime = wtime;
+        dirs[0].wdate = wdate;
+    }
     ready = true;
 }
 
@@ -329,6 +339,7 @@ bool ramfs_stat_ex(const char* path, bool* out_is_dir, uint32_t* out_size, uint1
 
     if (ci_eq(rel, "ram")) {
         if (out_is_dir) *out_is_dir = true;
+        (void)dir_time_rel(rel, out_wtime, out_wdate);
         return true;
     }
 

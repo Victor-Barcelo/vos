@@ -948,8 +948,8 @@ interrupt_frame_t* tasking_sbrk(interrupt_frame_t* frame, int32_t increment) {
     }
 
     const uint32_t USER_BASE = 0x01000000u;
-    const uint32_t USER_STACK_TOP = 0x02000000u;
-    const uint32_t USER_STACK_PAGES = 8u;
+    const uint32_t USER_STACK_TOP = 0x08000000u;
+    const uint32_t USER_STACK_PAGES = 64u;
     uint32_t stack_guard_bottom = USER_STACK_TOP - (USER_STACK_PAGES + 1u) * PAGE_SIZE;
 
     if (new_brk < USER_BASE || new_brk < current_task->user_brk_min || new_brk > stack_guard_bottom) {
@@ -962,6 +962,12 @@ interrupt_frame_t* tasking_sbrk(interrupt_frame_t* frame, int32_t increment) {
     if (increment > 0) {
         uint32_t start = (old_brk + PAGE_SIZE - 1u) & ~(PAGE_SIZE - 1u);
         uint32_t end = (new_brk + PAGE_SIZE - 1u) & ~(PAGE_SIZE - 1u);
+
+        // Allocate any required page tables before allocating physical frames for the
+        // heap pages, otherwise early_alloc() page tables could overlap frames.
+        if (end > start) {
+            paging_prepare_range(start, end - start, PAGE_PRESENT | PAGE_RW | PAGE_USER);
+        }
 
         uint32_t va = start;
         for (; va < end; va += PAGE_SIZE) {

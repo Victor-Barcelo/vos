@@ -6,6 +6,10 @@
 static uint32_t* page_directory = NULL;
 static uint32_t* kernel_directory = NULL;
 
+// VOS user address space layout.
+static const uint32_t USER_BASE = 0x01000000u;
+static const uint32_t USER_LIMIT = 0xC0000000u;
+
 static inline uint32_t page_align_down(uint32_t addr) {
     return addr & ~(PAGE_SIZE - 1u);
 }
@@ -14,7 +18,11 @@ static inline uint32_t page_align_up(uint32_t addr) {
     return (addr + PAGE_SIZE - 1u) & ~(PAGE_SIZE - 1u);
 }
 
-static uint32_t* ensure_page_table(uint32_t dir_index, uint32_t map_flags);
+static bool is_kernel_vaddr(uint32_t vaddr) {
+    return vaddr >= USER_LIMIT;
+}
+
+static uint32_t* ensure_page_table(uint32_t* dir, uint32_t dir_index, uint32_t map_flags);
 
 void paging_prepare_range(uint32_t vaddr, uint32_t size, uint32_t flags) {
     if (size == 0) {
@@ -26,15 +34,27 @@ void paging_prepare_range(uint32_t vaddr, uint32_t size, uint32_t flags) {
 
     for (uint32_t va = start_v; va < end_v; va += PAGE_SIZE) {
         uint32_t dir_index = (va >> 22) & 0x3FFu;
-        (void)ensure_page_table(dir_index, flags);
+
+        if (is_kernel_vaddr(va) && kernel_directory) {
+            (void)ensure_page_table(kernel_directory, dir_index, flags);
+            if (page_directory && page_directory != kernel_directory) {
+                page_directory[dir_index] = kernel_directory[dir_index];
+            }
+        } else {
+            (void)ensure_page_table(page_directory, dir_index, flags);
+        }
     }
 }
 
-static uint32_t* ensure_page_table(uint32_t dir_index, uint32_t map_flags) {
-    uint32_t entry = page_directory[dir_index];
+static uint32_t* ensure_page_table(uint32_t* dir, uint32_t dir_index, uint32_t map_flags) {
+    if (!dir) {
+        return NULL;
+    }
+
+    uint32_t entry = dir[dir_index];
     if (entry & PAGE_PRESENT) {
         if (map_flags & PAGE_USER) {
-            page_directory[dir_index] |= PAGE_USER;
+            dir[dir_index] |= PAGE_USER;
         }
         return (uint32_t*)(entry & 0xFFFFF000u);
     }
@@ -45,7 +65,7 @@ static uint32_t* ensure_page_table(uint32_t dir_index, uint32_t map_flags) {
     if (map_flags & PAGE_USER) {
         pde_flags |= PAGE_USER;
     }
-    page_directory[dir_index] = ((uint32_t)table & 0xFFFFF000u) | pde_flags;
+    dir[dir_index] = ((uint32_t)table & 0xFFFFF000u) | pde_flags;
     return table;
 }
 
@@ -53,8 +73,21 @@ void paging_map_page(uint32_t vaddr, uint32_t paddr, uint32_t flags) {
     uint32_t dir_index = (vaddr >> 22) & 0x3FFu;
     uint32_t tbl_index = (vaddr >> 12) & 0x3FFu;
 
-    uint32_t* table = ensure_page_table(dir_index, flags);
+    uint32_t* dir = page_directory;
+    if (is_kernel_vaddr(vaddr) && kernel_directory) {
+        dir = kernel_directory;
+    }
+
+    uint32_t* table = ensure_page_table(dir, dir_index, flags);
+    if (!table) {
+        return;
+    }
     table[tbl_index] = (paddr & 0xFFFFF000u) | (flags & 0xFFFu);
+
+    // Keep kernel mappings shared across all address spaces.
+    if (dir == kernel_directory && page_directory && page_directory != kernel_directory) {
+        page_directory[dir_index] = kernel_directory[dir_index];
+    }
 }
 
 bool paging_unmap_page(uint32_t vaddr, uint32_t* out_paddr) {
@@ -62,7 +95,12 @@ bool paging_unmap_page(uint32_t vaddr, uint32_t* out_paddr) {
     uint32_t dir_index = (va >> 22) & 0x3FFu;
     uint32_t tbl_index = (va >> 12) & 0x3FFu;
 
-    uint32_t pde = page_directory[dir_index];
+    uint32_t* dir = page_directory;
+    if (is_kernel_vaddr(va) && kernel_directory) {
+        dir = kernel_directory;
+    }
+
+    uint32_t pde = dir[dir_index];
     if ((pde & PAGE_PRESENT) == 0) {
         return false;
     }
@@ -161,12 +199,6 @@ uint32_t* paging_create_user_directory(void) {
     uint32_t* dir = (uint32_t*)early_alloc(PAGE_SIZE, PAGE_SIZE);
     memset(dir, 0, PAGE_SIZE);
 
-    // Kernel-reserved regions:
-    // - Low identity-mapped region (below USER_BASE)
-    // - High kernel region (>= USER_LIMIT)
-    const uint32_t USER_BASE = 0x01000000u;
-    const uint32_t USER_LIMIT = 0xC0000000u;
-
     uint32_t low_end = USER_BASE >> 22;     // exclusive
     uint32_t high_start = USER_LIMIT >> 22; // inclusive
 
@@ -186,6 +218,21 @@ void paging_switch_directory(uint32_t* dir) {
     }
     if (!dir || dir == page_directory) {
         return;
+    }
+
+    // Keep kernel mappings synced in every address space: kernel heap, kernel stacks,
+    // framebuffer, etc. We copy the PDE entries that cover:
+    // - Low identity-mapped region (< USER_BASE)
+    // - High kernel region (>= USER_LIMIT)
+    if (kernel_directory && dir != kernel_directory) {
+        uint32_t low_end = USER_BASE >> 22;
+        uint32_t high_start = USER_LIMIT >> 22;
+        for (uint32_t i = 0; i < low_end; i++) {
+            dir[i] = kernel_directory[i];
+        }
+        for (uint32_t i = high_start; i < 1024u; i++) {
+            dir[i] = kernel_directory[i];
+        }
     }
 
     page_directory = dir;

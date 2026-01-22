@@ -19,6 +19,22 @@ static uint32_t u32_min(uint32_t a, uint32_t b) {
     return a < b ? a : b;
 }
 
+static int ends_with_ci(const char* s, const char* suffix) {
+    if (!s || !suffix) return 0;
+    size_t slen = strlen(s);
+    size_t tlen = strlen(suffix);
+    if (tlen > slen) return 0;
+    const char* p = s + (slen - tlen);
+    for (size_t i = 0; i < tlen; i++) {
+        char a = p[i];
+        char b = suffix[i];
+        if (a >= 'A' && a <= 'Z') a = (char)(a - 'A' + 'a');
+        if (b >= 'A' && b <= 'Z') b = (char)(b - 'A' + 'a');
+        if (a != b) return 0;
+    }
+    return 1;
+}
+
 static int get_framebuffer(uint32_t* out_w, uint32_t* out_h) {
     if (!out_w || !out_h) {
         return -1;
@@ -76,9 +92,66 @@ static void nearest_scale_rgba(uint8_t* out, uint32_t out_w, uint32_t out_h,
     }
 }
 
+static uint8_t* read_entire_file(const char* path, size_t* out_len) {
+    if (out_len) *out_len = 0;
+    if (!path || path[0] == '\0') {
+        return NULL;
+    }
+
+    FILE* f = fopen(path, "rb");
+    if (!f) {
+        return NULL;
+    }
+    if (fseek(f, 0, SEEK_END) != 0) {
+        fclose(f);
+        return NULL;
+    }
+    long sz = ftell(f);
+    if (sz <= 0) {
+        fclose(f);
+        return NULL;
+    }
+    if (sz > 32L * 1024L * 1024L) {
+        fclose(f);
+        errno = ENOMEM;
+        return NULL;
+    }
+    if (fseek(f, 0, SEEK_SET) != 0) {
+        fclose(f);
+        return NULL;
+    }
+
+    uint8_t* buf = (uint8_t*)malloc((size_t)sz);
+    if (!buf) {
+        fclose(f);
+        return NULL;
+    }
+    size_t got = fread(buf, 1, (size_t)sz, f);
+    fclose(f);
+    if (got != (size_t)sz) {
+        free(buf);
+        return NULL;
+    }
+    if (out_len) *out_len = got;
+    return buf;
+}
+
 int main(int argc, char** argv) {
-    if (argc < 2 || !argv[1] || argv[1][0] == '\0') {
+    bool animate = false;
+    const char* path = NULL;
+    for (int i = 1; i < argc; i++) {
+        const char* a = argv[i];
+        if (!a || a[0] == '\0') continue;
+        if (strcmp(a, "-a") == 0 || strcmp(a, "--animate") == 0) {
+            animate = true;
+            continue;
+        }
+        path = a;
+    }
+
+    if (!path) {
         puts("Usage: img <file>");
+        puts("       img -a <file.gif>   # animate GIF (Ctrl+C to stop)");
         puts("Supported formats: png, jpg, bmp, tga, gif, psd, pnm (via stb_image)");
         return 1;
     }
@@ -97,12 +170,103 @@ int main(int argc, char** argv) {
         return 1;
     }
 
+    if (animate && ends_with_ci(path, ".gif")) {
+        size_t file_len = 0;
+        uint8_t* file = read_entire_file(path, &file_len);
+        if (!file) {
+            printf("img: failed to read '%s'\n", path);
+            return 1;
+        }
+
+        int iw = 0;
+        int ih = 0;
+        int frames = 0;
+        int comp = 0;
+        int* delays = NULL;
+        uint8_t* all = (uint8_t*)stbi_load_gif_from_memory(file, (int)file_len, &delays, &iw, &ih, &frames, &comp, 4);
+        const char* stbi_err = all ? NULL : stbi_failure_reason();
+        free(file);
+
+        // NOTE: stb_image frees internal allocations on failure, but it does not
+        // reliably clear output pointers (e.g. `delays`) in all out-of-memory
+        // paths. Avoid freeing `delays` unless decoding succeeds.
+        if (!all) {
+            printf("img: failed to decode gif '%s'%s%s\n", path, stbi_err ? ": " : "", stbi_err ? stbi_err : "");
+            return 1;
+        }
+        if (iw <= 0 || ih <= 0 || frames <= 0) {
+            if (delays) free(delays);
+            stbi_image_free(all);
+            printf("img: invalid gif '%s'\n", path);
+            return 1;
+        }
+
+        uint32_t in_w = (uint32_t)iw;
+        uint32_t in_h = (uint32_t)ih;
+
+        uint32_t out_w = in_w;
+        uint32_t out_h = in_h;
+        if (out_w > fb_w || out_h > usable_h) {
+            out_w = fb_w;
+            out_h = (uint32_t)(((uint64_t)in_h * (uint64_t)out_w) / (uint64_t)in_w);
+            if (out_h > usable_h) {
+                out_h = usable_h;
+                out_w = (uint32_t)(((uint64_t)in_w * (uint64_t)out_h) / (uint64_t)in_h);
+            }
+            out_w = u32_min(out_w, fb_w);
+            out_h = u32_min(out_h, usable_h);
+            if (out_w == 0) out_w = 1;
+            if (out_h == 0) out_h = 1;
+        }
+
+        uint8_t* scaled = NULL;
+        if (out_w != in_w || out_h != in_h) {
+            uint64_t bytes64 = (uint64_t)out_w * (uint64_t)out_h * 4u;
+            if (bytes64 > 64u * 1024u * 1024u) {
+                if (delays) free(delays);
+                stbi_image_free(all);
+                puts("img: scaled gif too large");
+                return 1;
+            }
+            scaled = (uint8_t*)malloc((size_t)bytes64);
+            if (!scaled) {
+                if (delays) free(delays);
+                stbi_image_free(all);
+                puts("img: out of memory");
+                return 1;
+            }
+        }
+
+        (void)sys_gfx_clear(0);
+
+        int32_t x0 = (int32_t)((fb_w - out_w) / 2u);
+        int32_t y0 = (int32_t)((usable_h - out_h) / 2u);
+
+        uint32_t frame_stride = in_w * in_h * 4u;
+        puts("Animating GIF. Press Ctrl+C to stop.");
+        for (;;) {
+            for (int fi = 0; fi < frames; fi++) {
+                const uint8_t* frame = all + (uint32_t)fi * frame_stride;
+                const uint8_t* src = frame;
+                if (scaled) {
+                    nearest_scale_rgba(scaled, out_w, out_h, frame, in_w, in_h);
+                    src = scaled;
+                }
+                (void)sys_gfx_blit_rgba(x0, y0, out_w, out_h, src);
+                int d = delays ? delays[fi] : 100;
+                if (d <= 0) d = 100;
+                if (d > 5000) d = 5000;
+                (void)sys_sleep((uint32_t)d);
+            }
+        }
+    }
+
     int iw = 0;
     int ih = 0;
     int comp = 0;
-    uint8_t* pixels = (uint8_t*)stbi_load(argv[1], &iw, &ih, &comp, 4);
+    uint8_t* pixels = (uint8_t*)stbi_load(path, &iw, &ih, &comp, 4);
     if (!pixels) {
-        printf("img: failed to load '%s'\n", argv[1]);
+        printf("img: failed to load '%s'\n", path);
         return 1;
     }
     if (iw <= 0 || ih <= 0) {

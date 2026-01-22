@@ -23,8 +23,11 @@
 #define USER_BASE 0x01000000u
 #define USER_LIMIT 0xC0000000u
 
-#define USER_STACK_TOP 0x02000000u
-#define USER_STACK_PAGES 8u
+// Place the initial user stack high enough to leave plenty of virtual space
+// for the user heap (sbrk/malloc). Animated GIFs and other ports can require
+// tens of MiB of heap, which doesn't fit when the stack is near 32 MiB.
+#define USER_STACK_TOP 0x08000000u
+#define USER_STACK_PAGES 64u
 
 #define ELF_ARG_MAX 32u
 

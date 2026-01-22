@@ -79,6 +79,7 @@ enum {
     SYS_FONT_GET = 44,
     SYS_FONT_INFO = 45,
     SYS_FONT_SET = 46,
+    SYS_GFX_BLIT_RGBA = 47,
 };
 
 static inline int sys_write(int fd, const char* buf, uint32_t len) {
@@ -306,6 +307,17 @@ static inline int sys_gfx_line(int32_t x0, int32_t y0, int32_t x1, int32_t y1, u
         "int $0x80"
         : "=a"(ret)
         : "a"(SYS_GFX_LINE), "b"(x0), "c"(y0), "d"(x1), "S"(y1), "D"(color)
+        : "memory"
+    );
+    return ret;
+}
+
+static inline int sys_gfx_blit_rgba(int32_t x, int32_t y, uint32_t w, uint32_t h, const void* rgba) {
+    int ret;
+    __asm__ volatile (
+        "int $0x80"
+        : "=a"(ret)
+        : "a"(SYS_GFX_BLIT_RGBA), "b"(x), "c"(y), "d"(w), "S"(h), "D"(rgba)
         : "memory"
     );
     return ret;

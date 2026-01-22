@@ -8,6 +8,7 @@
 #include "kerrno.h"
 #include "statusbar.h"
 #include "system.h"
+#include "kheap.h"
 #include "string.h"
 
 enum {
@@ -58,6 +59,7 @@ enum {
     SYS_FONT_GET = 44,
     SYS_FONT_INFO = 45,
     SYS_FONT_SET = 46,
+    SYS_GFX_BLIT_RGBA = 47,
 };
 
 typedef struct vos_task_info_user {
@@ -608,6 +610,61 @@ interrupt_frame_t* syscall_handle(interrupt_frame_t* frame) {
                 return frame;
             }
             (void)screen_graphics_line(x0, y0, x1, y1, (uint8_t)c);
+            frame->eax = 0;
+            return frame;
+        }
+        case SYS_GFX_BLIT_RGBA: {
+            int32_t x = (int32_t)frame->ebx;
+            int32_t y = (int32_t)frame->ecx;
+            uint32_t w = frame->edx;
+            uint32_t h = frame->esi;
+            const void* src_user = (const void*)frame->edi;
+
+            if (!screen_is_framebuffer()) {
+                frame->eax = (uint32_t)-ENODEV;
+                return frame;
+            }
+            if (!src_user) {
+                frame->eax = (uint32_t)-EFAULT;
+                return frame;
+            }
+            if (w == 0 || h == 0) {
+                frame->eax = (uint32_t)-EINVAL;
+                return frame;
+            }
+            if (x < 0 || y < 0) {
+                frame->eax = (uint32_t)-EINVAL;
+                return frame;
+            }
+            if (w > 0x3FFFFFFFu) {
+                frame->eax = (uint32_t)-EINVAL;
+                return frame;
+            }
+            uint32_t fb_w = screen_framebuffer_width();
+            uint32_t fb_h = screen_framebuffer_height();
+            if ((uint32_t)x + w > fb_w || (uint32_t)y + h > fb_h) {
+                frame->eax = (uint32_t)-EINVAL;
+                return frame;
+            }
+
+            uint32_t row_bytes = w * 4u;
+            uint8_t* row = (uint8_t*)kmalloc(row_bytes);
+            if (!row) {
+                frame->eax = (uint32_t)-ENOMEM;
+                return frame;
+            }
+
+            for (uint32_t yy = 0; yy < h; yy++) {
+                const uint8_t* src_row = (const uint8_t*)src_user + yy * row_bytes;
+                if (!copy_from_user(row, src_row, row_bytes)) {
+                    kfree(row);
+                    frame->eax = (uint32_t)-EFAULT;
+                    return frame;
+                }
+                (void)screen_graphics_blit_rgba(x, y + (int32_t)yy, w, 1u, row, row_bytes);
+            }
+
+            kfree(row);
             frame->eax = 0;
             return frame;
         }

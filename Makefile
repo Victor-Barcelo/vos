@@ -88,6 +88,7 @@ USER_TOP_OBJ = $(USER_BUILD_DIR)/top.o
 USER_NEOFETCH_OBJ = $(USER_BUILD_DIR)/neofetch.o
 USER_FONT_OBJ = $(USER_BUILD_DIR)/font.o
 USER_JSON_OBJ = $(USER_BUILD_DIR)/json.o
+USER_IMG_OBJ = $(USER_BUILD_DIR)/img.o
 USER_INIT = $(USER_BUILD_DIR)/init.elf
 USER_ELIZA = $(USER_BUILD_DIR)/eliza.elf
 USER_LSH = $(USER_BUILD_DIR)/lsh.elf
@@ -100,6 +101,7 @@ USER_TOP = $(USER_BUILD_DIR)/top.elf
 USER_NEOFETCH = $(USER_BUILD_DIR)/neofetch.elf
 USER_FONT = $(USER_BUILD_DIR)/font.elf
 USER_JSON = $(USER_BUILD_DIR)/json.elf
+USER_IMG = $(USER_BUILD_DIR)/img.elf
 # Zork I (userland)
 USER_ZORK_DIR = $(USER_DIR)/zork1c
 USER_ZORK_C_SOURCES = $(USER_ZORK_DIR)/_parser.c $(USER_ZORK_DIR)/_game.c $(USER_ZORK_DIR)/_villains.c \
@@ -169,7 +171,7 @@ USER_BASIC_C_SOURCES = $(USER_BASIC_DIR)/basic.c $(USER_BASIC_DIR)/ubasic.c $(US
 USER_BASIC_OBJECTS = $(patsubst $(USER_DIR)/%.c,$(USER_BUILD_DIR)/%.o,$(USER_BASIC_C_SOURCES))
 USER_BASIC = $(USER_BUILD_DIR)/basic.elf
 
-USER_BINS = $(USER_INIT) $(USER_ELIZA) $(USER_LSH) $(USER_SH) $(USER_UPTIME) $(USER_DATE) $(USER_SETDATE) $(USER_PS) $(USER_TOP) $(USER_NEOFETCH) $(USER_FONT) $(USER_JSON) $(USER_BASIC) $(USER_ZORK) \
+USER_BINS = $(USER_INIT) $(USER_ELIZA) $(USER_LSH) $(USER_SH) $(USER_UPTIME) $(USER_DATE) $(USER_SETDATE) $(USER_PS) $(USER_TOP) $(USER_NEOFETCH) $(USER_FONT) $(USER_JSON) $(USER_IMG) $(USER_BASIC) $(USER_ZORK) \
             $(SBASE_CAT) $(SBASE_ECHO) $(SBASE_BASENAME) $(SBASE_DIRNAME) $(SBASE_HEAD) $(SBASE_WC) $(SBASE_GREP) $(SBASE_YES) $(SBASE_TRUE) $(SBASE_FALSE)
 
 # QEMU defaults
@@ -225,11 +227,11 @@ $(USER_BUILD_DIR)/%.o: $(USER_DIR)/%.asm | $(USER_BUILD_DIR)
 # Compile userland C
 $(USER_BUILD_DIR)/%.o: $(USER_DIR)/%.c | $(USER_BUILD_DIR)
 	mkdir -p $(dir $@)
-	$(CC) -ffreestanding -fno-stack-protector -fno-pie -Wall -Wextra -O2 -D_POSIX_C_SOURCE=200809L -I$(USER_DIR) -I$(THIRD_PARTY_DIR)/linenoise -I$(THIRD_PARTY_DIR)/jsmn -I$(THIRD_PARTY_DIR)/sheredom_json -c $< -o $@
+	$(CC) -ffreestanding -fno-stack-protector -fno-pie -Wall -Wextra -O2 -D_POSIX_C_SOURCE=200809L -I$(USER_DIR) -I$(THIRD_PARTY_DIR)/linenoise -I$(THIRD_PARTY_DIR)/jsmn -I$(THIRD_PARTY_DIR)/sheredom_json -I$(THIRD_PARTY_DIR)/stb -c $< -o $@
 
 # Vendored linenoise (userland line editing)
 $(USER_LINENOISE_OBJ): $(THIRD_PARTY_DIR)/linenoise/linenoise.c | $(USER_BUILD_DIR)
-	$(CC) -ffreestanding -fno-stack-protector -fno-pie -Wall -Wextra -O2 -D_POSIX_C_SOURCE=200809L -I$(USER_DIR) -I$(THIRD_PARTY_DIR)/linenoise -I$(THIRD_PARTY_DIR)/jsmn -I$(THIRD_PARTY_DIR)/sheredom_json -c $< -o $@
+	$(CC) -ffreestanding -fno-stack-protector -fno-pie -Wall -Wextra -O2 -D_POSIX_C_SOURCE=200809L -I$(USER_DIR) -I$(THIRD_PARTY_DIR)/linenoise -I$(THIRD_PARTY_DIR)/jsmn -I$(THIRD_PARTY_DIR)/sheredom_json -I$(THIRD_PARTY_DIR)/stb -c $< -o $@
 
 # Build a small POSIX compatibility archive (regex, etc.) for userland ports.
 $(USER_RUNTIME_LIBS): $(NEWLIB_REGEX_OBJS) | $(USER_BUILD_DIR)
@@ -278,6 +280,10 @@ $(USER_FONT): $(USER_RUNTIME_OBJECTS) $(USER_FONT_OBJ) $(USER_RUNTIME_LIBS)
 
 # Link userland json tool (jsmn)
 $(USER_JSON): $(USER_RUNTIME_OBJECTS) $(USER_JSON_OBJ) $(USER_RUNTIME_LIBS)
+	$(USER_LINK_CMD)
+
+# Link userland image viewer (stb_image)
+$(USER_IMG): $(USER_RUNTIME_OBJECTS) $(USER_IMG_OBJ) $(USER_RUNTIME_LIBS)
 	$(USER_LINK_CMD)
 
 # Compile sbase sources
@@ -361,6 +367,7 @@ $(ISO): $(KERNEL) $(USER_BINS) $(FAT_IMG)
 	cp $(USER_NEOFETCH) $(INITRAMFS_ROOT)/bin/neofetch
 	cp $(USER_FONT) $(INITRAMFS_ROOT)/bin/font
 	cp $(USER_JSON) $(INITRAMFS_ROOT)/bin/json
+	cp $(USER_IMG) $(INITRAMFS_ROOT)/bin/img
 	cp $(USER_BASIC) $(INITRAMFS_ROOT)/bin/basic
 	cp $(USER_ZORK) $(INITRAMFS_ROOT)/bin/zork
 	cp $(SBASE_CAT) $(INITRAMFS_ROOT)/bin/cat

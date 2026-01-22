@@ -101,6 +101,7 @@ int screen_font_set(int index);
 bool screen_graphics_clear(uint8_t bg_vga);
 bool screen_graphics_putpixel(int32_t x, int32_t y, uint8_t vga_color);
 bool screen_graphics_line(int32_t x0, int32_t y0, int32_t x1, int32_t y1, uint8_t vga_color);
+bool screen_graphics_blit_rgba(int32_t x, int32_t y, uint32_t w, uint32_t h, const uint8_t* rgba, uint32_t stride_bytes);
 
 // Simple scrollback support (framebuffer text console only).
 bool screen_scrollback_active(void);

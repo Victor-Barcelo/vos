@@ -2252,3 +2252,72 @@ bool screen_graphics_line(int32_t x0, int32_t y0, int32_t x1, int32_t y1, uint8_
 
     return true;
 }
+
+bool screen_graphics_blit_rgba(int32_t x, int32_t y, uint32_t w, uint32_t h, const uint8_t* rgba, uint32_t stride_bytes) {
+    if (backend != SCREEN_BACKEND_FRAMEBUFFER) {
+        return false;
+    }
+    if (!rgba || w == 0 || h == 0) {
+        return false;
+    }
+    if (stride_bytes < w * 4u) {
+        return false;
+    }
+    if (x < 0 || y < 0) {
+        return false;
+    }
+    if ((uint32_t)x + w > fb_width || (uint32_t)y + h > fb_height) {
+        return false;
+    }
+
+    for (uint32_t yy = 0; yy < h; yy++) {
+        const uint8_t* src = rgba + yy * stride_bytes;
+        uint8_t* dst = fb_addr + ((uint32_t)y + yy) * fb_pitch + (uint32_t)x * (uint32_t)fb_bytes_per_pixel;
+
+        switch (fb_bytes_per_pixel) {
+            case 4: {
+                uint32_t* out = (uint32_t*)dst;
+                for (uint32_t xx = 0; xx < w; xx++) {
+                    uint8_t r = src[xx * 4u + 0u];
+                    uint8_t g = src[xx * 4u + 1u];
+                    uint8_t b = src[xx * 4u + 2u];
+                    out[xx] = fb_pack_rgb(r, g, b);
+                }
+                break;
+            }
+            case 3: {
+                for (uint32_t xx = 0; xx < w; xx++) {
+                    uint8_t r = src[xx * 4u + 0u];
+                    uint8_t g = src[xx * 4u + 1u];
+                    uint8_t b = src[xx * 4u + 2u];
+                    uint32_t px = fb_pack_rgb(r, g, b);
+                    dst[xx * 3u + 0u] = (uint8_t)(px & 0xFFu);
+                    dst[xx * 3u + 1u] = (uint8_t)((px >> 8) & 0xFFu);
+                    dst[xx * 3u + 2u] = (uint8_t)((px >> 16) & 0xFFu);
+                }
+                break;
+            }
+            case 2: {
+                uint16_t* out = (uint16_t*)dst;
+                for (uint32_t xx = 0; xx < w; xx++) {
+                    uint8_t r = src[xx * 4u + 0u];
+                    uint8_t g = src[xx * 4u + 1u];
+                    uint8_t b = src[xx * 4u + 2u];
+                    out[xx] = (uint16_t)(fb_pack_rgb(r, g, b) & 0xFFFFu);
+                }
+                break;
+            }
+            default: {
+                for (uint32_t xx = 0; xx < w; xx++) {
+                    uint8_t r = src[xx * 4u + 0u];
+                    uint8_t g = src[xx * 4u + 1u];
+                    uint8_t b = src[xx * 4u + 2u];
+                    dst[xx] = (uint8_t)(fb_pack_rgb(r, g, b) & 0xFFu);
+                }
+                break;
+            }
+        }
+    }
+
+    return true;
+}

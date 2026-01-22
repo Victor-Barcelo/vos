@@ -19,6 +19,14 @@
 #define KSTACK_REGION_BASE 0xF0000000u
 #define TASK_MAX_FDS 64
 
+// User virtual address layout (must match kernel/elf.c and kernel/paging.c).
+#define USER_BASE  0x01000000u
+#define USER_LIMIT 0xC0000000u
+
+// Keep the user stack high to leave plenty of room for heap + mmaps.
+#define USER_STACK_TOP   0xBFF00000u
+#define USER_STACK_PAGES 64u
+
 // Minimal termios/ioctl support for userland TTY programs (linenoise, etc.).
 #define VOS_NCCS 32
 #define VOS_TTY_LINE_MAX 256u
@@ -99,6 +107,13 @@ typedef struct fd_entry {
     uint8_t pending_off;
 } fd_entry_t;
 
+typedef struct vm_area {
+    uint32_t start;
+    uint32_t size;
+    uint32_t prot;
+    struct vm_area* next;
+} vm_area_t;
+
 typedef struct task {
     uint32_t id;
     uint32_t esp;            // saved stack pointer (points to interrupt frame)
@@ -107,6 +122,8 @@ typedef struct task {
     bool user;
     uint32_t user_brk;
     uint32_t user_brk_min;
+    vm_area_t* vm_areas;
+    uint32_t mmap_top;
     fd_entry_t fds[TASK_MAX_FDS];
     char cwd[VFS_PATH_MAX];
     vos_termios_t tty;
@@ -533,6 +550,8 @@ static task_t* task_create_user(uint32_t entry, uint32_t user_esp, uint32_t* pag
     t->user = true;
     t->user_brk = user_brk;
     t->user_brk_min = user_brk;
+    t->vm_areas = NULL;
+    t->mmap_top = USER_STACK_TOP - (USER_STACK_PAGES + 1u) * PAGE_SIZE;
     fd_init(t);
     cwd_init(t);
     tty_init(t);
@@ -947,9 +966,6 @@ interrupt_frame_t* tasking_sbrk(interrupt_frame_t* frame, int32_t increment) {
         new_brk = old_brk - dec;
     }
 
-    const uint32_t USER_BASE = 0x01000000u;
-    const uint32_t USER_STACK_TOP = 0x08000000u;
-    const uint32_t USER_STACK_PAGES = 64u;
     uint32_t stack_guard_bottom = USER_STACK_TOP - (USER_STACK_PAGES + 1u) * PAGE_SIZE;
 
     if (new_brk < USER_BASE || new_brk < current_task->user_brk_min || new_brk > stack_guard_bottom) {
@@ -1011,6 +1027,362 @@ interrupt_frame_t* tasking_sbrk(interrupt_frame_t* frame, int32_t increment) {
     irq_restore(irq_flags);
     frame->eax = old_brk;
     return frame;
+}
+
+// -----------------------------
+// User virtual memory mappings
+// -----------------------------
+
+// mmap prot bits (POSIX-ish).
+enum {
+    VOS_PROT_READ  = 0x1u,
+    VOS_PROT_WRITE = 0x2u,
+    VOS_PROT_EXEC  = 0x4u,
+};
+
+// mmap flags (Linux-compatible values where practical).
+enum {
+    VOS_MAP_SHARED    = 0x01u,
+    VOS_MAP_PRIVATE   = 0x02u,
+    VOS_MAP_FIXED     = 0x10u,
+    VOS_MAP_ANONYMOUS = 0x20u,
+};
+
+static uint32_t u32_align_down(uint32_t v, uint32_t a) {
+    return v & ~(a - 1u);
+}
+
+static uint32_t u32_align_up(uint32_t v, uint32_t a) {
+    return (v + a - 1u) & ~(a - 1u);
+}
+
+static bool vm_overlap_any(const vm_area_t* head, uint32_t start, uint32_t end) {
+    const vm_area_t* cur = head;
+    while (cur) {
+        uint32_t a = cur->start;
+        uint32_t b = cur->start + cur->size;
+        if (b < a) {
+            // Corrupt entry; treat as overlap to avoid mapping over random memory.
+            return true;
+        }
+        if (start < b && a < end) {
+            return true;
+        }
+        cur = cur->next;
+    }
+    return false;
+}
+
+static void vm_insert_sorted(task_t* t, vm_area_t* node) {
+    if (!t || !node) {
+        return;
+    }
+    if (!t->vm_areas || node->start < t->vm_areas->start) {
+        node->next = t->vm_areas;
+        t->vm_areas = node;
+        return;
+    }
+    vm_area_t* cur = t->vm_areas;
+    while (cur->next && cur->next->start <= node->start) {
+        cur = cur->next;
+    }
+    node->next = cur->next;
+    cur->next = node;
+}
+
+static void user_unmap_pages(uint32_t start, uint32_t end) {
+    for (uint32_t va = start; va < end; va += PAGE_SIZE) {
+        uint32_t paddr = 0;
+        if (paging_unmap_page(va, &paddr) && paddr) {
+            pmm_free_frame(paddr);
+        }
+    }
+}
+
+static int32_t user_map_zero_pages(uint32_t start, uint32_t end, uint32_t map_flags) {
+    paging_prepare_range(start, end - start, map_flags);
+
+    uint32_t va = start;
+    for (; va < end; va += PAGE_SIZE) {
+        uint32_t frame_paddr = pmm_alloc_frame();
+        if (frame_paddr == 0) {
+            break;
+        }
+        paging_map_page(va, frame_paddr, map_flags);
+        memset((void*)va, 0, PAGE_SIZE);
+    }
+
+    if (va != end) {
+        user_unmap_pages(start, va);
+        return -ENOMEM;
+    }
+    return 0;
+}
+
+static int32_t tasking_mprotect_pages(uint32_t start, uint32_t end, uint32_t prot) {
+    uint32_t* dir = current_task ? current_task->page_directory : NULL;
+    if (!dir) {
+        return -EINVAL;
+    }
+
+    bool writable = (prot & VOS_PROT_WRITE) != 0;
+
+    for (uint32_t va = start; va < end; va += PAGE_SIZE) {
+        uint32_t dir_index = (va >> 22) & 0x3FFu;
+        uint32_t tbl_index = (va >> 12) & 0x3FFu;
+
+        uint32_t pde = dir[dir_index];
+        if ((pde & PAGE_PRESENT) == 0 || (pde & PAGE_USER) == 0) {
+            return -EFAULT;
+        }
+        uint32_t* table = (uint32_t*)(pde & 0xFFFFF000u);
+        uint32_t pte = table[tbl_index];
+        if ((pte & PAGE_PRESENT) == 0 || (pte & PAGE_USER) == 0) {
+            return -EFAULT;
+        }
+
+        if (writable) {
+            pte |= PAGE_RW;
+        } else {
+            pte &= ~PAGE_RW;
+        }
+        table[tbl_index] = pte;
+        __asm__ volatile ("invlpg (%0)" : : "r"(va) : "memory");
+    }
+    return 0;
+}
+
+int32_t tasking_mmap(uint32_t addr_hint, uint32_t length, uint32_t prot, uint32_t flags, int32_t fd, uint32_t offset, uint32_t* out_addr) {
+    (void)offset;
+
+    if (!enabled || !current_task || !current_task->user) {
+        return -EINVAL;
+    }
+    if (!out_addr) {
+        return -EINVAL;
+    }
+    *out_addr = 0;
+
+    if (length == 0) {
+        return -EINVAL;
+    }
+    if ((flags & (VOS_MAP_PRIVATE | VOS_MAP_SHARED)) == 0) {
+        return -EINVAL;
+    }
+
+    // Only anonymous mappings for now (enough for tcc-style heaps).
+    if ((flags & VOS_MAP_ANONYMOUS) == 0) {
+        return -ENOSYS;
+    }
+    if (fd != -1) {
+        return -EINVAL;
+    }
+
+    uint32_t size = u32_align_up(length, PAGE_SIZE);
+    if (size == 0) {
+        return -EINVAL;
+    }
+
+    uint32_t stack_guard_bottom = USER_STACK_TOP - (USER_STACK_PAGES + 1u) * PAGE_SIZE;
+    uint32_t user_max = stack_guard_bottom;
+    if (user_max < USER_BASE || user_max > USER_LIMIT) {
+        return -EINVAL;
+    }
+
+    uint32_t start = 0;
+    if ((flags & VOS_MAP_FIXED) != 0) {
+        if (addr_hint == 0) {
+            return -EINVAL;
+        }
+        start = u32_align_down(addr_hint, PAGE_SIZE);
+        uint32_t end = start + size;
+        if (end < start) {
+            return -EINVAL;
+        }
+        if (start < USER_BASE || end > user_max) {
+            return -EINVAL;
+        }
+        if (start < current_task->user_brk) {
+            return -EINVAL;
+        }
+        if (vm_overlap_any(current_task->vm_areas, start, end)) {
+            return -EINVAL;
+        }
+    } else {
+        uint32_t top = current_task->mmap_top;
+        if (top == 0) {
+            top = user_max;
+        }
+        // Ensure we don't collide with the current heap.
+        if (top <= current_task->user_brk + size) {
+            return -ENOMEM;
+        }
+        start = u32_align_down(top - size, PAGE_SIZE);
+        if (start < USER_BASE || start + size > user_max) {
+            return -ENOMEM;
+        }
+    }
+
+    uint32_t map_flags = PAGE_PRESENT | PAGE_USER;
+    if ((prot & VOS_PROT_WRITE) != 0) {
+        map_flags |= PAGE_RW;
+    }
+
+    uint32_t irq_flags = irq_save();
+    int32_t rc = user_map_zero_pages(start, start + size, map_flags);
+    if (rc < 0) {
+        irq_restore(irq_flags);
+        return rc;
+    }
+
+    vm_area_t* node = (vm_area_t*)kmalloc(sizeof(*node));
+    if (!node) {
+        user_unmap_pages(start, start + size);
+        irq_restore(irq_flags);
+        return -ENOMEM;
+    }
+    memset(node, 0, sizeof(*node));
+    node->start = start;
+    node->size = size;
+    node->prot = prot;
+    node->next = NULL;
+    vm_insert_sorted(current_task, node);
+
+    if ((flags & VOS_MAP_FIXED) == 0) {
+        current_task->mmap_top = start;
+    }
+
+    irq_restore(irq_flags);
+    *out_addr = start;
+    return 0;
+}
+
+int32_t tasking_munmap(uint32_t addr, uint32_t length) {
+    if (!enabled || !current_task || !current_task->user) {
+        return -EINVAL;
+    }
+    if (length == 0) {
+        return -EINVAL;
+    }
+    if ((addr & (PAGE_SIZE - 1u)) != 0) {
+        return -EINVAL;
+    }
+
+    uint32_t start = addr;
+    uint32_t end = addr + length;
+    if (end < start) {
+        return -EINVAL;
+    }
+    start = u32_align_down(start, PAGE_SIZE);
+    end = u32_align_up(end, PAGE_SIZE);
+
+    uint32_t stack_guard_bottom = USER_STACK_TOP - (USER_STACK_PAGES + 1u) * PAGE_SIZE;
+    if (start < USER_BASE || end > stack_guard_bottom) {
+        return -EINVAL;
+    }
+
+    uint32_t irq_flags = irq_save();
+
+    vm_area_t* prev = NULL;
+    vm_area_t* cur = current_task->vm_areas;
+    while (cur) {
+        uint32_t a = cur->start;
+        uint32_t b = cur->start + cur->size;
+        if (b < a) {
+            break;
+        }
+        if (b <= start) {
+            prev = cur;
+            cur = cur->next;
+            continue;
+        }
+        if (a >= end) {
+            break;
+        }
+
+        uint32_t u0 = (a > start) ? a : start;
+        uint32_t u1 = (b < end) ? b : end;
+        if (u1 > u0) {
+            user_unmap_pages(u0, u1);
+        }
+
+        if (u0 == a && u1 == b) {
+            vm_area_t* next = cur->next;
+            if (prev) {
+                prev->next = next;
+            } else {
+                current_task->vm_areas = next;
+            }
+            kfree(cur);
+            cur = next;
+            continue;
+        }
+
+        if (u0 == a) {
+            cur->start = u1;
+            cur->size = b - u1;
+            prev = cur;
+            cur = cur->next;
+            continue;
+        }
+
+        if (u1 == b) {
+            cur->size = u0 - a;
+            prev = cur;
+            cur = cur->next;
+            continue;
+        }
+
+        // Split the region into two.
+        vm_area_t* tail = (vm_area_t*)kmalloc(sizeof(*tail));
+        if (!tail) {
+            irq_restore(irq_flags);
+            return -ENOMEM;
+        }
+        memset(tail, 0, sizeof(*tail));
+        tail->start = u1;
+        tail->size = b - u1;
+        tail->prot = cur->prot;
+        tail->next = cur->next;
+
+        cur->size = u0 - a;
+        cur->next = tail;
+        prev = tail;
+        cur = tail->next;
+    }
+
+    irq_restore(irq_flags);
+    return 0;
+}
+
+int32_t tasking_mprotect(uint32_t addr, uint32_t length, uint32_t prot) {
+    if (!enabled || !current_task || !current_task->user) {
+        return -EINVAL;
+    }
+    if (length == 0) {
+        return -EINVAL;
+    }
+    if ((addr & (PAGE_SIZE - 1u)) != 0) {
+        return -EINVAL;
+    }
+
+    uint32_t start = addr;
+    uint32_t end = addr + length;
+    if (end < start) {
+        return -EINVAL;
+    }
+    start = u32_align_down(start, PAGE_SIZE);
+    end = u32_align_up(end, PAGE_SIZE);
+
+    uint32_t stack_guard_bottom = USER_STACK_TOP - (USER_STACK_PAGES + 1u) * PAGE_SIZE;
+    if (start < USER_BASE || end > stack_guard_bottom) {
+        return -EINVAL;
+    }
+
+    uint32_t irq_flags = irq_save();
+    int32_t rc = tasking_mprotect_pages(start, end, prot);
+    irq_restore(irq_flags);
+    return rc;
 }
 
 uint32_t tasking_spawn_user_pid(uint32_t entry, uint32_t user_esp, uint32_t* page_directory, uint32_t user_brk) {
@@ -1374,7 +1746,13 @@ static int32_t tty_read_canonical(void* dst_user, uint32_t len) {
     current_task->tty_line_ready = false;
 
     for (;;) {
+        if (tasking_current_should_exit(NULL)) {
+            return -EINTR;
+        }
         int8_t key = (int8_t)keyboard_getchar(); // blocks
+        if (key == 0 && tasking_current_should_exit(NULL)) {
+            return -EINTR;
+        }
 
         if (key == '\r' && (current_task->tty.c_iflag & VOS_ICRNL) != 0) {
             key = '\n';
@@ -1501,6 +1879,9 @@ int32_t tasking_fd_read(int32_t fd, void* dst_user, uint32_t len) {
             block = false;
         }
         while (read < len) {
+            if (tasking_current_should_exit(NULL)) {
+                return (read != 0) ? (int32_t)read : -EINTR;
+            }
             char c = 0;
             if (block) {
                 c = keyboard_getchar(); // guarantees progress
@@ -1508,6 +1889,9 @@ int32_t tasking_fd_read(int32_t fd, void* dst_user, uint32_t len) {
                 if (!keyboard_try_getchar(&c)) {
                     break;
                 }
+            }
+            if (c == 0 && tasking_current_should_exit(NULL)) {
+                return (read != 0) ? (int32_t)read : -EINTR;
             }
             block = false;
 
@@ -1558,6 +1942,9 @@ int32_t tasking_fd_read(int32_t fd, void* dst_user, uint32_t len) {
         uint32_t total = 0;
         uint8_t tmp[128];
         while (total < len) {
+            if (tasking_current_should_exit(NULL)) {
+                return (total != 0) ? (int32_t)total : -EINTR;
+            }
             uint32_t chunk = len - total;
             if (chunk > (uint32_t)sizeof(tmp)) {
                 chunk = (uint32_t)sizeof(tmp);
@@ -1663,6 +2050,9 @@ int32_t tasking_fd_write(int32_t fd, const void* src_user, uint32_t len) {
         uint8_t tmp[128];
 
         while (total < len) {
+            if (tasking_current_should_exit(NULL)) {
+                return (total != 0) ? (int32_t)total : -EINTR;
+            }
             uint32_t chunk = len - total;
             if (chunk > (uint32_t)sizeof(tmp)) {
                 chunk = (uint32_t)sizeof(tmp);

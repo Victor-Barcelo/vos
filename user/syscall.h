@@ -80,6 +80,9 @@ enum {
     SYS_FONT_INFO = 45,
     SYS_FONT_SET = 46,
     SYS_GFX_BLIT_RGBA = 47,
+    SYS_MMAP = 48,
+    SYS_MUNMAP = 49,
+    SYS_MPROTECT = 50,
 };
 
 static inline int sys_write(int fd, const char* buf, uint32_t len) {
@@ -406,6 +409,40 @@ static inline int sys_font_set(uint32_t index) {
         "int $0x80"
         : "=a"(ret)
         : "a"(SYS_FONT_SET), "b"(index)
+        : "memory"
+    );
+    return ret;
+}
+
+static inline void* sys_mmap(void* addr, uint32_t length, uint32_t prot, uint32_t flags, int32_t fd, uint32_t offset) {
+    (void)offset; // file-backed mappings aren't supported yet
+    void* ret;
+    __asm__ volatile (
+        "int $0x80"
+        : "=a"(ret)
+        : "a"(SYS_MMAP), "b"(addr), "c"(length), "d"(prot), "S"(flags), "D"(fd)
+        : "memory"
+    );
+    return ret;
+}
+
+static inline int sys_munmap(void* addr, uint32_t length) {
+    int ret;
+    __asm__ volatile (
+        "int $0x80"
+        : "=a"(ret)
+        : "a"(SYS_MUNMAP), "b"(addr), "c"(length)
+        : "memory"
+    );
+    return ret;
+}
+
+static inline int sys_mprotect(void* addr, uint32_t length, uint32_t prot) {
+    int ret;
+    __asm__ volatile (
+        "int $0x80"
+        : "=a"(ret)
+        : "a"(SYS_MPROTECT), "b"(addr), "c"(length), "d"(prot)
         : "memory"
     );
     return ret;

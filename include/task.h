@@ -87,6 +87,11 @@ int32_t tasking_fd_dup(int32_t oldfd);
 int32_t tasking_fd_dup2(int32_t oldfd, int32_t newfd);
 int32_t tasking_pipe(void* pipefds_user);
 
+// Virtual memory mappings (mmap-style).
+int32_t tasking_mmap(uint32_t addr_hint, uint32_t length, uint32_t prot, uint32_t flags, int32_t fd, uint32_t offset, uint32_t* out_addr);
+int32_t tasking_munmap(uint32_t addr, uint32_t length);
+int32_t tasking_mprotect(uint32_t addr, uint32_t length, uint32_t prot);
+
 // Spawn a new user process by loading an ELF from the VFS, inheriting the
 // caller's cwd/tty settings. Returns pid (>0) on success or -errno.
 int32_t tasking_spawn_exec(const char* path, const char* const* argv, uint32_t argc);

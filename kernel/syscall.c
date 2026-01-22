@@ -60,6 +60,9 @@ enum {
     SYS_FONT_INFO = 45,
     SYS_FONT_SET = 46,
     SYS_GFX_BLIT_RGBA = 47,
+    SYS_MMAP = 48,
+    SYS_MUNMAP = 49,
+    SYS_MPROTECT = 50,
 };
 
 typedef struct vos_task_info_user {
@@ -265,6 +268,9 @@ interrupt_frame_t* syscall_handle(interrupt_frame_t* frame) {
             uint32_t len = frame->edx;
             int32_t n = tasking_fd_read(fd, dst_user, len);
             frame->eax = (uint32_t)n;
+            if ((frame->cs & 3u) == 3u && tasking_current_should_exit(&pending_exit)) {
+                return tasking_exit(frame, pending_exit);
+            }
             return frame;
         }
         case SYS_CLOSE: {
@@ -725,6 +731,33 @@ interrupt_frame_t* syscall_handle(interrupt_frame_t* frame) {
         case SYS_FONT_SET: {
             uint32_t idx = frame->ebx;
             frame->eax = (uint32_t)screen_font_set((int)idx);
+            return frame;
+        }
+        case SYS_MMAP: {
+            uint32_t addr_hint = frame->ebx;
+            uint32_t length = frame->ecx;
+            uint32_t prot = frame->edx;
+            uint32_t flags = frame->esi;
+            int32_t fd = (int32_t)frame->edi;
+
+            uint32_t out_addr = 0;
+            int32_t rc = tasking_mmap(addr_hint, length, prot, flags, fd, 0, &out_addr);
+            frame->eax = (rc < 0) ? (uint32_t)rc : out_addr;
+            return frame;
+        }
+        case SYS_MUNMAP: {
+            uint32_t addr = frame->ebx;
+            uint32_t length = frame->ecx;
+            int32_t rc = tasking_munmap(addr, length);
+            frame->eax = (uint32_t)rc;
+            return frame;
+        }
+        case SYS_MPROTECT: {
+            uint32_t addr = frame->ebx;
+            uint32_t length = frame->ecx;
+            uint32_t prot = frame->edx;
+            int32_t rc = tasking_mprotect(addr, length, prot);
+            frame->eax = (uint32_t)rc;
             return frame;
         }
         default:

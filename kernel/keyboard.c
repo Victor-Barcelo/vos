@@ -251,6 +251,10 @@ char keyboard_getchar(void) {
         if (serial_try_read_char(&c)) {
             break;
         }
+        if (tasking_current_should_exit(NULL)) {
+            c = 0;
+            break;
+        }
         hlt();
         if (idle_hook) {
             idle_hook();

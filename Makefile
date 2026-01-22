@@ -180,6 +180,13 @@ USER_BINS = $(USER_INIT) $(USER_ELIZA) $(USER_LSH) $(USER_SH) $(USER_UPTIME) $(U
 QEMU_XRES ?= 1920
 QEMU_YRES ?= 1080
 
+# Persistent FAT16 disk image (mounted at /disk in VOS).
+DISK_IMG ?= vos-disk.img
+DISK_SIZE_MB ?= 256
+
+# Host helper to install a sysroot into $(DISK_IMG) under /usr.
+SYSROOT_SCRIPT = $(TOOLS_DIR)/install_sysroot.sh
+
 # Optional extra module: a small FAT12 image (for FAT12/16 support demo)
 MKFAT = $(TOOLS_BUILD_DIR)/mkfat
 FAT_IMG = $(ISO_DIR)/boot/fat.img
@@ -399,6 +406,15 @@ $(ISO): $(KERNEL) $(USER_BINS) $(FAT_IMG) $(INITRAMFS_FILES) $(INITRAMFS_DIRS)
 	echo '}' >> $(ISO_DIR)/boot/grub/grub.cfg
 	grub-mkrescue -o $(ISO) $(ISO_DIR)
 
+# Create a persistent FAT16 disk image for /disk (only when missing).
+$(DISK_IMG):
+	truncate -s $(DISK_SIZE_MB)M $@
+	mkfs.fat -F 16 -n VOSDISK $@
+
+# Install a sysroot onto $(DISK_IMG) so /usr is populated inside VOS.
+sysroot: $(USER_RUNTIME_OBJECTS) $(USER_RUNTIME_LIBS) $(DISK_IMG)
+	bash $(SYSROOT_SCRIPT) $(DISK_IMG)
+
 # Clean build artifacts
 clean:
 	rm -rf $(BUILD_DIR)
@@ -416,4 +432,4 @@ run: $(ISO)
 debug: $(ISO)
 	qemu-system-i386 -cdrom $(ISO) -vga none -device bochs-display,xres=$(QEMU_XRES),yres=$(QEMU_YRES) -d int -no-reboot
 
-.PHONY: all clean run debug
+.PHONY: all clean run debug sysroot

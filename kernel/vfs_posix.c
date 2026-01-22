@@ -120,6 +120,49 @@ static bool abs_is_mount(const char* abs, const char* mount) {
     return next == '\0' || next == '/';
 }
 
+// /usr is a convenience alias for /disk/usr so we can keep large toolchains and
+// sysroot files on persistent storage while exposing standard paths to userland.
+static bool abs_usr_to_disk(const char* abs, char out[VFS_PATH_MAX]) {
+    if (!out) {
+        return false;
+    }
+    out[0] = '\0';
+    if (!abs || abs[0] != '/') {
+        return false;
+    }
+    if (!abs_is_mount(abs, "/usr")) {
+        return false;
+    }
+
+    if (ci_eq(abs, "/usr")) {
+        strncpy(out, "/disk/usr", VFS_PATH_MAX - 1u);
+        out[VFS_PATH_MAX - 1u] = '\0';
+        return true;
+    }
+
+    if (ci_starts_with(abs, "/usr/")) {
+        // abs + 4 points at "/..."
+        strncpy(out, "/disk/usr", VFS_PATH_MAX - 1u);
+        out[VFS_PATH_MAX - 1u] = '\0';
+        size_t used = strlen(out);
+        if (used < VFS_PATH_MAX - 1u) {
+            strncat(out, abs + 4, (VFS_PATH_MAX - 1u) - used);
+        }
+        return true;
+    }
+    return false;
+}
+
+static const char* abs_apply_usr_alias(const char* abs, char tmp[VFS_PATH_MAX]) {
+    if (!abs || !tmp) {
+        return abs;
+    }
+    if (abs_usr_to_disk(abs, tmp)) {
+        return tmp;
+    }
+    return abs;
+}
+
 static int32_t path_push(char* out, uint32_t cap, uint32_t* out_len, uint32_t* saved, uint32_t* depth, uint32_t saved_cap, const char* seg, uint32_t seg_len) {
     if (!out || !out_len || !saved || !depth || !seg) {
         return -EINVAL;
@@ -455,6 +498,14 @@ static uint32_t initramfs_list_dir_abs(const char* abs_path, vfs_dirent_t* out, 
         wdate = 0;
         is_dir = false;
         size = 0;
+        if (fatdisk_is_ready() && fatdisk_stat_ex("/disk/usr", &is_dir, &size, &wtime, &wdate) && is_dir) {
+            count = add_unique_dirent(out, count, max, "usr", true, 0, wtime, wdate);
+        }
+
+        wtime = 0;
+        wdate = 0;
+        is_dir = false;
+        size = 0;
         (void)ramfs_stat_ex("/ram", &is_dir, &size, &wtime, &wdate);
         count = add_unique_dirent(out, count, max, "ram", true, 0, wtime, wdate);
     }
@@ -511,7 +562,10 @@ int32_t vfs_stat_path(const char* cwd, const char* path, vfs_stat_t* out) {
         return rc;
     }
 
-    if (abs_is_mount(abs, "/disk")) {
+    char abs_usr[VFS_PATH_MAX];
+    const char* eff = abs_apply_usr_alias(abs, abs_usr);
+
+    if (abs_is_mount(eff, "/disk")) {
         if (!fatdisk_is_ready()) {
             return -EIO;
         }
@@ -519,7 +573,7 @@ int32_t vfs_stat_path(const char* cwd, const char* path, vfs_stat_t* out) {
         uint32_t size = 0;
         uint16_t wtime = 0;
         uint16_t wdate = 0;
-        if (!fatdisk_stat_ex(abs, &is_dir, &size, &wtime, &wdate)) {
+        if (!fatdisk_stat_ex(eff, &is_dir, &size, &wtime, &wdate)) {
             return -ENOENT;
         }
         out->is_dir = is_dir ? 1u : 0u;
@@ -529,12 +583,12 @@ int32_t vfs_stat_path(const char* cwd, const char* path, vfs_stat_t* out) {
         return 0;
     }
 
-    if (abs_is_mount(abs, "/ram")) {
+    if (abs_is_mount(eff, "/ram")) {
         bool is_dir = false;
         uint32_t size = 0;
         uint16_t wtime = 0;
         uint16_t wdate = 0;
-        if (!ramfs_stat_ex(abs, &is_dir, &size, &wtime, &wdate)) {
+        if (!ramfs_stat_ex(eff, &is_dir, &size, &wtime, &wdate)) {
             return -ENOENT;
         }
         out->is_dir = is_dir ? 1u : 0u;
@@ -544,7 +598,7 @@ int32_t vfs_stat_path(const char* cwd, const char* path, vfs_stat_t* out) {
         return 0;
     }
 
-    return initramfs_stat_abs(abs, out);
+    return initramfs_stat_abs(eff, out);
 }
 
 int32_t vfs_mkdir_path(const char* cwd, const char* path) {
@@ -558,26 +612,29 @@ int32_t vfs_mkdir_path(const char* cwd, const char* path) {
         return -EEXIST;
     }
 
-    if (abs_is_mount(abs, "/disk")) {
+    char abs_usr[VFS_PATH_MAX];
+    const char* eff = abs_apply_usr_alias(abs, abs_usr);
+
+    if (abs_is_mount(eff, "/disk")) {
         if (!fatdisk_is_ready()) {
             return -EIO;
         }
         bool is_dir = false;
         uint32_t size = 0;
-        if (fatdisk_stat(abs, &is_dir, &size)) {
+        if (fatdisk_stat(eff, &is_dir, &size)) {
             return -EEXIST;
         }
-        if (!fatdisk_mkdir(abs)) {
+        if (!fatdisk_mkdir(eff)) {
             return -EIO;
         }
         return 0;
     }
 
-    if (abs_is_mount(abs, "/ram")) {
-        if (ramfs_is_dir(abs) || ramfs_is_file(abs)) {
+    if (abs_is_mount(eff, "/ram")) {
+        if (ramfs_is_dir(eff) || ramfs_is_file(eff)) {
             return -EEXIST;
         }
-        if (!ramfs_mkdir(abs)) {
+        if (!ramfs_mkdir(eff)) {
             return -EIO;
         }
         return 0;
@@ -799,19 +856,22 @@ int32_t vfs_open_path(const char* cwd, const char* path, uint32_t flags, vfs_han
         return rc;
     }
 
+    char abs_usr[VFS_PATH_MAX];
+    const char* eff = abs_apply_usr_alias(abs, abs_usr);
+
     uint32_t acc = flags & VFS_O_ACCMODE;
     bool want_write = (acc == VFS_O_WRONLY || acc == VFS_O_RDWR);
     bool want_dir = (flags & VFS_O_DIRECTORY) != 0;
 
     // /disk
-    if (abs_is_mount(abs, "/disk")) {
+    if (abs_is_mount(eff, "/disk")) {
         if (!fatdisk_is_ready()) {
             return -EIO;
         }
 
         bool is_dir = false;
         uint32_t size = 0;
-        bool exists = fatdisk_stat(abs, &is_dir, &size);
+        bool exists = fatdisk_stat(eff, &is_dir, &size);
 
         if (exists) {
             if (want_dir && !is_dir) {
@@ -821,13 +881,13 @@ int32_t vfs_open_path(const char* cwd, const char* path, uint32_t flags, vfs_han
                 if (want_write) {
                     return -EISDIR;
                 }
-                return open_dir_handle(VFS_BACKEND_FATDISK, abs, flags, out);
+                return open_dir_handle(VFS_BACKEND_FATDISK, eff, flags, out);
             }
             if ((flags & VFS_O_CREAT) && (flags & VFS_O_EXCL)) {
                 return -EEXIST;
             }
             if (want_write && (flags & VFS_O_TRUNC)) {
-                if (!fatdisk_write_file(abs, NULL, 0, true)) {
+                if (!fatdisk_write_file(eff, NULL, 0, true)) {
                     return -EIO;
                 }
                 size = 0;
@@ -840,7 +900,7 @@ int32_t vfs_open_path(const char* cwd, const char* path, uint32_t flags, vfs_han
                 return -ENOENT;
             }
             // Create empty file.
-            if (!fatdisk_write_file(abs, NULL, 0, false)) {
+            if (!fatdisk_write_file(eff, NULL, 0, false)) {
                 return -EIO;
             }
             size = 0;
@@ -850,7 +910,7 @@ int32_t vfs_open_path(const char* cwd, const char* path, uint32_t flags, vfs_han
         if (!want_write && (flags & VFS_O_TRUNC) == 0) {
             // Read-only: keep an owned buffer to simplify lifetime.
             if (size) {
-                if (!fatdisk_read_file_alloc(abs, &data, &size) || !data) {
+                if (!fatdisk_read_file_alloc(eff, &data, &size) || !data) {
                     return -EIO;
                 }
             } else {
@@ -858,13 +918,13 @@ int32_t vfs_open_path(const char* cwd, const char* path, uint32_t flags, vfs_han
             }
         } else if ((flags & VFS_O_TRUNC) == 0) {
             if (size) {
-                if (!fatdisk_read_file_alloc(abs, &data, &size) || !data) {
+                if (!fatdisk_read_file_alloc(eff, &data, &size) || !data) {
                     return -EIO;
                 }
             }
         }
 
-        rc = open_file_handle(VFS_BACKEND_FATDISK, abs, flags, data, size, out);
+        rc = open_file_handle(VFS_BACKEND_FATDISK, eff, flags, data, size, out);
         if (rc < 0) {
             if (data) kfree(data);
             return rc;
@@ -877,9 +937,9 @@ int32_t vfs_open_path(const char* cwd, const char* path, uint32_t flags, vfs_han
     }
 
     // /ram
-    if (abs_is_mount(abs, "/ram")) {
-        bool is_dir = ramfs_is_dir(abs);
-        bool is_file = ramfs_is_file(abs);
+    if (abs_is_mount(eff, "/ram")) {
+        bool is_dir = ramfs_is_dir(eff);
+        bool is_file = ramfs_is_file(eff);
 
         if (is_dir || is_file) {
             if (want_dir && !is_dir) {
@@ -889,13 +949,13 @@ int32_t vfs_open_path(const char* cwd, const char* path, uint32_t flags, vfs_han
                 if (want_write) {
                     return -EISDIR;
                 }
-                return open_dir_handle(VFS_BACKEND_RAMFS, abs, flags, out);
+                return open_dir_handle(VFS_BACKEND_RAMFS, eff, flags, out);
             }
             if ((flags & VFS_O_CREAT) && (flags & VFS_O_EXCL)) {
                 return -EEXIST;
             }
             if (want_write && (flags & VFS_O_TRUNC)) {
-                if (!ramfs_write_file(abs, NULL, 0, true)) {
+                if (!ramfs_write_file(eff, NULL, 0, true)) {
                     return -EIO;
                 }
             }
@@ -906,7 +966,7 @@ int32_t vfs_open_path(const char* cwd, const char* path, uint32_t flags, vfs_han
             if ((flags & VFS_O_CREAT) == 0) {
                 return -ENOENT;
             }
-            if (!ramfs_write_file(abs, NULL, 0, false)) {
+            if (!ramfs_write_file(eff, NULL, 0, false)) {
                 return -EIO;
             }
         }
@@ -914,10 +974,10 @@ int32_t vfs_open_path(const char* cwd, const char* path, uint32_t flags, vfs_han
         const uint8_t* ro = NULL;
         uint32_t size = 0;
         if ((flags & VFS_O_TRUNC) == 0) {
-            (void)ramfs_read_file(abs, &ro, &size);
+            (void)ramfs_read_file(eff, &ro, &size);
         }
 
-        return open_file_handle(VFS_BACKEND_RAMFS, abs, flags, ro, size, out);
+        return open_file_handle(VFS_BACKEND_RAMFS, eff, flags, ro, size, out);
     }
 
     // initramfs (read-only)
@@ -926,7 +986,7 @@ int32_t vfs_open_path(const char* cwd, const char* path, uint32_t flags, vfs_han
     }
 
     vfs_stat_t st;
-    rc = initramfs_stat_abs(abs, &st);
+    rc = initramfs_stat_abs(eff, &st);
     if (rc < 0) {
         return rc;
     }
@@ -934,15 +994,15 @@ int32_t vfs_open_path(const char* cwd, const char* path, uint32_t flags, vfs_han
         return -ENOTDIR;
     }
     if (st.is_dir) {
-        return open_dir_handle(VFS_BACKEND_INITRAMFS, abs, flags, out);
+        return open_dir_handle(VFS_BACKEND_INITRAMFS, eff, flags, out);
     }
 
     const uint8_t* data = NULL;
     uint32_t size = 0;
-    if (!vfs_read_file(abs, &data, &size) || !data) {
+    if (!vfs_read_file(eff, &data, &size) || !data) {
         return -ENOENT;
     }
-    return open_file_handle(VFS_BACKEND_INITRAMFS, abs, flags, data, size, out);
+    return open_file_handle(VFS_BACKEND_INITRAMFS, eff, flags, data, size, out);
 }
 
 void vfs_ref(vfs_handle_t* h) {
@@ -1208,36 +1268,39 @@ int32_t vfs_unlink_path(const char* cwd, const char* path) {
     if (rc < 0) {
         return rc;
     }
-    if (ci_eq(abs, "/") || ci_eq(abs, "/ram") || ci_eq(abs, "/disk")) {
+    if (ci_eq(abs, "/") || ci_eq(abs, "/ram") || ci_eq(abs, "/disk") || ci_eq(abs, "/usr")) {
         return -EPERM;
     }
 
-    if (abs_is_mount(abs, "/disk")) {
+    char abs_usr[VFS_PATH_MAX];
+    const char* eff = abs_apply_usr_alias(abs, abs_usr);
+
+    if (abs_is_mount(eff, "/disk")) {
         if (!fatdisk_is_ready()) {
             return -EIO;
         }
         bool is_dir = false;
         uint32_t size = 0;
-        if (!fatdisk_stat(abs, &is_dir, &size)) {
+        if (!fatdisk_stat(eff, &is_dir, &size)) {
             return -ENOENT;
         }
         if (is_dir) {
             return -EISDIR;
         }
-        if (!fatdisk_unlink(abs)) {
+        if (!fatdisk_unlink(eff)) {
             return -EIO;
         }
         return 0;
     }
 
-    if (abs_is_mount(abs, "/ram")) {
-        if (ramfs_is_dir(abs)) {
+    if (abs_is_mount(eff, "/ram")) {
+        if (ramfs_is_dir(eff)) {
             return -EISDIR;
         }
-        if (!ramfs_is_file(abs)) {
+        if (!ramfs_is_file(eff)) {
             return -ENOENT;
         }
-        if (!ramfs_unlink(abs)) {
+        if (!ramfs_unlink(eff)) {
             return -EIO;
         }
         return 0;
@@ -1252,17 +1315,20 @@ int32_t vfs_rmdir_path(const char* cwd, const char* path) {
     if (rc < 0) {
         return rc;
     }
-    if (ci_eq(abs, "/") || ci_eq(abs, "/ram") || ci_eq(abs, "/disk")) {
+    if (ci_eq(abs, "/") || ci_eq(abs, "/ram") || ci_eq(abs, "/disk") || ci_eq(abs, "/usr")) {
         return -EPERM;
     }
 
-    if (abs_is_mount(abs, "/disk")) {
+    char abs_usr[VFS_PATH_MAX];
+    const char* eff = abs_apply_usr_alias(abs, abs_usr);
+
+    if (abs_is_mount(eff, "/disk")) {
         if (!fatdisk_is_ready()) {
             return -EIO;
         }
         bool is_dir = false;
         uint32_t size = 0;
-        if (!fatdisk_stat(abs, &is_dir, &size)) {
+        if (!fatdisk_stat(eff, &is_dir, &size)) {
             return -ENOENT;
         }
         if (!is_dir) {
@@ -1273,7 +1339,7 @@ int32_t vfs_rmdir_path(const char* cwd, const char* path) {
         if (!dents) {
             return -ENOMEM;
         }
-        uint32_t n = fatdisk_list_dir(abs, dents, VFS_MAX_DIR_ENTRIES);
+        uint32_t n = fatdisk_list_dir(eff, dents, VFS_MAX_DIR_ENTRIES);
         for (uint32_t i = 0; i < n; i++) {
             if (ci_eq(dents[i].name, ".") || ci_eq(dents[i].name, "..")) {
                 continue;
@@ -1283,28 +1349,28 @@ int32_t vfs_rmdir_path(const char* cwd, const char* path) {
         }
         kfree(dents);
 
-        if (!fatdisk_rmdir(abs)) {
+        if (!fatdisk_rmdir(eff)) {
             return -EIO;
         }
         return 0;
     }
 
-    if (abs_is_mount(abs, "/ram")) {
-        if (!ramfs_is_dir(abs)) {
-            return ramfs_is_file(abs) ? -ENOTDIR : -ENOENT;
+    if (abs_is_mount(eff, "/ram")) {
+        if (!ramfs_is_dir(eff)) {
+            return ramfs_is_file(eff) ? -ENOTDIR : -ENOENT;
         }
 
         ramfs_dirent_t* dents = (ramfs_dirent_t*)kcalloc(VFS_MAX_DIR_ENTRIES, sizeof(ramfs_dirent_t));
         if (!dents) {
             return -ENOMEM;
         }
-        uint32_t n = ramfs_list_dir(abs, dents, VFS_MAX_DIR_ENTRIES);
+        uint32_t n = ramfs_list_dir(eff, dents, VFS_MAX_DIR_ENTRIES);
         kfree(dents);
         if (n != 0) {
             return -ENOTEMPTY;
         }
 
-        if (!ramfs_rmdir(abs)) {
+        if (!ramfs_rmdir(eff)) {
             return -EIO;
         }
         return 0;
@@ -1328,10 +1394,10 @@ int32_t vfs_rename_path(const char* cwd, const char* old_path, const char* new_p
     if (rc < 0) {
         return rc;
     }
-    if (ci_eq(abs_old, "/") || ci_eq(abs_old, "/ram") || ci_eq(abs_old, "/disk")) {
+    if (ci_eq(abs_old, "/") || ci_eq(abs_old, "/ram") || ci_eq(abs_old, "/disk") || ci_eq(abs_old, "/usr")) {
         return -EPERM;
     }
-    if (ci_eq(abs_new, "/") || ci_eq(abs_new, "/ram") || ci_eq(abs_new, "/disk")) {
+    if (ci_eq(abs_new, "/") || ci_eq(abs_new, "/ram") || ci_eq(abs_new, "/disk") || ci_eq(abs_new, "/usr")) {
         return -EPERM;
     }
 
@@ -1350,10 +1416,15 @@ int32_t vfs_rename_path(const char* cwd, const char* old_path, const char* new_p
         return rc;
     }
 
-    bool old_disk = abs_is_mount(abs_old, "/disk");
-    bool old_ram = abs_is_mount(abs_old, "/ram");
-    bool new_disk = abs_is_mount(abs_new, "/disk");
-    bool new_ram = abs_is_mount(abs_new, "/ram");
+    char abs_old_usr[VFS_PATH_MAX];
+    char abs_new_usr[VFS_PATH_MAX];
+    const char* old_eff = abs_apply_usr_alias(abs_old, abs_old_usr);
+    const char* new_eff = abs_apply_usr_alias(abs_new, abs_new_usr);
+
+    bool old_disk = abs_is_mount(old_eff, "/disk");
+    bool old_ram = abs_is_mount(old_eff, "/ram");
+    bool new_disk = abs_is_mount(new_eff, "/disk");
+    bool new_ram = abs_is_mount(new_eff, "/ram");
 
     if ((old_disk && !new_disk) || (old_ram && !new_ram) || (!old_disk && !old_ram) || (!new_disk && !new_ram)) {
         return -EXDEV;
@@ -1367,20 +1438,20 @@ int32_t vfs_rename_path(const char* cwd, const char* old_path, const char* new_p
         // fatdisk_rename currently can't move across directories.
         char old_dir[VFS_PATH_MAX];
         char new_dir[VFS_PATH_MAX];
-        abs_dirname(abs_old, old_dir);
-        abs_dirname(abs_new, new_dir);
+        abs_dirname(old_eff, old_dir);
+        abs_dirname(new_eff, new_dir);
         if (!ci_eq(old_dir, new_dir)) {
             return -EXDEV;
         }
 
-        if (!fatdisk_rename(abs_old, abs_new)) {
+        if (!fatdisk_rename(old_eff, new_eff)) {
             return -EIO;
         }
         return 0;
     }
 
     // /ram
-    if (!ramfs_rename(abs_old, abs_new)) {
+    if (!ramfs_rename(old_eff, new_eff)) {
         return -EIO;
     }
     return 0;

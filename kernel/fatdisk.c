@@ -367,6 +367,126 @@ static void fat_name_from_entry(const uint8_t* e, char* out, uint32_t out_len) {
     out[pos] = '\0';
 }
 
+// -----------------------------
+// FAT long filename (LFN) support (read-only)
+// -----------------------------
+
+#define FAT_LFN_MAX_PARTS 20u
+#define FAT_LFN_MAX_CHARS (FAT_LFN_MAX_PARTS * 13u)
+
+typedef struct lfn_state {
+    bool active;
+    uint8_t checksum;
+    uint8_t total_parts;
+    uint32_t seen_mask;
+    uint16_t chars[FAT_LFN_MAX_CHARS];
+} lfn_state_t;
+
+static void lfn_reset(lfn_state_t* s) {
+    if (!s) {
+        return;
+    }
+    s->active = false;
+    s->checksum = 0;
+    s->total_parts = 0;
+    s->seen_mask = 0;
+    for (uint32_t i = 0; i < FAT_LFN_MAX_CHARS; i++) {
+        s->chars[i] = 0xFFFFu;
+    }
+}
+
+static uint8_t fat_lfn_checksum(const uint8_t name11[11]) {
+    uint8_t sum = 0;
+    for (uint32_t i = 0; i < 11u; i++) {
+        sum = (uint8_t)(((sum & 1u) ? 0x80u : 0u) + (sum >> 1) + name11[i]);
+    }
+    return sum;
+}
+
+static void lfn_feed(lfn_state_t* s, const uint8_t e[32]) {
+    if (!s || !e) {
+        return;
+    }
+    uint8_t ord_raw = e[0];
+    uint8_t ord = ord_raw & 0x1Fu;
+    bool last = (ord_raw & 0x40u) != 0;
+    if (ord == 0 || ord > FAT_LFN_MAX_PARTS) {
+        lfn_reset(s);
+        return;
+    }
+
+    if (last) {
+        lfn_reset(s);
+        s->active = true;
+        s->total_parts = ord;
+        s->checksum = e[13];
+    }
+    if (!s->active) {
+        return;
+    }
+    if (e[13] != s->checksum || ord > s->total_parts) {
+        lfn_reset(s);
+        return;
+    }
+
+    uint32_t base = (uint32_t)(ord - 1u) * 13u;
+    if (base + 12u >= FAT_LFN_MAX_CHARS) {
+        lfn_reset(s);
+        return;
+    }
+
+    // UCS-2 name fragments in 3 groups: 5 + 6 + 2 = 13 code units.
+    for (uint32_t i = 0; i < 5u; i++) {
+        s->chars[base + i] = read_le16(e + 1u + i * 2u);
+    }
+    for (uint32_t i = 0; i < 6u; i++) {
+        s->chars[base + 5u + i] = read_le16(e + 14u + i * 2u);
+    }
+    for (uint32_t i = 0; i < 2u; i++) {
+        s->chars[base + 11u + i] = read_le16(e + 28u + i * 2u);
+    }
+
+    s->seen_mask |= (1u << (ord - 1u));
+}
+
+static bool lfn_name_for_sfn(const lfn_state_t* s, const uint8_t sfn_entry[32], char* out, uint32_t out_len) {
+    if (!s || !sfn_entry || !out || out_len == 0) {
+        return false;
+    }
+    out[0] = '\0';
+    if (!s->active || s->total_parts == 0) {
+        return false;
+    }
+    uint32_t parts = s->total_parts;
+    if (parts > FAT_LFN_MAX_PARTS) {
+        return false;
+    }
+    uint32_t full_mask = (parts == 32u) ? 0xFFFFFFFFu : ((1u << parts) - 1u);
+    if ((s->seen_mask & full_mask) != full_mask) {
+        return false;
+    }
+    uint8_t sum = fat_lfn_checksum(sfn_entry);
+    if (sum != s->checksum) {
+        return false;
+    }
+
+    uint32_t max_chars = parts * 13u;
+    uint32_t pos = 0;
+    for (uint32_t i = 0; i < max_chars && pos + 1u < out_len; i++) {
+        uint16_t ch = s->chars[i];
+        if (ch == 0x0000u || ch == 0xFFFFu) {
+            break;
+        }
+        if (ch <= 0x7Fu) {
+            out[pos++] = (char)ch;
+        } else {
+            out[pos++] = '?';
+        }
+    }
+    out[pos] = '\0';
+    return out[0] != '\0';
+}
+
 static uint32_t cluster_to_lba(uint16_t cluster) {
     return g_fs.first_data_lba + (uint32_t)(cluster - 2u) * (uint32_t)g_fs.sectors_per_cluster;
 }
@@ -592,6 +712,133 @@ static bool dir_iter_find_by_name(fat_dir_t dir, const uint8_t name11[11], dir_l
     return false;
 }
 
+static bool dir_iter_find_by_name_str(fat_dir_t dir, const char* name, dir_loc_t* out_loc, uint8_t out_entry[32]) {
+    if (!g_fs.ready || !name) {
+        return false;
+    }
+
+    uint8_t sec[SECTOR_SIZE];
+    lfn_state_t lfn;
+    lfn_reset(&lfn);
+
+    char cur_name[256];
+
+    if (dir.is_root) {
+        uint32_t total = g_fs.root_dir_sectors;
+        for (uint32_t s = 0; s < total; s++) {
+            uint32_t lba = g_fs.first_root_lba + s;
+            if (!disk_read(lba, sec)) {
+                return false;
+            }
+            for (uint32_t off = 0; off + 32u <= SECTOR_SIZE; off += 32u) {
+                const uint8_t* e = sec + off;
+                if (e[0] == 0x00) {
+                    return false;
+                }
+                if (e[0] == 0xE5) {
+                    lfn_reset(&lfn);
+                    continue;
+                }
+
+                uint8_t attr = e[11];
+                if (attr == FAT_ATTR_LFN) {
+                    lfn_feed(&lfn, e);
+                    continue;
+                }
+                if (attr & FAT_ATTR_VOLUME) {
+                    lfn_reset(&lfn);
+                    continue;
+                }
+
+                bool have_lfn = lfn_name_for_sfn(&lfn, e, cur_name, sizeof(cur_name));
+                if (!have_lfn) {
+                    fat_name_from_entry(e, cur_name, sizeof(cur_name));
+                }
+                lfn_reset(&lfn);
+
+                if (ci_eq(cur_name, name)) {
+                    if (out_loc) {
+                        out_loc->lba = lba;
+                        out_loc->off = (uint16_t)off;
+                    }
+                    if (out_entry) {
+                        memcpy(out_entry, e, 32);
+                    }
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    uint16_t cluster = dir.cluster;
+    if (cluster < 2u) {
+        return false;
+    }
+
+    uint32_t max_steps = g_fs.cluster_count + 4u;
+    for (uint32_t step = 0; step < max_steps; step++) {
+        if (cluster < 2u || cluster >= (uint16_t)(g_fs.cluster_count + 2u)) {
+            return false;
+        }
+
+        uint32_t base = cluster_to_lba(cluster);
+        for (uint32_t si = 0; si < g_fs.sectors_per_cluster; si++) {
+            uint32_t lba = base + si;
+            if (!disk_read(lba, sec)) {
+                return false;
+            }
+            for (uint32_t off = 0; off + 32u <= SECTOR_SIZE; off += 32u) {
+                const uint8_t* e = sec + off;
+                if (e[0] == 0x00) {
+                    return false;
+                }
+                if (e[0] == 0xE5) {
+                    lfn_reset(&lfn);
+                    continue;
+                }
+
+                uint8_t attr = e[11];
+                if (attr == FAT_ATTR_LFN) {
+                    lfn_feed(&lfn, e);
+                    continue;
+                }
+                if (attr & FAT_ATTR_VOLUME) {
+                    lfn_reset(&lfn);
+                    continue;
+                }
+
+                bool have_lfn = lfn_name_for_sfn(&lfn, e, cur_name, sizeof(cur_name));
+                if (!have_lfn) {
+                    fat_name_from_entry(e, cur_name, sizeof(cur_name));
+                }
+                lfn_reset(&lfn);
+
+                if (ci_eq(cur_name, name)) {
+                    if (out_loc) {
+                        out_loc->lba = lba;
+                        out_loc->off = (uint16_t)off;
+                    }
+                    if (out_entry) {
+                        memcpy(out_entry, e, 32);
+                    }
+                    return true;
+                }
+            }
+        }
+
+        uint16_t next = 0;
+        if (!fat_get(cluster, &next)) {
+            return false;
+        }
+        if (fat_is_eoc(next)) {
+            return false;
+        }
+        cluster = next;
+    }
+    return false;
+}
+
 static bool dir_find_free_slot(fat_dir_t dir, dir_loc_t* out_loc) {
     if (!g_fs.ready || !out_loc) {
         return false;
@@ -755,12 +1002,73 @@ static bool resolve_parent_dir(const char* abs_path, fat_dir_t* out_dir, uint8_t
 }
 
 static bool lookup_path_entry(const char* abs_path, dir_loc_t* out_loc, uint8_t out_entry[32]) {
-    fat_dir_t parent;
-    uint8_t name11[11];
-    if (!resolve_parent_dir(abs_path, &parent, name11)) {
+    if (!g_fs.ready || !abs_path) {
         return false;
     }
-    return dir_iter_find_by_name(parent, name11, out_loc, out_entry);
+
+    const char* rel = fatdisk_strip_mount(abs_path);
+    if (!rel || rel[0] != '/') {
+        return false;
+    }
+
+    const char* p = rel;
+    while (*p == '/') p++;
+    if (*p == '\0') {
+        return false;
+    }
+
+    fat_dir_t dir;
+    dir.is_root = true;
+    dir.cluster = 0;
+
+    char seg[128];
+
+    for (;;) {
+        while (*p == '/') p++;
+        if (*p == '\0') {
+            return false;
+        }
+
+        uint32_t len = 0;
+        while (p[len] && p[len] != '/') {
+            if (len + 1u >= sizeof(seg)) {
+                return false;
+            }
+            seg[len] = p[len];
+            len++;
+        }
+        seg[len] = '\0';
+        p += len;
+
+        while (*p == '/') p++;
+        bool last = (*p == '\0');
+
+        dir_loc_t loc;
+        uint8_t ent[32];
+        if (!dir_iter_find_by_name_str(dir, seg, &loc, ent)) {
+            return false;
+        }
+
+        if (last) {
+            if (out_loc) {
+                *out_loc = loc;
+            }
+            if (out_entry) {
+                memcpy(out_entry, ent, 32);
+            }
+            return true;
+        }
+
+        if ((ent[11] & FAT_ATTR_DIR) == 0) {
+            return false;
+        }
+        uint16_t cl = read_le16(ent + 26);
+        dir.is_root = false;
+        dir.cluster = cl;
+        if (dir.cluster < 2u) {
+            return false;
+        }
+    }
 }
 
 static bool is_root_path(const char* abs_path) {
@@ -1198,6 +1506,9 @@ uint32_t fatdisk_list_dir(const char* abs_path, fatdisk_dirent_t* out, uint32_t 
     uint8_t sec[SECTOR_SIZE];
 
     bool wrote_any = false;
+    lfn_state_t lfn;
+    lfn_reset(&lfn);
+    char long_name[256];
 
     if (dir.is_root) {
         uint32_t total = g_fs.root_dir_sectors;
@@ -1218,10 +1529,29 @@ uint32_t fatdisk_list_dir(const char* abs_path, fatdisk_dirent_t* out, uint32_t 
                     }
                     return count;
                 }
-                if (!dir_entry_is_valid(e)) {
+                if (e[0] == 0xE5) {
+                    lfn_reset(&lfn);
                     continue;
                 }
-                fat_name_from_entry(e, out[count].name, sizeof(out[count].name));
+
+                uint8_t attr = e[11];
+                if (attr == FAT_ATTR_LFN) {
+                    lfn_feed(&lfn, e);
+                    continue;
+                }
+                if (attr & FAT_ATTR_VOLUME) {
+                    lfn_reset(&lfn);
+                    continue;
+                }
+
+                bool have_lfn = lfn_name_for_sfn(&lfn, e, long_name, sizeof(long_name));
+                if (!have_lfn) {
+                    fat_name_from_entry(e, long_name, sizeof(long_name));
+                }
+                lfn_reset(&lfn);
+
+                strncpy(out[count].name, long_name, sizeof(out[count].name) - 1u);
+                out[count].name[sizeof(out[count].name) - 1u] = '\0';
                 out[count].is_dir = (e[11] & FAT_ATTR_DIR) != 0;
                 out[count].size = out[count].is_dir ? 0u : read_le32(e + 28);
                 uint16_t wtime = 0;
@@ -1275,10 +1605,29 @@ uint32_t fatdisk_list_dir(const char* abs_path, fatdisk_dirent_t* out, uint32_t 
                     }
                     return count;
                 }
-                if (!dir_entry_is_valid(e)) {
+                if (e[0] == 0xE5) {
+                    lfn_reset(&lfn);
                     continue;
                 }
-                fat_name_from_entry(e, out[count].name, sizeof(out[count].name));
+
+                uint8_t attr = e[11];
+                if (attr == FAT_ATTR_LFN) {
+                    lfn_feed(&lfn, e);
+                    continue;
+                }
+                if (attr & FAT_ATTR_VOLUME) {
+                    lfn_reset(&lfn);
+                    continue;
+                }
+
+                bool have_lfn = lfn_name_for_sfn(&lfn, e, long_name, sizeof(long_name));
+                if (!have_lfn) {
+                    fat_name_from_entry(e, long_name, sizeof(long_name));
+                }
+                lfn_reset(&lfn);
+
+                strncpy(out[count].name, long_name, sizeof(out[count].name) - 1u);
+                out[count].name[sizeof(out[count].name) - 1u] = '\0';
                 out[count].is_dir = (e[11] & FAT_ATTR_DIR) != 0;
                 out[count].size = out[count].is_dir ? 0u : read_le32(e + 28);
                 uint16_t wtime = 0;

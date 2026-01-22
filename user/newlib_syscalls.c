@@ -2,6 +2,7 @@
 #include <fcntl.h>
 #include <stdarg.h>
 #include <stddef.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -9,6 +10,7 @@
 #include <sys/time.h>
 #include <sys/types.h>
 #include <sys/ioctl.h>
+#include <sys/mman.h>
 #include <dirent.h>
 #include <termios.h>
 #include <time.h>
@@ -116,6 +118,25 @@ enum {
     SYS_SPAWN = 29,
     SYS_UPTIME_MS = 30,
     SYS_RTC_GET = 31,
+    SYS_RTC_SET = 32,
+    SYS_TASK_COUNT = 33,
+    SYS_TASK_INFO = 34,
+    SYS_SCREEN_IS_FB = 35,
+    SYS_GFX_CLEAR = 36,
+    SYS_GFX_PSET = 37,
+    SYS_GFX_LINE = 38,
+    SYS_MEM_TOTAL_KB = 39,
+    SYS_CPU_VENDOR = 40,
+    SYS_CPU_BRAND = 41,
+    SYS_VFS_FILE_COUNT = 42,
+    SYS_FONT_COUNT = 43,
+    SYS_FONT_GET = 44,
+    SYS_FONT_INFO = 45,
+    SYS_FONT_SET = 46,
+    SYS_GFX_BLIT_RGBA = 47,
+    SYS_MMAP = 48,
+    SYS_MUNMAP = 49,
+    SYS_MPROTECT = 50,
 };
 
 typedef struct vos_stat {
@@ -218,6 +239,39 @@ static inline void* vos_sys_sbrk(int incr) {
         "int $0x80"
         : "=a"(ret)
         : "a"(SYS_SBRK), "b"(incr)
+        : "memory"
+    );
+    return ret;
+}
+
+static inline void* vos_sys_mmap(void* addr, unsigned int length, unsigned int prot, unsigned int flags, int fd) {
+    void* ret;
+    __asm__ volatile (
+        "int $0x80"
+        : "=a"(ret)
+        : "a"(SYS_MMAP), "b"(addr), "c"(length), "d"(prot), "S"(flags), "D"(fd)
+        : "memory"
+    );
+    return ret;
+}
+
+static inline int vos_sys_munmap(void* addr, unsigned int length) {
+    int ret;
+    __asm__ volatile (
+        "int $0x80"
+        : "=a"(ret)
+        : "a"(SYS_MUNMAP), "b"(addr), "c"(length)
+        : "memory"
+    );
+    return ret;
+}
+
+static inline int vos_sys_mprotect(void* addr, unsigned int length, unsigned int prot) {
+    int ret;
+    __asm__ volatile (
+        "int $0x80"
+        : "=a"(ret)
+        : "a"(SYS_MPROTECT), "b"(addr), "c"(length), "d"(prot)
         : "memory"
     );
     return ret;
@@ -988,6 +1042,34 @@ int pipe(int fds[2]) {
         return -1;
     }
     int rc = vos_sys_pipe(fds);
+    if (rc < 0) {
+        errno = -rc;
+        return -1;
+    }
+    return 0;
+}
+
+void* mmap(void* addr, size_t length, int prot, int flags, int fd, off_t offset) {
+    (void)offset; // file-backed mappings aren't supported yet
+    void* p = vos_sys_mmap(addr, (unsigned int)length, (unsigned int)prot, (unsigned int)flags, fd);
+    if ((uintptr_t)p >= 0xFFFFF000u) {
+        errno = -(int)(intptr_t)p;
+        return MAP_FAILED;
+    }
+    return p;
+}
+
+int munmap(void* addr, size_t length) {
+    int rc = vos_sys_munmap(addr, (unsigned int)length);
+    if (rc < 0) {
+        errno = -rc;
+        return -1;
+    }
+    return 0;
+}
+
+int mprotect(void* addr, size_t length, int prot) {
+    int rc = vos_sys_mprotect(addr, (unsigned int)length, (unsigned int)prot);
     if (rc < 0) {
         errno = -rc;
         return -1;

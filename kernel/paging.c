@@ -143,8 +143,39 @@ void paging_init(const multiboot_info_t* mbi) {
     memset(page_directory, 0, PAGE_SIZE);
     kernel_directory = page_directory;
 
-    // Identity-map the first 16 MiB for the kernel and early boot data.
-    paging_map_range(0x00000000u, 0x00000000u, 16u * 1024u * 1024u, PAGE_PRESENT | PAGE_RW);
+    // Identity-map enough low physical memory to cover:
+    // - The kernel + early boot data
+    // - Multiboot structures/modules
+    // - early_alloc() allocations (page tables, etc.)
+    //
+    // Historically we mapped a fixed 16 MiB, but large initramfs/modules can
+    // push early_alloc() above that, causing faults immediately after paging
+    // is enabled (before IDT is set up).
+    uint32_t mapped_end = 0;
+    for (;;) {
+        uint32_t target_end = 16u * 1024u * 1024u;
+
+        uint32_t early_end = early_alloc_current();
+        if (early_end > target_end) {
+            target_end = early_end;
+        }
+
+        // Round up to a 4 MiB boundary to avoid repeated small extensions.
+        target_end = (target_end + 0x3FFFFFu) & ~0x3FFFFFu;
+
+        if (mapped_end >= target_end) {
+            break;
+        }
+
+        paging_map_range(mapped_end, mapped_end, target_end - mapped_end, PAGE_PRESENT | PAGE_RW);
+        mapped_end = target_end;
+
+        // Mapping additional regions may allocate new page tables, which bumps
+        // early_alloc_current(). Loop until the mapping covers it.
+        if (mapped_end >= early_alloc_current()) {
+            break;
+        }
+    }
 
     // Map the multiboot info and memory map, if present (usually low memory anyway).
     if (mbi) {

@@ -64,6 +64,8 @@ ISO = vos.iso
 INITRAMFS_DIR = initramfs
 INITRAMFS_TAR = $(ISO_DIR)/boot/initramfs.tar
 INITRAMFS_ROOT = $(BUILD_DIR)/initramfs_root
+INITRAMFS_FILES := $(shell find $(INITRAMFS_DIR) -type f 2>/dev/null)
+INITRAMFS_DIRS := $(shell find $(INITRAMFS_DIR) -type d 2>/dev/null)
 
 # Simple userland (ELF32 + newlib)
 USER_DIR = user
@@ -348,7 +350,7 @@ $(KERNEL): $(OBJECTS)
 	$(LD) $(LDFLAGS) $(OBJECTS) -o $@
 
 # Create bootable ISO
-$(ISO): $(KERNEL) $(USER_BINS) $(FAT_IMG)
+$(ISO): $(KERNEL) $(USER_BINS) $(FAT_IMG) $(INITRAMFS_FILES) $(INITRAMFS_DIRS)
 	mkdir -p $(ISO_DIR)/boot/grub
 	cp $(KERNEL) $(ISO_DIR)/boot/kernel.bin
 	rm -rf $(INITRAMFS_ROOT)

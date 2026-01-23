@@ -27,7 +27,13 @@ GCC_INC_FIXED="$GCC_DIR/include-fixed"
 
 VMLINUX="$ROOT_DIR/build/user/libvosposix.a"
 VCRT0="$ROOT_DIR/build/user/crt0.o"
+VCRTI="$ROOT_DIR/build/user/crti.o"
+VCRTN="$ROOT_DIR/build/user/crtn.o"
 VLINKER="$ROOT_DIR/user/linker.ld"
+
+VTCC="$ROOT_DIR/build/user/tcc.elf"
+VTCC1="$ROOT_DIR/build/user/libtcc1.a"
+VTCC_INC="$ROOT_DIR/third_party/tcc/include"
 
 if [[ ! -f "$DISK_IMG" ]]; then
   echo "error: disk image not found: $DISK_IMG" >&2
@@ -56,9 +62,37 @@ if [[ ! -f "$VCRT0" ]]; then
   echo "hint: run 'make' first." >&2
   exit 1
 fi
+if [[ ! -f "$VCRTI" ]]; then
+  echo "error: VOS crti not built: $VCRTI" >&2
+  echo "hint: run 'make sysroot' (or 'make $VCRTI') first." >&2
+  exit 1
+fi
+if [[ ! -f "$VCRTN" ]]; then
+  echo "error: VOS crtn not built: $VCRTN" >&2
+  echo "hint: run 'make sysroot' (or 'make $VCRTN') first." >&2
+  exit 1
+fi
+if [[ ! -f "$VTCC" ]]; then
+  echo "error: tcc not built: $VTCC" >&2
+  echo "hint: run 'make' (or 'make $VTCC') first." >&2
+  exit 1
+fi
+if [[ ! -f "$VTCC1" ]]; then
+  echo "error: libtcc1 not built: $VTCC1" >&2
+  echo "hint: run 'make sysroot' (or 'make $VTCC1') first." >&2
+  exit 1
+fi
+if [[ ! -d "$VTCC_INC" ]]; then
+  echo "error: tcc include dir not found: $VTCC_INC" >&2
+  exit 1
+fi
 
 mkdir_usr() {
-  mmd -i "$DISK_IMG" "$1" >/dev/null 2>&1 || true
+  local dir="$1"
+  if mdu -i "$DISK_IMG" "$dir" >/dev/null 2>&1; then
+    return 0
+  fi
+  mmd -i "$DISK_IMG" "$dir" >/dev/null 2>&1 || true
 }
 
 copy_one() {
@@ -73,23 +107,35 @@ copy_tree() {
   mcopy -i "$DISK_IMG" -o -s "$src"/* "$dst" >/dev/null
 }
 
+img_has_file() {
+  local p="$1"
+  mtype -i "$DISK_IMG" "$p" >/dev/null 2>&1
+}
+
 mkdir_usr ::/usr
 mkdir_usr ::/usr/include
 mkdir_usr ::/usr/lib
+mkdir_usr ::/usr/bin
 
 mkdir_usr ::/usr/lib/gcc
 mkdir_usr ::/usr/lib/gcc/i686-elf
 mkdir_usr "::/usr/lib/gcc/i686-elf/$GCC_VER"
 mkdir_usr "::/usr/lib/gcc/i686-elf/$GCC_VER/include"
+mkdir_usr ::/usr/lib/tcc
+mkdir_usr ::/usr/lib/tcc/include
 
 echo "Installing sysroot to $DISK_IMG..."
 echo "  gcc version: $GCC_VER"
 
-copy_tree "$NEWLIB_INC" ::/usr/include
-copy_tree "$GCC_INC" "::/usr/lib/gcc/i686-elf/$GCC_VER/include"
-if [[ -d "$GCC_INC_FIXED" ]]; then
-  mkdir_usr "::/usr/lib/gcc/i686-elf/$GCC_VER/include-fixed"
-  copy_tree "$GCC_INC_FIXED" "::/usr/lib/gcc/i686-elf/$GCC_VER/include-fixed"
+if img_has_file ::/usr/include/stdio.h && img_has_file ::/usr/lib/libc.a && img_has_file ::/usr/lib/libgcc.a; then
+  echo "  base sysroot detected; skipping header tree copy"
+else
+  copy_tree "$NEWLIB_INC" ::/usr/include
+  copy_tree "$GCC_INC" "::/usr/lib/gcc/i686-elf/$GCC_VER/include"
+  if [[ -d "$GCC_INC_FIXED" ]]; then
+    mkdir_usr "::/usr/lib/gcc/i686-elf/$GCC_VER/include-fixed"
+    copy_tree "$GCC_INC_FIXED" "::/usr/lib/gcc/i686-elf/$GCC_VER/include-fixed"
+  fi
 fi
 
 copy_one "$NEWLIB_LIB/libc.a" ::/usr/lib/libc.a
@@ -108,6 +154,13 @@ fi
 
 copy_one "$VMLINUX" ::/usr/lib/libvosposix.a
 copy_one "$VCRT0" ::/usr/lib/crt0.o
+copy_one "$VCRT0" ::/usr/lib/crt1.o
+copy_one "$VCRTI" ::/usr/lib/crti.o
+copy_one "$VCRTN" ::/usr/lib/crtn.o
 copy_one "$VLINKER" ::/usr/lib/vos.ld
+
+copy_one "$VTCC" ::/usr/bin/tcc
+copy_one "$VTCC1" ::/usr/lib/tcc/libtcc1.a
+copy_tree "$VTCC_INC" ::/usr/lib/tcc/include
 
 echo "Done."

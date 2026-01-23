@@ -72,6 +72,8 @@ USER_DIR = user
 USER_BUILD_DIR = $(BUILD_DIR)/user
 USER_ASM_SOURCES = $(USER_DIR)/crt0.asm
 USER_ASM_OBJECTS = $(USER_BUILD_DIR)/crt0.o
+USER_CRTI_OBJ = $(USER_BUILD_DIR)/crti.o
+USER_CRTN_OBJ = $(USER_BUILD_DIR)/crtn.o
 USER_RUNTIME_C_SOURCES = $(USER_DIR)/newlib_syscalls.c
 USER_RUNTIME_C_OBJECTS = $(patsubst $(USER_DIR)/%.c,$(USER_BUILD_DIR)/%.o,$(USER_RUNTIME_C_SOURCES))
 USER_RUNTIME_OBJECTS = $(USER_ASM_OBJECTS) $(USER_RUNTIME_C_OBJECTS)
@@ -112,6 +114,23 @@ USER_ZORK_OBJECTS = $(patsubst $(USER_DIR)/%.c,$(USER_BUILD_DIR)/%.o,$(USER_ZORK
 USER_ZORK = $(USER_BUILD_DIR)/zork.elf
 
 USER_LINENOISE_OBJ = $(USER_BUILD_DIR)/linenoise.o
+
+# TinyCC (native compiler inside VOS)
+TCC_DIR = $(THIRD_PARTY_DIR)/tcc
+TCC_BUILD_DIR = $(USER_BUILD_DIR)/tcc
+
+# Note: tcctools.c is #included by tcc.c upstream; do not compile it separately.
+TCC_C_SOURCES = $(TCC_DIR)/tcc.c $(TCC_DIR)/libtcc.c $(TCC_DIR)/tccpp.c $(TCC_DIR)/tccgen.c $(TCC_DIR)/tccelf.c $(TCC_DIR)/tccasm.c $(TCC_DIR)/tccrun.c \
+                $(TCC_DIR)/i386-gen.c $(TCC_DIR)/i386-link.c $(TCC_DIR)/i386-asm.c
+TCC_OBJECTS = $(patsubst $(TCC_DIR)/%.c,$(TCC_BUILD_DIR)/%.o,$(TCC_C_SOURCES))
+USER_TCC = $(USER_BUILD_DIR)/tcc.elf
+
+TCC_RUNTIME_BUILD_DIR = $(USER_BUILD_DIR)/tcc_runtime
+TCC_LIBTCC1_OBJ = $(TCC_RUNTIME_BUILD_DIR)/libtcc1.o
+TCC_ALLOCA86_OBJ = $(TCC_RUNTIME_BUILD_DIR)/alloca86.o
+TCC_ALLOCA86_BT_OBJ = $(TCC_RUNTIME_BUILD_DIR)/alloca86-bt.o
+TCC_LIBTCC1_OBJS = $(TCC_LIBTCC1_OBJ) $(TCC_ALLOCA86_OBJ) $(TCC_ALLOCA86_BT_OBJ)
+TCC_LIBTCC1 = $(USER_BUILD_DIR)/libtcc1.a
 
 # sbase (portable Unix userland tools) - minimal subset
 SBASE_DIR = $(THIRD_PARTY_DIR)/sbase
@@ -173,7 +192,7 @@ USER_BASIC_C_SOURCES = $(USER_BASIC_DIR)/basic.c $(USER_BASIC_DIR)/ubasic.c $(US
 USER_BASIC_OBJECTS = $(patsubst $(USER_DIR)/%.c,$(USER_BUILD_DIR)/%.o,$(USER_BASIC_C_SOURCES))
 USER_BASIC = $(USER_BUILD_DIR)/basic.elf
 
-USER_BINS = $(USER_INIT) $(USER_ELIZA) $(USER_LSH) $(USER_SH) $(USER_UPTIME) $(USER_DATE) $(USER_SETDATE) $(USER_PS) $(USER_TOP) $(USER_NEOFETCH) $(USER_FONT) $(USER_JSON) $(USER_IMG) $(USER_BASIC) $(USER_ZORK) \
+USER_BINS = $(USER_INIT) $(USER_ELIZA) $(USER_LSH) $(USER_SH) $(USER_UPTIME) $(USER_DATE) $(USER_SETDATE) $(USER_PS) $(USER_TOP) $(USER_NEOFETCH) $(USER_FONT) $(USER_JSON) $(USER_IMG) $(USER_BASIC) $(USER_ZORK) $(USER_TCC) \
             $(SBASE_CAT) $(SBASE_ECHO) $(SBASE_BASENAME) $(SBASE_DIRNAME) $(SBASE_HEAD) $(SBASE_WC) $(SBASE_GREP) $(SBASE_YES) $(SBASE_TRUE) $(SBASE_FALSE)
 
 # QEMU defaults
@@ -242,10 +261,27 @@ $(USER_BUILD_DIR)/%.o: $(USER_DIR)/%.c | $(USER_BUILD_DIR)
 $(USER_LINENOISE_OBJ): $(THIRD_PARTY_DIR)/linenoise/linenoise.c | $(USER_BUILD_DIR)
 	$(CC) -ffreestanding -fno-stack-protector -fno-pie -Wall -Wextra -O2 -D_POSIX_C_SOURCE=200809L -I$(USER_DIR) -I$(THIRD_PARTY_DIR)/linenoise -I$(THIRD_PARTY_DIR)/jsmn -I$(THIRD_PARTY_DIR)/sheredom_json -I$(THIRD_PARTY_DIR)/stb -c $< -o $@
 
-# Build a small POSIX compatibility archive (regex, etc.) for userland ports.
-$(USER_RUNTIME_LIBS): $(NEWLIB_REGEX_OBJS) | $(USER_BUILD_DIR)
+# Vendored tcc sources (userland native compiler)
+$(TCC_BUILD_DIR)/%.o: $(TCC_DIR)/%.c | $(USER_BUILD_DIR)
+	mkdir -p $(dir $@)
+	$(CC) -ffreestanding -fno-stack-protector -fno-pie -Wall -Wextra -O2 -D_POSIX_C_SOURCE=200809L -DONE_SOURCE=0 -DTCC_TARGET_I386 -DCONFIG_TCC_STATIC -DCONFIG_TCCBOOT -DTCC_ON_VOS=1 -I$(USER_DIR) -I$(TCC_DIR) -c $< -o $@
+
+$(TCC_RUNTIME_BUILD_DIR)/%.o: $(TCC_DIR)/lib/%.c | $(USER_BUILD_DIR)
+	mkdir -p $(dir $@)
+	$(CC) -ffreestanding -fno-stack-protector -fno-pie -Wall -Wextra -O2 -c $< -o $@
+
+$(TCC_RUNTIME_BUILD_DIR)/%.o: $(TCC_DIR)/lib/%.S | $(USER_BUILD_DIR)
+	mkdir -p $(dir $@)
+	$(CC) -ffreestanding -fno-stack-protector -fno-pie -Wall -Wextra -O2 -c $< -o $@
+
+$(TCC_LIBTCC1): $(TCC_LIBTCC1_OBJS) | $(USER_BUILD_DIR)
 	rm -f $@
-	$(AR) rcs $@ $(NEWLIB_REGEX_OBJS)
+	$(AR) rcs $@ $^
+
+# Build a small POSIX compatibility archive (regex, etc.) for userland ports.
+$(USER_RUNTIME_LIBS): $(NEWLIB_REGEX_OBJS) $(USER_RUNTIME_C_OBJECTS) | $(USER_BUILD_DIR)
+	rm -f $@
+	$(AR) rcs $@ $(NEWLIB_REGEX_OBJS) $(USER_RUNTIME_C_OBJECTS)
 
 # Link userland init (static, freestanding)
 $(USER_INIT): $(USER_RUNTIME_OBJECTS) $(USER_INIT_OBJ) $(USER_RUNTIME_LIBS)
@@ -344,6 +380,10 @@ $(USER_BASIC): $(USER_RUNTIME_OBJECTS) $(USER_BASIC_OBJECTS) $(USER_RUNTIME_LIBS
 $(USER_ZORK): $(USER_RUNTIME_OBJECTS) $(USER_ZORK_OBJECTS) $(USER_RUNTIME_LIBS)
 	$(USER_LINK_CMD)
 
+# Link userland tcc (native compiler)
+$(USER_TCC): $(USER_RUNTIME_OBJECTS) $(TCC_OBJECTS) $(USER_RUNTIME_LIBS)
+	$(USER_LINK_CMD)
+
 # Compile C files
 $(BUILD_DIR)/%.o: $(KERNEL_DIR)/%.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) $< -o $@
@@ -379,6 +419,7 @@ $(ISO): $(KERNEL) $(USER_BINS) $(FAT_IMG) $(INITRAMFS_FILES) $(INITRAMFS_DIRS)
 	cp $(USER_IMG) $(INITRAMFS_ROOT)/bin/img
 	cp $(USER_BASIC) $(INITRAMFS_ROOT)/bin/basic
 	cp $(USER_ZORK) $(INITRAMFS_ROOT)/bin/zork
+	cp $(USER_TCC) $(INITRAMFS_ROOT)/bin/tcc
 	cp $(SBASE_CAT) $(INITRAMFS_ROOT)/bin/cat
 	cp $(SBASE_ECHO) $(INITRAMFS_ROOT)/bin/echo
 	cp $(SBASE_BASENAME) $(INITRAMFS_ROOT)/bin/basename
@@ -412,7 +453,7 @@ $(DISK_IMG):
 	mkfs.fat -F 16 -n VOSDISK $@
 
 # Install a sysroot onto $(DISK_IMG) so /usr is populated inside VOS.
-sysroot: $(USER_RUNTIME_OBJECTS) $(USER_RUNTIME_LIBS) $(DISK_IMG)
+sysroot: $(USER_RUNTIME_OBJECTS) $(USER_RUNTIME_LIBS) $(USER_CRTI_OBJ) $(USER_CRTN_OBJ) $(TCC_LIBTCC1) $(USER_TCC) $(DISK_IMG)
 	bash $(SYSROOT_SCRIPT) $(DISK_IMG)
 
 # Clean build artifacts

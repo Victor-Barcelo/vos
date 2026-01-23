@@ -514,6 +514,150 @@ void linenoiseSetMultiLine(int ml) {
     mlmode = ml;
 }
 
+/* =========================== Mouse helpers =============================== */
+
+void linenoiseEditHistoryNext(struct linenoiseState *l, int dir);
+
+/* VOS provides xterm-style mouse reporting directly from the console.
+ * Support basic clicks and wheel events in the line editor. */
+static void linenoiseMouseSetCursorFromColumn(struct linenoiseState *l, int click_col0) {
+    size_t pwidth = utf8StrWidth(l->prompt, l->plen);
+
+    if (click_col0 <= (int)pwidth) {
+        l->pos = 0;
+        refreshLine(l);
+        return;
+    }
+
+    int rel = click_col0 - (int)pwidth;
+    if (rel <= 0) {
+        l->pos = 0;
+        refreshLine(l);
+        return;
+    }
+
+    char *buf = l->buf;
+    size_t len = l->len;
+    size_t pos = l->pos;
+    size_t poscol = utf8StrWidth(buf, pos);
+    size_t lencol = utf8StrWidth(buf, len);
+    size_t trim = 0;
+
+    /* Mirror refreshSingleLine() trimming logic so click columns map to bytes. */
+    while (pwidth + poscol >= l->cols && len) {
+        size_t clen = utf8NextCharLen(buf, 0, len);
+        int cwidth = utf8SingleCharWidth(buf, clen);
+        buf += clen;
+        len -= clen;
+        if (pos >= clen) pos -= clen; else pos = 0;
+        if (poscol >= (size_t)cwidth) poscol -= (size_t)cwidth; else poscol = 0;
+        if (lencol >= (size_t)cwidth) lencol -= (size_t)cwidth; else lencol = 0;
+        trim += clen;
+    }
+
+    while (pwidth + lencol > l->cols && len) {
+        size_t clen = utf8PrevCharLen(buf, len);
+        int cwidth = utf8SingleCharWidth(buf + len - clen, clen);
+        len -= clen;
+        if (lencol >= (size_t)cwidth) lencol -= (size_t)cwidth; else lencol = 0;
+    }
+
+    if ((size_t)rel >= lencol) {
+        l->pos = l->len;
+        refreshLine(l);
+        return;
+    }
+
+    size_t byte_off = 0;
+    size_t col_acc = 0;
+    while (byte_off < len) {
+        size_t clen = utf8NextCharLen(buf, byte_off, len);
+        int cwidth = utf8SingleCharWidth(buf + byte_off, clen);
+        if (col_acc + (size_t)cwidth > (size_t)rel) break;
+        col_acc += (size_t)cwidth;
+        byte_off += clen;
+    }
+
+    l->pos = trim + byte_off;
+    if (l->pos > l->len) l->pos = l->len;
+    refreshLine(l);
+}
+
+static void linenoiseMouseWheel(struct linenoiseState *l, int dir) {
+    if (dir < 0) {
+        linenoiseEditHistoryNext(l, 1);
+    } else if (dir > 0) {
+        linenoiseEditHistoryNext(l, 0);
+    }
+}
+
+static void linenoiseMouseHandleEvent(struct linenoiseState *l, int b, int x, int y, int press) {
+    (void)y;
+
+    if (!press) {
+        return;
+    }
+
+    /* Wheel: buttons 64/65. */
+    if ((b & 0xC0) == 0x40) {
+        linenoiseMouseWheel(l, (b & 1) ? 1 : -1);
+        return;
+    }
+
+    /* Ignore motion events and non-left buttons for now. */
+    if ((b & 0x20) != 0) return;
+    if ((b & 3) != 0) return;
+
+    if (x > 0) {
+        linenoiseMouseSetCursorFromColumn(l, x - 1);
+    }
+}
+
+static void linenoiseMouseConsumeSGR(struct linenoiseState *l) {
+    int field = 0;
+    int val = 0;
+    int have = 0;
+    int b = 0, x = 0, y = 0;
+    char ch;
+
+    /* Parse: <b;x;yM or <b;x;ym */
+    while (1) {
+        if (read(l->ifd, &ch, 1) != 1) return;
+        if (ch >= '0' && ch <= '9') {
+            val = val * 10 + (ch - '0');
+            have = 1;
+            continue;
+        }
+        if (ch == ';' && field < 2) {
+            if (!have) return;
+            if (field == 0) b = val;
+            else x = val;
+            field++;
+            val = 0;
+            have = 0;
+            continue;
+        }
+        if ((ch == 'M' || ch == 'm') && field == 2) {
+            if (!have) return;
+            y = val;
+            linenoiseMouseHandleEvent(l, b, x, y, ch == 'M');
+            return;
+        }
+        return;
+    }
+}
+
+static void linenoiseMouseConsumeX10(struct linenoiseState *l) {
+    char m[3];
+    if (read(l->ifd, m, sizeof(m)) != (ssize_t)sizeof(m)) return;
+
+    int b = (int)(unsigned char)m[0] - 32;
+    int x = (int)(unsigned char)m[1] - 32;
+    int y = (int)(unsigned char)m[2] - 32;
+    int press = b != 3;
+    linenoiseMouseHandleEvent(l, b, x, y, press);
+}
+
 /* Return true if the terminal name is in the list of terminals we know are
  * not able to understand basic escape sequences. */
 static int isUnsupportedTerm(void) {
@@ -1409,6 +1553,14 @@ char *linenoiseEditFeed(struct linenoiseState *l) {
 
         /* ESC [ sequences. */
         if (seq[0] == '[') {
+            if (seq[1] == '<') {
+                linenoiseMouseConsumeSGR(l);
+                break;
+            }
+            if (seq[1] == 'M') {
+                linenoiseMouseConsumeX10(l);
+                break;
+            }
             if (seq[1] >= '0' && seq[1] <= '9') {
                 /* Extended escape, read additional byte. */
                 if (read(l->ifd,seq+2,1) == -1) break;

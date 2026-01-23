@@ -162,6 +162,27 @@ void keyboard_handler(void) {
         }
     } else {
         // Key press
+        // Function keys (set 1 scancodes).
+        if ((scancode >= 0x3B && scancode <= 0x44) || scancode == 0x57 || scancode == 0x58) {
+            switch (scancode) {
+                case 0x3B: buffer_push((char)KEY_F1); break;
+                case 0x3C: buffer_push((char)KEY_F2); break;
+                case 0x3D: buffer_push((char)KEY_F3); break;
+                case 0x3E: buffer_push((char)KEY_F4); break;
+                case 0x3F: buffer_push((char)KEY_F5); break;
+                case 0x40: buffer_push((char)KEY_F6); break;
+                case 0x41: buffer_push((char)KEY_F7); break;
+                case 0x42: buffer_push((char)KEY_F8); break;
+                case 0x43: buffer_push((char)KEY_F9); break;
+                case 0x44: buffer_push((char)KEY_F10); break;
+                case 0x57: buffer_push((char)KEY_F11); break;
+                case 0x58: buffer_push((char)KEY_F12); break;
+                default: break;
+            }
+            outb(0x20, 0x20);
+            return;
+        }
+
         if (scancode == 0x2A || scancode == 0x36) {
             // Left or right shift pressed
             shift_pressed = true;
@@ -201,6 +222,19 @@ void keyboard_handler(void) {
                     c = (char)(c - 'a' + 1);
                 } else if (c >= 'A' && c <= 'Z') {
                     c = (char)(c - 'A' + 1);
+                } else {
+                    // Common Ctrl+punctuation mappings (ASCII C0 controls).
+                    switch (c) {
+                        case '@': c = 0x00; break;
+                        case ' ': c = 0x00; break;
+                        case '[': c = 0x1B; break;
+                        case '\\': c = 0x1C; break;
+                        case ']': c = 0x1D; break;
+                        case '^': c = 0x1E; break;
+                        case '_': c = 0x1F; break;
+                        case '?': c = 0x7F; break;
+                        default: break;
+                    }
                 }
             }
 
@@ -234,6 +268,17 @@ bool keyboard_try_getchar(char* out) {
     return true;
 }
 
+void keyboard_inject_bytes(const uint8_t* bytes, size_t len) {
+    if (!bytes || len == 0) {
+        return;
+    }
+    uint32_t flags = irq_save();
+    for (size_t i = 0; i < len; i++) {
+        buffer_push((char)bytes[i]);
+    }
+    irq_restore(flags);
+}
+
 char keyboard_getchar(void) {
     // Wait for a key.
     screen_cursor_set_enabled(true);
@@ -251,7 +296,7 @@ char keyboard_getchar(void) {
         if (serial_try_read_char(&c)) {
             break;
         }
-        if (tasking_current_should_exit(NULL)) {
+        if (tasking_current_should_interrupt()) {
             c = 0;
             break;
         }

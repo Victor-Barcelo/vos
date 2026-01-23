@@ -1,0 +1,8 @@
+# VOS ne key bindings (adds build shortcuts on top of built-in defaults).
+#
+# F11 / F12 are wired by the VOS kernel TTY layer to emit xterm-style
+# escape sequences (ESC[23~ / ESC[24~), which ne maps to key codes 0x14B/0x14C.
+
+KEY	14B	TccCompile
+KEY	14C	TccRun
+

@@ -1,0 +1,5 @@
+# VOS: compile current buffer then run /disk/a.out.
+Save
+System "tcc -o /disk/a.out %f 2> /tmp/tcc.log"
+System "/disk/a.out"
+

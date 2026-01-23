@@ -1,0 +1,245 @@
+(This file, CHANGES, lists fixes. See NEWS for new features and enhancements.)
+
+unreleased
+
+  * Work around some terminals' alternative handling of line endings
+    within bracketed paste data.
+
+3.3.5
+
+  * Fixed initialization of bracketed paste handling.
+
+  * Fixed makefile so that it works with heavy parallelization. Thanks
+    to Ivan Trepakov for contributing this fix.
+
+3.3.4 2025-02-06
+
+  * Improved YAML style file.
+
+3.3.3 2023-10-19
+
+  * Fixed document reordering in SelectDoc requester when first or last
+    document wraps around to the other end of the document list.
+
+  * After closing the current document, the most recently active adjacent
+    document is chosen as the new current document.
+
+3.3.2 2022-09-13
+
+  * Fixed issue where autocomplete could fail/crash with UTF-8 characters.
+
+  * Fixed issue where file requester could return incorrect path
+    to the selected file.
+
+  * Fixed makefile so that it correctly supports parallel builds. Thanks
+    to Emily Lucy Ishikawa for contributing this fix.
+
+3.3.1 2021-05-16
+
+  * ttysize() is now invoked at start, improving user experience
+    in the termcap/ANSI versions.
+
+  * Fix sh syntax highlighting in double-quoted strings with complex
+    variable expressions.
+
+  * Fix java syntax highlighting for strings containing percent
+    signs not in a format specifier context.
+
+  * Fixed possible document name issue with docs from similarly named
+    directories.
+
+3.3.0 2020-02-27
+
+  * Fixed possible crash when closing documents from within the SelectDoc
+    requester.
+
+  * Fixed adjusted position of mark, bookmark on same line as and to the right
+    of multi-line pastes.
+
+  * Fixed cursor position after reformatting a document's final paragraph.
+
+  * Paragraph n where n>1 is atomic; i.e. a single Undo reverts changes.
+
+3.2.1 2019-10-02
+
+  * Fixed reordering items on multi-page requesters.
+
+3.2.0 2019-09-30
+
+  * Fixed typo for "Home" key in default.keys.
+
+  * Add backtick support for MarkDown syntax (md.jsf)
+
+  * Fixed potentially infinite backwards search-and-replace.
+
+3.1.2 2018-10-06
+
+  * Fixed visual glitch when characters spanning multiple columns are only
+    partially displayed on the left side.
+
+  * Fixed PARAGRAPH command.
+
+  * DeleteNextWord now deletes through the end of the next N words.
+
+  * Undoing DeleteNextWord/DeletePrevWord also restores cursor position.
+
+3.1.1 2017-06-04
+
+  * Fixed visual glitch when deleting characters from long lines.
+
+  * Fixed broken behavior in WordWrap with leading whitespace.
+
+  * On CloseDoc (^Q), the next document now becomes active. It used to make
+    the previous document active.
+
+3.1.0 2017-04-29
+
+  * Comments in .yaml files are highlighted more correctly.
+
+  * Determine better whether Find and FindRegExp patterns need to be recompiled
+    when switching buffers. Fix possible lockup after cancelled Find.
+
+  * Fixed missing screen update after ABOUT (regression introduced in 3.0.1).
+    Thanks to Brian Callahan for reporting this bug.
+
+  * Help command uses its optional parameter again.
+
+  * PasteVert behaves beyond the right end of lines again.
+
+  * AutoComplete keeps words containing apostrophes as single words ("can't"
+    instead of "can" and "t").
+
+  * Home, End, Tab keys now work in menus.
+
+  * Backward FindRegExp works again.
+
+  * Resizing the window in inputs, requesters is more sane.
+
+  * Restored correct keyboard input for 8-bit character sets.
+
+  * Update syntax code for feature parity with current Joe.
+
+3.0.1 2015-06-22
+
+  * Updated version of GNU regex library provides 64-bit regular
+    expressions.
+
+  * We no longer assign stdin, fixing a *BSD compatibility problem (thanks
+    to Brian Callahan for reporting this issue).
+
+  * Fixed missing screen update at startup when no default autoprefs are
+    available.
+
+3.0  2015-06-18
+
+  * Allow remapping of character SEQuences in .keys files.
+
+  * Global macros are now loaded from NE_GLOBAL_DIR/macros rather than
+    NE_GLOBAL_DIR (/usr/local/share/ne/macros vs /usr/local/share/ne).
+
+2.6  2015-04-17
+
+  * Ancient bug with vertical clip edges fixed.
+
+  * AutoComplete occasionally would omit some completions.
+
+  * Exit attempts to save all modified documents even if one cannot be saved.
+    (It used to give up on the first error.)
+
+  * Avoid crash when resizing window while command prompt is active.
+
+  * Avoid SaveMacro optimization before Undo, called macros.
+
+2.5  2012-12-24
+
+  * Pathologically long-running PARAGRAPH commands are now stoppable (^-\).
+
+  * Moved modified flag '*' to right end of status line to be easier to see.
+
+  * COPY, CUT, ERASE copy the correct text to the clip and do not crash
+    any more when in free form mode and cursor or mark is beyond the
+    end of a line.
+
+  * ReplaceOnce was returning a generic error code instead of success,
+    thus stopping macros.
+
+2.4  2012-04-10
+
+  * CLOSEDOC and QUIT (^Q and Alt-Q) now close string requesters just like Esc.
+
+  * Macro calling macros are now stopped at an arbitrary depth of 32 calls.
+
+  * Last command of a loaded macro w/o trailing new-line now works.
+
+  * Vertical block selections where mark is below cursor select correct text.
+
+  * Mark right of a tab no longer moves when you change tab size.
+
+  * MARK and MARKVERT with no parameters always set rather than toggle the mark.
+
+  * Cursor no longer goes to start of line when you change tab size.
+
+  * A couple of operations in free form mode (joining the first line with
+    the following one and deleting a block with an extreme beyond the end
+    of file) should not cause crashes anymore.
+
+  * AUTOCOMPLETE could sometimes insert an inadvertent trailing "*".
+
+2.3  2011-10-28
+
+  * Fixed ridiculously old bug when copying a block and the marker is
+    after the cursor.
+
+  * Tweak to syntax file for java.
+
+  * Changed build date in "About" to ISO YYYY-MM-DD format.
+
+  * Tweak suspend to signal process group; reduce chance of apparent hang.
+
+  * Instantaneous window resize works again.
+
+  * Now we display an error message (instead of crashing or returning an
+    I/O error) when a file is too large (>=2GiB).
+
+  * We no longer set the buffer filename in case of I/O error.
+
+2.2  2011-01-23
+
+  * Fixed memory allocation macros in regex code from glibc to work on systems
+    that return NULL on zero-sized allocations.
+
+  * In makefile, made explicit the dependencies for regex.o.
+
+  * Fixed bug in "AdjustView R" that could push current character off screen.
+
+  * Ensure tab size remains less than half the window width when the window
+    changes size.
+
+  * Fixed buggy out-of-memory handling when loading files.
+
+  * Fixed buggy HTML/CSS syntax highlighting.
+
+  * Fixed wrong background line colour when clearing to the end of line.
+
+  * ToUpper and ToLower now stop when they reach the end of a document.
+
+2.1  2010-03-17
+
+  * Fixed efficiency bug introduced with syntax highlighting: ne should now
+    be much more responsive along slow connections.
+
+  * Fixed old, bad, shameful bug: complex assertions were compiled into
+    the code even for the non-debug version. As a result, ne was deadly
+    slow on large files.
+
+  * Fixed small mistakes in the keyboard sequences displayed in the menus,
+    and small discrepancies between default.keys/default.menus and reality
+    (thanks to John Gabriele for having pointed out this).
+
+  * In some cases after a keyboard timeout an ESC character was left in
+    the keyboard buffer, causing weird behaviours.
+
+  * Probably really (this time) fixed problems with regexps matching empty strings.
+
+  * BackSpace and Delete behave better in FreeForm mode.
+

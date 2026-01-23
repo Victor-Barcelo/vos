@@ -1,5 +1,6 @@
 #include <errno.h>
 #include <fcntl.h>
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -700,14 +701,26 @@ static void cmd_ls(int argc, char** argv) {
     }
 }
 
-static void complete_first_word(const char* word, linenoiseCompletions* lc) {
+static void add_prefixed_completion(linenoiseCompletions* lc, const char* before, const char* completion) {
+    if (!lc || !before || !completion) {
+        return;
+    }
+    char tmp[512];
+    int n = snprintf(tmp, sizeof(tmp), "%s%s", before, completion);
+    if (n <= 0 || (size_t)n >= sizeof(tmp)) {
+        return;
+    }
+    linenoiseAddCompletion(lc, tmp);
+}
+
+static void complete_command_token(const char* before, const char* word, linenoiseCompletions* lc) {
     static const char* builtins[] = {"help", "exit", "cd", "pwd", "ls", "cat", "clear"};
 
     size_t n = strlen(word);
     for (unsigned int i = 0; i < sizeof(builtins) / sizeof(builtins[0]); i++) {
         const char* b = builtins[i];
         if (strncmp(b, word, n) == 0) {
-            linenoiseAddCompletion(lc, b);
+            add_prefixed_completion(lc, before, b);
         }
     }
 
@@ -734,7 +747,7 @@ static void complete_first_word(const char* word, linenoiseCompletions* lc) {
             if (de.name[0] == '\0') continue;
             if (strncmp(de.name, prefix, strlen(prefix)) != 0) continue;
             snprintf(tmp, sizeof(tmp), "%s%s", base, de.name);
-            linenoiseAddCompletion(lc, tmp);
+            add_prefixed_completion(lc, before, tmp);
         }
         close(fd);
     }
@@ -748,30 +761,127 @@ static void complete_first_word(const char* word, linenoiseCompletions* lc) {
                 if (de.is_dir) continue;
                 if (de.name[0] == '\0') continue;
                 if (strncmp(de.name, prefix, strlen(prefix)) != 0) continue;
-                linenoiseAddCompletion(lc, de.name);
+                add_prefixed_completion(lc, before, de.name);
             }
             close(fd);
         }
     }
 }
 
+static void complete_path_token(const char* before, const char* tok, linenoiseCompletions* lc, int dirs_only) {
+    if (!before || !tok || !lc) {
+        return;
+    }
+
+    const char* prefix = tok;
+    char dir_path[256];
+    char base_path[256];
+    dir_path[0] = '\0';
+    base_path[0] = '\0';
+
+    const char* slash = strrchr(tok, '/');
+    if (slash) {
+        size_t dlen = (size_t)(slash - tok);
+        if (dlen == 0) {
+            strcpy(dir_path, "/");
+            strcpy(base_path, "/");
+        } else {
+            if (dlen >= sizeof(dir_path)) {
+                return;
+            }
+            memcpy(dir_path, tok, dlen);
+            dir_path[dlen] = '\0';
+            snprintf(base_path, sizeof(base_path), "%s/", dir_path);
+        }
+        prefix = slash + 1;
+    } else {
+        strcpy(dir_path, ".");
+        base_path[0] = '\0';
+        prefix = tok;
+    }
+
+    int fd = open(dir_path, O_RDONLY | O_DIRECTORY);
+    if (fd < 0) {
+        return;
+    }
+
+    vos_dirent_t de;
+    while (sys_readdir(fd, &de) > 0) {
+        if (de.name[0] == '\0') continue;
+        if (strcmp(de.name, ".") == 0 || strcmp(de.name, "..") == 0) {
+            // still allow, but only when explicitly requested
+            if (prefix[0] != '.') continue;
+        }
+        if (strncmp(de.name, prefix, strlen(prefix)) != 0) continue;
+        if (dirs_only && !de.is_dir) continue;
+
+        char cand[512];
+        if (de.is_dir) {
+            snprintf(cand, sizeof(cand), "%s%s%s/", before, base_path, de.name);
+        } else {
+            snprintf(cand, sizeof(cand), "%s%s%s", before, base_path, de.name);
+        }
+        linenoiseAddCompletion(lc, cand);
+    }
+
+    close(fd);
+}
+
 static void completion_cb(const char* buf, linenoiseCompletions* lc) {
-    if (!buf || !lc) return;
+    if (!buf || !lc) {
+        return;
+    }
 
-    const char* p = buf;
-    while (*p == ' ' || *p == '\t') p++;
+    size_t len = strlen(buf);
+    const char* end = buf + len;
 
-    // Only complete the first word for now.
-    for (const char* q = p; *q; q++) {
-        if (*q == ' ' || *q == '\t') {
-            return;
+    const char* tok = end;
+    while (tok > buf && tok[-1] != ' ' && tok[-1] != '\t') {
+        tok--;
+    }
+
+    char before[512];
+    size_t before_len = (size_t)(tok - buf);
+    if (before_len >= sizeof(before)) {
+        return;
+    }
+    memcpy(before, buf, before_len);
+    before[before_len] = '\0';
+
+    int word_index = 0;
+    bool in_word = false;
+    for (const char* p = buf; p < tok; p++) {
+        if (*p == ' ' || *p == '\t') {
+            in_word = false;
+            continue;
+        }
+        if (!in_word) {
+            in_word = true;
+            word_index++;
         }
     }
 
-    complete_first_word(p, lc);
+    // Extract the first word (command) to specialize path completion.
+    char cmd[64];
+    cmd[0] = '\0';
+    const char* p = buf;
+    while (*p == ' ' || *p == '\t') p++;
+    size_t ci = 0;
+    while (*p && *p != ' ' && *p != '\t' && ci + 1 < sizeof(cmd)) {
+        cmd[ci++] = *p++;
+    }
+    cmd[ci] = '\0';
+
+    if (word_index == 0) {
+        complete_command_token(before, tok, lc);
+        return;
+    }
+
+    int dirs_only = (strcmp(cmd, "cd") == 0);
+    complete_path_token(before, tok, lc, dirs_only);
 }
 
-static int run_external(int argc, char** argv) {
+static int run_external(int argc, char** argv, bool print_exit) {
     const char* cmd = argv[0];
     const char* sargv[SHELL_MAX_ARGS];
     for (int i = 0; i < argc; i++) {
@@ -812,20 +922,267 @@ static int run_external(int argc, char** argv) {
     int none = 0;
     (void)ioctl(0, TIOCSPGRP, &none);
 
-    printf("exit %d\n", code);
+    if (print_exit) {
+        printf("exit %d\n", code);
+    }
     return 0;
 }
 
-int main(int argc, char** argv) {
-    (void)argc;
-    (void)argv;
+typedef struct sh_redir {
+    const char* in_path;
+    const char* out_path;
+    const char* err_path;
+    bool out_append;
+    bool err_append;
+} sh_redir_t;
 
+static bool sh_parse_redir_token(const char* tok, sh_redir_t* r, const char** out_path, bool* out_append) {
+    if (!tok || !r || !out_path || !out_append) {
+        return false;
+    }
+
+    *out_path = NULL;
+    *out_append = false;
+
+    if (tok[0] == '\0') {
+        return false;
+    }
+
+    if (tok[0] == '<') {
+        *out_path = tok[1] ? (tok + 1) : NULL;
+        return true;
+    }
+
+    if (tok[0] == '>') {
+        if (tok[1] == '>') {
+            *out_append = true;
+            *out_path = tok[2] ? (tok + 2) : NULL;
+        } else {
+            *out_path = tok[1] ? (tok + 1) : NULL;
+        }
+        return true;
+    }
+
+    if (tok[0] == '2' && tok[1] == '>') {
+        if (tok[2] == '>') {
+            *out_append = true;
+            *out_path = tok[3] ? (tok + 3) : NULL;
+        } else {
+            *out_path = tok[2] ? (tok + 2) : NULL;
+        }
+        return true;
+    }
+
+    return false;
+}
+
+static int sh_apply_redirections(const sh_redir_t* r, int saved[3]) {
+    saved[0] = -1;
+    saved[1] = -1;
+    saved[2] = -1;
+
+    if (!r) {
+        return 0;
+    }
+
+    if (r->in_path) {
+        saved[0] = dup(STDIN_FILENO);
+        if (saved[0] < 0) {
+            return -1;
+        }
+        int fd = open(r->in_path, O_RDONLY);
+        if (fd < 0) {
+            return -1;
+        }
+        if (dup2(fd, STDIN_FILENO) < 0) {
+            close(fd);
+            return -1;
+        }
+        close(fd);
+    }
+
+    if (r->out_path) {
+        saved[1] = dup(STDOUT_FILENO);
+        if (saved[1] < 0) {
+            return -1;
+        }
+        int flags = O_WRONLY | O_CREAT | (r->out_append ? O_APPEND : O_TRUNC);
+        int fd = open(r->out_path, flags, 0666);
+        if (fd < 0) {
+            return -1;
+        }
+        if (dup2(fd, STDOUT_FILENO) < 0) {
+            close(fd);
+            return -1;
+        }
+        close(fd);
+    }
+
+    if (r->err_path) {
+        saved[2] = dup(STDERR_FILENO);
+        if (saved[2] < 0) {
+            return -1;
+        }
+        int flags = O_WRONLY | O_CREAT | (r->err_append ? O_APPEND : O_TRUNC);
+        int fd = open(r->err_path, flags, 0666);
+        if (fd < 0) {
+            return -1;
+        }
+        if (dup2(fd, STDERR_FILENO) < 0) {
+            close(fd);
+            return -1;
+        }
+        close(fd);
+    }
+
+    return 0;
+}
+
+static void sh_restore_redirections(const int saved[3]) {
+    if (saved[0] >= 0) {
+        (void)dup2(saved[0], STDIN_FILENO);
+        close(saved[0]);
+    }
+    if (saved[1] >= 0) {
+        (void)dup2(saved[1], STDOUT_FILENO);
+        close(saved[1]);
+    }
+    if (saved[2] >= 0) {
+        (void)dup2(saved[2], STDERR_FILENO);
+        close(saved[2]);
+    }
+}
+
+static int sh_execute_argv(int argc, char** argv, bool print_exit) {
+    if (argc <= 0) {
+        return 0;
+    }
+
+    if (strcmp(argv[0], "exit") == 0) {
+        return 1;
+    }
+    if (strcmp(argv[0], "help") == 0) {
+        cmd_help();
+        return 0;
+    }
+    if (strcmp(argv[0], "cd") == 0) {
+        cmd_cd(argc, argv);
+        return 0;
+    }
+    if (strcmp(argv[0], "pwd") == 0) {
+        cmd_pwd();
+        return 0;
+    }
+    if (strcmp(argv[0], "ls") == 0) {
+        cmd_ls(argc, argv);
+        return 0;
+    }
+    if (strcmp(argv[0], "cat") == 0) {
+        cmd_cat(argc, argv);
+        return 0;
+    }
+    if (strcmp(argv[0], "clear") == 0) {
+        cmd_clear();
+        return 0;
+    }
+
+    (void)run_external(argc, argv, print_exit);
+    return 0;
+}
+
+static int sh_execute_line(char* line, bool print_exit) {
+    if (!line) {
+        return 0;
+    }
+
+    char* av_raw[SHELL_MAX_ARGS];
+    int ac_raw = split_args(line, av_raw, SHELL_MAX_ARGS);
+    if (ac_raw <= 0) {
+        return 0;
+    }
+
+    sh_redir_t redir = {0};
+    char* av[SHELL_MAX_ARGS];
+    int ac = 0;
+
+    for (int i = 0; i < ac_raw; i++) {
+        char* tok = av_raw[i];
+        if (!tok || tok[0] == '\0') {
+            continue;
+        }
+
+        if (strcmp(tok, "(") == 0 || strcmp(tok, ")") == 0) {
+            continue;
+        }
+
+        const char* path = NULL;
+        bool append = false;
+        if (sh_parse_redir_token(tok, &redir, &path, &append)) {
+            if (tok[0] == '<') {
+                if (!path) {
+                    if (i + 1 < ac_raw) {
+                        redir.in_path = av_raw[++i];
+                    }
+                } else {
+                    redir.in_path = path;
+                }
+            } else if (tok[0] == '2') {
+                if (!path) {
+                    if (i + 1 < ac_raw) {
+                        redir.err_path = av_raw[++i];
+                    }
+                } else {
+                    redir.err_path = path;
+                }
+                redir.err_append = append;
+            } else {
+                if (!path) {
+                    if (i + 1 < ac_raw) {
+                        redir.out_path = av_raw[++i];
+                    }
+                } else {
+                    redir.out_path = path;
+                }
+                redir.out_append = append;
+            }
+            continue;
+        }
+
+        if (ac < SHELL_MAX_ARGS) {
+            av[ac++] = tok;
+        }
+    }
+
+    if (ac <= 0) {
+        return 0;
+    }
+
+    int saved[3];
+    if (sh_apply_redirections(&redir, saved) != 0) {
+        print_errno("redirect");
+        sh_restore_redirections(saved);
+        return 0;
+    }
+
+    int rc = sh_execute_argv(ac, av, print_exit);
+    sh_restore_redirections(saved);
+    return rc;
+}
+
+int main(int argc, char** argv) {
     linenoiseSetCompletionCallback(completion_cb);
     linenoiseHistorySetMaxLen(128);
 
-    puts("\x1b[36;1mVOS user shell\x1b[0m (linenoise). Type '\x1b[33;1mhelp\x1b[0m' for help.");
-
     resolve_user_identity();
+
+    if (argc >= 3 && strcmp(argv[1], "-c") == 0) {
+        char buf[SHELL_MAX_LINE];
+        strncpy(buf, argv[2], sizeof(buf) - 1u);
+        buf[sizeof(buf) - 1u] = '\0';
+        return sh_execute_line(buf, false) ? 1 : 0;
+    }
+
+    puts("\x1b[36;1mVOS user shell\x1b[0m (linenoise). Type '\x1b[33;1mhelp\x1b[0m' for help.");
 
     char cwd[256];
     for (;;) {
@@ -846,7 +1203,13 @@ int main(int argc, char** argv) {
         char prompt[320];
         snprintf(prompt, sizeof(prompt), "%s@vos:%s$ ", g_username, shown);
 
+        // Enable terminal mouse reporting while we are inside linenoise so clicks
+        // can move the cursor and the wheel can navigate history.
+        fputs("\x1b[?1000h\x1b[?1006h", stdout);
+        fflush(stdout);
         char* line = linenoise(prompt);
+        fputs("\x1b[?1000l\x1b[?1006l", stdout);
+        fflush(stdout);
         if (!line) {
             break;
         }
@@ -876,20 +1239,8 @@ int main(int argc, char** argv) {
         if (strcmp(av[0], "exit") == 0) {
             free(line);
             break;
-        } else if (strcmp(av[0], "help") == 0) {
-            cmd_help();
-        } else if (strcmp(av[0], "cd") == 0) {
-            cmd_cd(ac, av);
-        } else if (strcmp(av[0], "pwd") == 0) {
-            cmd_pwd();
-        } else if (strcmp(av[0], "ls") == 0) {
-            cmd_ls(ac, av);
-        } else if (strcmp(av[0], "cat") == 0) {
-            cmd_cat(ac, av);
-        } else if (strcmp(av[0], "clear") == 0) {
-            cmd_clear();
         } else {
-            (void)run_external(ac, av);
+            (void)sh_execute_argv(ac, av, true);
         }
 
         free(line);

@@ -1,0 +1,7 @@
+# VOS: compile the current buffer using TCC.
+#
+# Produces /disk/a.out and writes compiler diagnostics to /tmp/tcc.log.
+Save
+System "tcc -o /disk/a.out %f 2> /tmp/tcc.log"
+OpenNew "/tmp/tcc.log"
+

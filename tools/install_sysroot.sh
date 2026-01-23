@@ -35,6 +35,13 @@ VTCC="$ROOT_DIR/build/user/tcc.elf"
 VTCC1="$ROOT_DIR/build/user/libtcc1.a"
 VTCC_INC="$ROOT_DIR/third_party/tcc/include"
 
+VRAYLIB="$ROOT_DIR/build/user/libraylib.a"
+VRAYLIB_H="$ROOT_DIR/third_party/raylib/raylib.h"
+VSMALL3D="$ROOT_DIR/build/user/libsmall3d.a"
+VSMALL3D_H="$ROOT_DIR/third_party/small3dlib/small3d.h"
+
+VRAYCUBE_SRC="$ROOT_DIR/user/raycube.c"
+
 if [[ ! -f "$DISK_IMG" ]]; then
   echo "error: disk image not found: $DISK_IMG" >&2
   echo "hint: run 'make vos-disk.img' to create one." >&2
@@ -86,6 +93,28 @@ if [[ ! -d "$VTCC_INC" ]]; then
   echo "error: tcc include dir not found: $VTCC_INC" >&2
   exit 1
 fi
+if [[ ! -f "$VRAYLIB" ]]; then
+  echo "error: raylib not built: $VRAYLIB" >&2
+  echo "hint: run 'make sysroot' (or 'make $VRAYLIB') first." >&2
+  exit 1
+fi
+if [[ ! -f "$VRAYLIB_H" ]]; then
+  echo "error: raylib header not found: $VRAYLIB_H" >&2
+  exit 1
+fi
+if [[ ! -f "$VSMALL3D" ]]; then
+  echo "error: small3d not built: $VSMALL3D" >&2
+  echo "hint: run 'make sysroot' (or 'make $VSMALL3D') first." >&2
+  exit 1
+fi
+if [[ ! -f "$VSMALL3D_H" ]]; then
+  echo "error: small3d header not found: $VSMALL3D_H" >&2
+  exit 1
+fi
+if [[ ! -f "$VRAYCUBE_SRC" ]]; then
+  echo "error: raycube example not found: $VRAYCUBE_SRC" >&2
+  exit 1
+fi
 
 mkdir_usr() {
   local dir="$1"
@@ -114,12 +143,18 @@ mkdir_usr ::/usr
 mkdir_usr ::/usr/include
 mkdir_usr ::/usr/lib
 mkdir_usr ::/usr/bin
+mkdir_usr ::/usr/share
+mkdir_usr ::/usr/share/ne
+mkdir_usr ::/usr/share/ne/extensions
+mkdir_usr ::/usr/share/ne/macros
+mkdir_usr ::/usr/share/ne/syntax
 
 # Linux-like top-level layout (stored on disk; exposed via VFS aliases).
 mkdir_usr ::/etc
 mkdir_usr ::/home
 mkdir_usr ::/home/root
 mkdir_usr ::/home/victor
+mkdir_usr ::/home/victor/examples
 mkdir_usr ::/var
 mkdir_usr ::/var/log
 
@@ -168,6 +203,34 @@ copy_one "$VLINKER" ::/usr/lib/vos.ld
 copy_one "$VTCC" ::/usr/bin/tcc
 copy_one "$VTCC1" ::/usr/lib/tcc/libtcc1.a
 copy_tree "$VTCC_INC" ::/usr/lib/tcc/include
+
+copy_one "$VRAYLIB_H" ::/usr/include/raylib.h
+copy_one "$VSMALL3D_H" ::/usr/include/small3d.h
+copy_one "$VRAYLIB" ::/usr/lib/libraylib.a
+copy_one "$VSMALL3D" ::/usr/lib/libsmall3d.a
+
+copy_one "$VRAYCUBE_SRC" ::/home/victor/examples/raycube.c
+
+# ne runtime data (syntax highlighting, macros, extensions)
+NE_DIR="$ROOT_DIR/third_party/ne"
+if [[ -d "$NE_DIR/syntax" ]]; then
+  copy_tree "$NE_DIR/syntax" ::/usr/share/ne/syntax
+fi
+if [[ -d "$NE_DIR/macros" ]]; then
+  copy_tree "$NE_DIR/macros" ::/usr/share/ne/macros
+fi
+if [[ -d "$NE_DIR/extensions" ]]; then
+  copy_tree "$NE_DIR/extensions" ::/usr/share/ne/extensions
+fi
+if [[ -f "$NE_DIR/COPYING" ]]; then
+  copy_one "$NE_DIR/COPYING" ::/usr/share/ne/COPYING
+fi
+if [[ -f "$NE_DIR/.menus" ]]; then
+  copy_one "$NE_DIR/.menus" ::/usr/share/ne/.menus
+fi
+if [[ -f "$NE_DIR/.keys" ]]; then
+  copy_one "$NE_DIR/.keys" ::/usr/share/ne/.keys
+fi
 
 if ! img_has_file ::/etc/passwd; then
   echo "  seeding /etc/passwd"

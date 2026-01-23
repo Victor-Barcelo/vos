@@ -108,4 +108,13 @@ bool screen_scrollback_active(void);
 void screen_scrollback_lines(int32_t delta);
 void screen_scrollback_reset(void);
 
+// Mouse cursor overlay (framebuffer text console only).
+void screen_mouse_set_enabled(bool enabled);
+void screen_mouse_set_pos(int x, int y);
+
+// VT100 mouse reporting state (set via CSI ?1000 h/l and CSI ?1006 h/l).
+bool screen_vt_mouse_reporting_enabled(void);
+bool screen_vt_mouse_reporting_sgr(void);
+bool screen_vt_mouse_reporting_wheel(void);
+
 #endif

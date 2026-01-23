@@ -87,6 +87,9 @@ enum {
     SYS_SETUID = 52,
     SYS_GETGID = 53,
     SYS_SETGID = 54,
+    SYS_SIGNAL = 55,
+    SYS_SIGRETURN = 56,
+    SYS_SIGPROCMASK = 57,
 };
 
 static inline int sys_write(int fd, const char* buf, uint32_t len) {

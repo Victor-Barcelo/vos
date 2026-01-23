@@ -1,17 +1,21 @@
 #include <errno.h>
 #include <fcntl.h>
+#include <fnmatch.h>
 #include <stdarg.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <pwd.h>
 #include <sys/stat.h>
 #include <sys/time.h>
 #include <sys/types.h>
 #include <sys/ioctl.h>
 #include <sys/mman.h>
 #include <dirent.h>
+#include <signal.h>
+#include <reent.h>
 #include <termios.h>
 #include <time.h>
 #include <unistd.h>
@@ -84,6 +88,237 @@ char* dirname(char* path) {
     return path;
 }
 
+int access(const char* path, int mode) {
+    (void)mode; // VOS currently has no per-file permission enforcement.
+
+    if (!path || path[0] == '\0') {
+        errno = EINVAL;
+        return -1;
+    }
+
+    struct stat st;
+    if (stat(path, &st) == 0) {
+        return 0;
+    }
+    return -1;
+}
+
+// Minimal fnmatch() implementation: supports '*', '?', and character classes.
+static int fnmatch_range_match(const char** pat, char c) {
+    const char* p = *pat;
+    int negate = 0;
+    if (*p == '!' || *p == '^') {
+        negate = 1;
+        p++;
+    }
+
+    int ok = 0;
+    for (; *p && *p != ']'; p++) {
+        if (p[1] == '-' && p[2] && p[2] != ']') {
+            char a = p[0];
+            char b = p[2];
+            if (a > b) {
+                char tmp = a;
+                a = b;
+                b = tmp;
+            }
+            if (c >= a && c <= b) {
+                ok = 1;
+            }
+            p += 2;
+            continue;
+        }
+        if (*p == c) {
+            ok = 1;
+        }
+    }
+
+    // Move past closing bracket if present.
+    while (*p && *p != ']') p++;
+    if (*p == ']') p++;
+    *pat = p;
+
+    return negate ? !ok : ok;
+}
+
+int fnmatch(const char* pattern, const char* string, int flags) {
+    if (!pattern || !string) {
+        return FNM_NOMATCH;
+    }
+
+    const char* p = pattern;
+    const char* s = string;
+
+    while (*p) {
+        if (*p == '*') {
+            while (*p == '*') p++;
+            if (*p == '\0') {
+                return 0;
+            }
+            for (const char* t = s; *t; t++) {
+                if ((flags & FNM_PATHNAME) && *t == '/') {
+                    break;
+                }
+                if (fnmatch(p, t, flags) == 0) {
+                    return 0;
+                }
+            }
+            return FNM_NOMATCH;
+        }
+
+        if (*s == '\0') {
+            return FNM_NOMATCH;
+        }
+
+        if (*p == '?') {
+            if ((flags & FNM_PATHNAME) && *s == '/') {
+                return FNM_NOMATCH;
+            }
+            if ((flags & FNM_PERIOD) && *s == '.' && (s == string || ((flags & FNM_PATHNAME) && s[-1] == '/'))) {
+                return FNM_NOMATCH;
+            }
+            p++;
+            s++;
+            continue;
+        }
+
+        if (*p == '[') {
+            p++;
+            if ((flags & FNM_PATHNAME) && *s == '/') {
+                return FNM_NOMATCH;
+            }
+            if (!fnmatch_range_match(&p, *s)) {
+                return FNM_NOMATCH;
+            }
+            s++;
+            continue;
+        }
+
+        if (*p == '\\' && !(flags & FNM_NOESCAPE) && p[1]) {
+            p++;
+        }
+
+        if (*p != *s) {
+            return FNM_NOMATCH;
+        }
+        p++;
+        s++;
+    }
+
+    return (*s == '\0') ? 0 : FNM_NOMATCH;
+}
+
+static struct passwd g_pw;
+static char g_pw_name[64];
+static char g_pw_passwd[64];
+static char g_pw_dir[128];
+static char g_pw_shell[128];
+
+static struct passwd* passwd_lookup_name(const char* name) {
+    if (!name || name[0] == '\0') {
+        return NULL;
+    }
+
+    FILE* f = fopen("/etc/passwd", "r");
+    if (!f) {
+        return NULL;
+    }
+
+    char line[256];
+    struct passwd* out = NULL;
+
+    while (fgets(line, sizeof(line), f)) {
+        // name:pass:uid:gid:home:shell
+        char* nl = strchr(line, '\n');
+        if (nl) *nl = '\0';
+
+        char* fields[6] = {0};
+        int nf = 0;
+        char* p = line;
+        for (; nf < 6; nf++) {
+            fields[nf] = p;
+            char* c = strchr(p, ':');
+            if (!c) break;
+            *c = '\0';
+            p = c + 1;
+        }
+
+        if (!fields[0] || strcmp(fields[0], name) != 0) {
+            continue;
+        }
+
+        g_pw.pw_name = g_pw_name;
+        g_pw.pw_passwd = g_pw_passwd;
+        g_pw.pw_comment = NULL;
+        g_pw.pw_gecos = NULL;
+        g_pw.pw_dir = g_pw_dir;
+        g_pw.pw_shell = g_pw_shell;
+
+        strncpy(g_pw_name, fields[0], sizeof(g_pw_name) - 1u);
+        g_pw_name[sizeof(g_pw_name) - 1u] = '\0';
+        strncpy(g_pw_passwd, (fields[1] ? fields[1] : ""), sizeof(g_pw_passwd) - 1u);
+        g_pw_passwd[sizeof(g_pw_passwd) - 1u] = '\0';
+
+        g_pw.pw_uid = (uid_t)(fields[2] ? strtoul(fields[2], NULL, 10) : 0);
+        g_pw.pw_gid = (gid_t)(fields[3] ? strtoul(fields[3], NULL, 10) : 0);
+
+        strncpy(g_pw_dir, (fields[4] ? fields[4] : "/"), sizeof(g_pw_dir) - 1u);
+        g_pw_dir[sizeof(g_pw_dir) - 1u] = '\0';
+        strncpy(g_pw_shell, (fields[5] ? fields[5] : "/bin/sh"), sizeof(g_pw_shell) - 1u);
+        g_pw_shell[sizeof(g_pw_shell) - 1u] = '\0';
+
+        out = &g_pw;
+        break;
+    }
+
+    fclose(f);
+    return out;
+}
+
+struct passwd* getpwnam(const char* name) {
+    return passwd_lookup_name(name);
+}
+
+struct passwd* getpwuid(uid_t uid) {
+    FILE* f = fopen("/etc/passwd", "r");
+    if (!f) {
+        return NULL;
+    }
+
+    char line[256];
+    struct passwd* out = NULL;
+
+    while (fgets(line, sizeof(line), f)) {
+        char* nl = strchr(line, '\n');
+        if (nl) *nl = '\0';
+
+        char* fields[6] = {0};
+        int nf = 0;
+        char* p = line;
+        for (; nf < 6; nf++) {
+            fields[nf] = p;
+            char* c = strchr(p, ':');
+            if (!c) break;
+            *c = '\0';
+            p = c + 1;
+        }
+
+        if (!fields[2]) {
+            continue;
+        }
+        uid_t file_uid = (uid_t)strtoul(fields[2], NULL, 10);
+        if (file_uid != uid) {
+            continue;
+        }
+
+        out = passwd_lookup_name(fields[0]);
+        break;
+    }
+
+    fclose(f);
+    return out;
+}
+
 // VOS syscall numbers (kernel/syscall.c)
 enum {
     SYS_WRITE = 0,
@@ -141,6 +376,9 @@ enum {
     SYS_SETUID = 52,
     SYS_GETGID = 53,
     SYS_SETGID = 54,
+    SYS_SIGNAL = 55,
+    SYS_SIGRETURN = 56,
+    SYS_SIGPROCMASK = 57,
 };
 
 typedef struct vos_stat {
@@ -501,12 +739,56 @@ static inline int vos_sys_getpid(void) {
     return ret;
 }
 
+static inline int vos_sys_wait(int pid) {
+    int ret;
+    __asm__ volatile (
+        "int $0x80"
+        : "=a"(ret)
+        : "a"(SYS_WAIT), "b"(pid)
+        : "memory"
+    );
+    return ret;
+}
+
+static inline int vos_sys_spawn(const char* path, const char* const* argv, unsigned int argc) {
+    int ret;
+    __asm__ volatile (
+        "int $0x80"
+        : "=a"(ret)
+        : "a"(SYS_SPAWN), "b"(path), "c"(argv), "d"(argc)
+        : "memory"
+    );
+    return ret;
+}
+
 static inline int vos_sys_kill(int pid, int sig) {
     int ret;
     __asm__ volatile (
         "int $0x80"
         : "=a"(ret)
         : "a"(SYS_KILL), "b"(pid), "c"(sig)
+        : "memory"
+    );
+    return ret;
+}
+
+static inline intptr_t vos_sys_signal(int sig, uintptr_t handler) {
+    intptr_t ret;
+    __asm__ volatile (
+        "int $0x80"
+        : "=a"(ret)
+        : "a"(SYS_SIGNAL), "b"(sig), "c"(handler)
+        : "memory"
+    );
+    return ret;
+}
+
+static inline int vos_sys_sigprocmask(int how, const sigset_t* set, sigset_t* oldset) {
+    int ret;
+    __asm__ volatile (
+        "int $0x80"
+        : "=a"(ret)
+        : "a"(SYS_SIGPROCMASK), "b"(how), "c"(set), "d"(oldset)
         : "memory"
     );
     return ret;
@@ -1176,6 +1458,90 @@ int kill(int pid, int sig) {
     return 0;
 }
 
+_sig_func_ptr signal(int sig, _sig_func_ptr handler) {
+    intptr_t rc = vos_sys_signal(sig, (uintptr_t)handler);
+    if (rc < 0) {
+        errno = (int)-rc;
+        return SIG_ERR;
+    }
+    return (_sig_func_ptr)(uintptr_t)rc;
+}
+
+_sig_func_ptr _signal_r(struct _reent* r, int sig, _sig_func_ptr handler) {
+    (void)r;
+    return signal(sig, handler);
+}
+
+int raise(int sig) {
+    return kill(getpid(), sig);
+}
+
+int _raise_r(struct _reent* r, int sig) {
+    (void)r;
+    return raise(sig);
+}
+
+int _init_signal_r(struct _reent* r) {
+    (void)r;
+    return 0;
+}
+
+int _init_signal(void) {
+    return 0;
+}
+
+int __sigtramp_r(struct _reent* r, int sig) {
+    (void)r;
+    (void)sig;
+    return 0;
+}
+
+int __sigtramp(int sig) {
+    (void)sig;
+    return 0;
+}
+
+int sigaction(int sig, const struct sigaction* act, struct sigaction* oact) {
+    if (sig <= 0) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    _sig_func_ptr new_handler = SIG_DFL;
+    if (act) {
+        new_handler = act->sa_handler;
+    }
+
+    intptr_t old = vos_sys_signal(sig, (uintptr_t)new_handler);
+    if (old < 0) {
+        errno = (int)-old;
+        return -1;
+    }
+
+    if (oact) {
+        oact->sa_handler = (_sig_func_ptr)(uintptr_t)old;
+        oact->sa_mask = 0;
+        oact->sa_flags = 0;
+    }
+    return 0;
+}
+
+int sigprocmask(int how, const sigset_t* set, sigset_t* oldset) {
+    int rc = vos_sys_sigprocmask(how, set, oldset);
+    if (rc < 0) {
+        errno = -rc;
+        return -1;
+    }
+    return 0;
+}
+
+int siginterrupt(int sig, int flag) {
+    (void)sig;
+    (void)flag;
+    // VOS currently always interrupts blocking syscalls when a signal is pending.
+    return 0;
+}
+
 int getpid(void) {
     return vos_sys_getpid();
 }
@@ -1234,6 +1600,46 @@ int fchmod(int fd, mode_t mode) {
     (void)mode;
     errno = ENOSYS;
     return -1;
+}
+
+static int vos_system_run(const char* command) {
+    if (!command) {
+        return 1;
+    }
+
+    const char* argv[3];
+    argv[0] = "/bin/sh";
+    argv[1] = "-c";
+    argv[2] = command;
+
+    int child = vos_sys_spawn("/bin/sh", argv, 3);
+    if (child < 0) {
+        errno = -child;
+        return -1;
+    }
+
+    int old_fg = 0;
+    (void)ioctl(0, TIOCGPGRP, &old_fg);
+
+    int fg = child;
+    (void)ioctl(0, TIOCSPGRP, &fg);
+
+    int code = vos_sys_wait(child);
+
+    (void)ioctl(0, TIOCSPGRP, &old_fg);
+    return code;
+}
+
+int _system_r(struct _reent* r, const char* command) {
+    int rc = vos_system_run(command);
+    if (rc < 0 && r) {
+        r->_errno = errno;
+    }
+    return rc;
+}
+
+int system(const char* command) {
+    return vos_system_run(command);
 }
 
 __attribute__((noreturn)) void _exit(int code) {

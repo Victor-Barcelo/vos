@@ -52,6 +52,23 @@ bool tasking_get_task_info(uint32_t index, task_info_t* out);
 // If true, *out_exit_code receives the exit code to use.
 bool tasking_current_should_exit(int32_t* out_exit_code);
 
+// Check whether the current task has a pending signal that should interrupt
+// blocking syscalls (e.g. read()).
+bool tasking_current_should_interrupt(void);
+
+// Deliver one pending unmasked signal (if any) to the current task.
+// May modify the user frame (to run a handler) or terminate the task.
+interrupt_frame_t* tasking_deliver_pending_signals(interrupt_frame_t* frame);
+
+// Set a user-space signal handler for the current task. Returns 0 on success.
+int32_t tasking_signal_set_handler(int32_t sig, uint32_t handler, uint32_t* out_old);
+
+// Apply a POSIX-style signal mask update for the current task. Returns 0 on success.
+int32_t tasking_sigprocmask(int32_t how, const void* set_user, void* old_user);
+
+// Return from a signal handler (restores the interrupted user context).
+interrupt_frame_t* tasking_sigreturn(interrupt_frame_t* frame);
+
 // Handle asynchronous terminal control characters (e.g. Ctrl+C) that should
 // affect the current foreground process. Returns true if consumed.
 bool tasking_tty_handle_input_char(uint8_t c);
@@ -62,8 +79,9 @@ interrupt_frame_t* tasking_sleep_until(interrupt_frame_t* frame, uint32_t wake_t
 // Wait for a task to exit (returns exit code in EAX via the syscall frame).
 interrupt_frame_t* tasking_wait(interrupt_frame_t* frame, uint32_t pid);
 
-// Kill a task by pid. Returns 0 on success, or -errno.
-int32_t tasking_kill(uint32_t pid, int32_t exit_code);
+// Send a signal to a task by pid. Returns 0 on success, or -errno.
+// pid==0 targets the current task (VOS has no process groups yet).
+int32_t tasking_kill(uint32_t pid, int32_t sig);
 
 // Adjust the user heap break (sbrk-style). Returns previous brk in EAX or -1.
 interrupt_frame_t* tasking_sbrk(interrupt_frame_t* frame, int32_t increment);

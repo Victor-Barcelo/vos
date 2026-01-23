@@ -19,6 +19,17 @@
 #define KSTACK_REGION_BASE 0xF0000000u
 #define TASK_MAX_FDS 64
 
+// Minimal signal support for userland ports (ne, etc.).
+// We follow newlib's default numbering (see <sys/signal.h> for i386):
+//   SIGKILL=9, SIGSTOP=17, SIGTSTP=18, SIGCONT=19, SIGWINCH=28, ...
+#define VOS_SIG_MAX 32
+#define VOS_SIG_DFL 0u
+#define VOS_SIG_IGN 1u
+#define VOS_SIGKILL 9
+#define VOS_SIGSTOP 17
+#define VOS_SIGWINCH 28
+#define VOS_SIGCHLD 20
+
 // User virtual address layout (must match kernel/elf.c and kernel/paging.c).
 #define USER_BASE  0x02000000u
 #define USER_LIMIT 0xC0000000u
@@ -114,6 +125,17 @@ typedef struct vm_area {
     struct vm_area* next;
 } vm_area_t;
 
+typedef struct vos_sigframe {
+    uint32_t magic;
+    uint32_t sig;
+    uint32_t saved_mask;
+    interrupt_frame_t frame;
+    uint32_t user_esp;
+    uint32_t user_ss;
+} __attribute__((packed)) vos_sigframe_t;
+
+#define VOS_SIGFRAME_MAGIC 0x53494746u /* 'SIGF' */
+
 typedef struct task {
     uint32_t id;
     uint32_t esp;            // saved stack pointer (points to interrupt frame)
@@ -133,6 +155,9 @@ typedef struct task {
     uint16_t tty_line_len;
     uint16_t tty_line_off;
     bool tty_line_ready;
+    uint32_t sig_pending;
+    uint32_t sig_mask;
+    uint32_t sig_handlers[VOS_SIG_MAX];
     task_state_t state;
     uint32_t wake_tick;
     uint32_t wait_pid;
@@ -152,6 +177,30 @@ static uint32_t next_id = 1;
 static uint32_t tick_div = 0;
 static uint32_t next_kstack_region = KSTACK_REGION_BASE;
 static uint32_t tty_foreground_pid = 0;
+
+static bool frame_from_user(const interrupt_frame_t* frame) {
+    return frame && ((frame->cs & 0x3u) == 0x3u);
+}
+
+static uint32_t frame_get_user_esp(const interrupt_frame_t* frame) {
+    const uint32_t* extra = (const uint32_t*)((const uint8_t*)frame + sizeof(*frame));
+    return extra[0];
+}
+
+static uint32_t frame_get_user_ss(const interrupt_frame_t* frame) {
+    const uint32_t* extra = (const uint32_t*)((const uint8_t*)frame + sizeof(*frame));
+    return extra[1];
+}
+
+static void frame_set_user_esp(interrupt_frame_t* frame, uint32_t user_esp) {
+    uint32_t* extra = (uint32_t*)((uint8_t*)frame + sizeof(*frame));
+    extra[0] = user_esp;
+}
+
+static void frame_set_user_ss(interrupt_frame_t* frame, uint32_t user_ss) {
+    uint32_t* extra = (uint32_t*)((uint8_t*)frame + sizeof(*frame));
+    extra[1] = user_ss;
+}
 
 static task_t* task_find_by_pid(uint32_t pid) {
     if (!current_task || pid == 0) {
@@ -325,6 +374,41 @@ static void fd_init(task_t* t) {
     if (TASK_MAX_FDS > 0) t->fds[0].kind = FD_KIND_STDIN;
     if (TASK_MAX_FDS > 1) t->fds[1].kind = FD_KIND_STDOUT;
     if (TASK_MAX_FDS > 2) t->fds[2].kind = FD_KIND_STDERR;
+}
+
+static void fd_inherit(task_t* child, const task_t* parent) {
+    if (!child || !parent) {
+        return;
+    }
+
+    for (int32_t fd = 0; fd < (int32_t)TASK_MAX_FDS; fd++) {
+        const fd_entry_t* src = &parent->fds[fd];
+        fd_entry_t* dst = &child->fds[fd];
+
+        dst->kind = src->kind;
+        dst->pending_len = 0;
+        dst->pending_off = 0;
+
+        if (src->kind == FD_KIND_VFS && src->handle) {
+            dst->handle = src->handle;
+            dst->pipe = NULL;
+            dst->pipe_write_end = false;
+            vfs_ref(dst->handle);
+            continue;
+        }
+
+        if (src->kind == FD_KIND_PIPE && src->pipe) {
+            dst->handle = NULL;
+            dst->pipe = src->pipe;
+            dst->pipe_write_end = src->pipe_write_end;
+            pipe_ref(dst->pipe, dst->pipe_write_end);
+            continue;
+        }
+
+        dst->handle = NULL;
+        dst->pipe = NULL;
+        dst->pipe_write_end = false;
+    }
 }
 
 static void cwd_init(task_t* t) {
@@ -640,6 +724,17 @@ bool tasking_current_should_exit(int32_t* out_exit_code) {
     return true;
 }
 
+bool tasking_current_should_interrupt(void) {
+    if (!enabled || !current_task) {
+        return false;
+    }
+    if (current_task->kill_pending) {
+        return true;
+    }
+    uint32_t pending = current_task->sig_pending & ~current_task->sig_mask;
+    return pending != 0;
+}
+
 uint32_t tasking_task_count(void) {
     uint32_t flags = irq_save();
 
@@ -936,11 +1031,14 @@ interrupt_frame_t* tasking_wait(interrupt_frame_t* frame, uint32_t pid) {
     return tasking_yield(frame);
 }
 
-int32_t tasking_kill(uint32_t pid, int32_t exit_code) {
+int32_t tasking_kill(uint32_t pid, int32_t sig) {
     if (!enabled || !current_task) {
         return -EINVAL;
     }
     if (pid == 0) {
+        pid = current_task->id;
+    }
+    if (sig < 0 || sig >= (int32_t)VOS_SIG_MAX) {
         return -EINVAL;
     }
 
@@ -956,11 +1054,19 @@ int32_t tasking_kill(uint32_t pid, int32_t exit_code) {
                 irq_restore(flags);
                 return -EPERM;
             }
+            if (sig == 0) {
+                irq_restore(flags);
+                return 0;
+            }
             if (t->state != TASK_STATE_ZOMBIE) {
-                // Defer termination to a safe point (syscall entry or timer tick in ring3)
-                // to avoid tearing down resources while the target is executing in-kernel.
-                t->kill_pending = true;
-                t->kill_exit_code = exit_code;
+                // Uncatchable signals become deferred kills to avoid tearing down resources
+                // while the target is executing in-kernel.
+                if (sig == VOS_SIGKILL) {
+                    t->kill_pending = true;
+                    t->kill_exit_code = 128 + sig;
+                } else {
+                    t->sig_pending |= (1u << (uint32_t)sig);
+                }
                 if (t->state != TASK_STATE_RUNNABLE) {
                     t->state = TASK_STATE_RUNNABLE;
                     t->wake_tick = 0;
@@ -978,6 +1084,200 @@ int32_t tasking_kill(uint32_t pid, int32_t exit_code) {
 
     irq_restore(flags);
     return -ESRCH;
+}
+
+static bool sig_default_ignore(int32_t sig) {
+    return sig == VOS_SIGWINCH || sig == VOS_SIGCHLD;
+}
+
+int32_t tasking_signal_set_handler(int32_t sig, uint32_t handler, uint32_t* out_old) {
+    if (!enabled || !current_task || !current_task->user) {
+        return -EINVAL;
+    }
+    if (sig <= 0 || sig >= (int32_t)VOS_SIG_MAX) {
+        return -EINVAL;
+    }
+    if (sig == VOS_SIGKILL || sig == VOS_SIGSTOP) {
+        return -EINVAL;
+    }
+    if (out_old) {
+        *out_old = current_task->sig_handlers[sig];
+    }
+    current_task->sig_handlers[sig] = handler;
+    return 0;
+}
+
+int32_t tasking_sigprocmask(int32_t how, const void* set_user, void* old_user) {
+    if (!enabled || !current_task || !current_task->user) {
+        return -EINVAL;
+    }
+
+    uint32_t old = current_task->sig_mask;
+    if (old_user != NULL) {
+        if (!copy_to_user(old_user, &old, sizeof(old))) {
+            return -EFAULT;
+        }
+    }
+
+    if (set_user == NULL) {
+        return 0;
+    }
+
+    uint32_t set = 0;
+    if (!copy_from_user(&set, set_user, sizeof(set))) {
+        return -EFAULT;
+    }
+
+    // Don't allow blocking uncatchable signals.
+    set &= ~(1u << VOS_SIGKILL);
+    set &= ~(1u << VOS_SIGSTOP);
+
+    if (how == 0 /* SIG_SETMASK */) {
+        current_task->sig_mask = set;
+    } else if (how == 1 /* SIG_BLOCK */) {
+        current_task->sig_mask |= set;
+    } else if (how == 2 /* SIG_UNBLOCK */) {
+        current_task->sig_mask &= ~set;
+    } else {
+        return -EINVAL;
+    }
+
+    // Ensure uncatchable signals are always unmasked.
+    current_task->sig_mask &= ~(1u << VOS_SIGKILL);
+    current_task->sig_mask &= ~(1u << VOS_SIGSTOP);
+    return 0;
+}
+
+interrupt_frame_t* tasking_sigreturn(interrupt_frame_t* frame) {
+    if (!enabled || !current_task || !frame || !current_task->user || !frame_from_user(frame)) {
+        return frame;
+    }
+
+    uint32_t user_esp = frame_get_user_esp(frame);
+    vos_sigframe_t sf;
+    if (!copy_from_user(&sf, (const void*)user_esp, (uint32_t)sizeof(sf))) {
+        return tasking_exit(frame, -EFAULT);
+    }
+    if (sf.magic != VOS_SIGFRAME_MAGIC) {
+        return tasking_exit(frame, -EINVAL);
+    }
+
+    current_task->sig_mask = sf.saved_mask;
+    current_task->sig_mask &= ~(1u << VOS_SIGKILL);
+    current_task->sig_mask &= ~(1u << VOS_SIGSTOP);
+
+    memcpy(frame, &sf.frame, sizeof(*frame));
+    frame_set_user_esp(frame, sf.user_esp);
+    frame_set_user_ss(frame, sf.user_ss);
+    return frame;
+}
+
+interrupt_frame_t* tasking_deliver_pending_signals(interrupt_frame_t* frame) {
+    if (!enabled || !current_task || !frame || !current_task->user || !frame_from_user(frame)) {
+        return frame;
+    }
+
+    // Deferred kill takes precedence (e.g. SIGKILL).
+    if (current_task->kill_pending) {
+        return tasking_exit(frame, current_task->kill_exit_code);
+    }
+
+    uint32_t pending = current_task->sig_pending & ~current_task->sig_mask;
+    if (pending == 0) {
+        return frame;
+    }
+
+    int32_t sig = -1;
+    for (int32_t i = 1; i < (int32_t)VOS_SIG_MAX; i++) {
+        if ((pending & (1u << (uint32_t)i)) != 0) {
+            sig = i;
+            break;
+        }
+    }
+    if (sig < 0) {
+        return frame;
+    }
+
+    // Consume the pending bit now; if delivery fails we'll terminate.
+    current_task->sig_pending &= ~(1u << (uint32_t)sig);
+
+    uint32_t handler = current_task->sig_handlers[sig];
+    if (handler == VOS_SIG_IGN) {
+        return frame;
+    }
+    if (handler == VOS_SIG_DFL) {
+        if (sig_default_ignore(sig)) {
+            return frame;
+        }
+        return tasking_exit(frame, 128 + sig);
+    }
+
+    // Build a minimal signal trampoline on the user stack:
+    //   handler(sig) -> (return) -> stub -> SYS_SIGRETURN
+    uint32_t old_user_esp = frame_get_user_esp(frame);
+    uint32_t old_user_ss = frame_get_user_ss(frame);
+
+    uint8_t stub[] = {
+        0x83, 0xC4, 0x04,             // add esp, 4   (pop sig arg)
+        0xB8, 0x00, 0x00, 0x00, 0x00,  // mov eax, imm32 (SYS_SIGRETURN)
+        0xCD, 0x80,                   // int 0x80
+        0x0F, 0x0B,                   // ud2
+    };
+
+    // The syscall number is defined in kernel/syscall.c; keep this in sync.
+    const uint32_t SYS_SIGRETURN = 56u;
+    stub[4] = (uint8_t)(SYS_SIGRETURN & 0xFFu);
+    stub[5] = (uint8_t)((SYS_SIGRETURN >> 8) & 0xFFu);
+    stub[6] = (uint8_t)((SYS_SIGRETURN >> 16) & 0xFFu);
+    stub[7] = (uint8_t)((SYS_SIGRETURN >> 24) & 0xFFu);
+
+    vos_sigframe_t sf;
+    memset(&sf, 0, sizeof(sf));
+    sf.magic = VOS_SIGFRAME_MAGIC;
+    sf.sig = (uint32_t)sig;
+    sf.saved_mask = current_task->sig_mask;
+    memcpy(&sf.frame, frame, sizeof(*frame));
+    sf.user_esp = old_user_esp;
+    sf.user_ss = old_user_ss;
+
+    // Block this signal while inside the handler to avoid trivial recursion.
+    current_task->sig_mask |= (1u << (uint32_t)sig);
+
+    uint32_t total = 8u + (uint32_t)sizeof(sf) + (uint32_t)sizeof(stub);
+    uint32_t new_esp = old_user_esp - total;
+
+    uint32_t stack_guard_bottom = USER_STACK_TOP - (USER_STACK_PAGES + 1u) * PAGE_SIZE;
+    if (new_esp < stack_guard_bottom + PAGE_SIZE) {
+        return tasking_exit(frame, -EFAULT);
+    }
+
+    // Layout:
+    //  [new_esp+0]  ret -> stub
+    //  [new_esp+4]  sig argument
+    //  [new_esp+8]  sigframe
+    //  [..]         stub bytes
+    uint32_t stub_addr = new_esp + 8u + (uint32_t)sizeof(sf);
+    uint32_t ret = stub_addr;
+
+    uint8_t buf[256];
+    if (total > (uint32_t)sizeof(buf)) {
+        return tasking_exit(frame, -EFAULT);
+    }
+    memset(buf, 0, sizeof(buf));
+    memcpy(&buf[0], &ret, sizeof(ret));
+    uint32_t sig_u32 = (uint32_t)sig;
+    memcpy(&buf[4], &sig_u32, sizeof(sig_u32));
+    memcpy(&buf[8], &sf, sizeof(sf));
+    memcpy(&buf[8u + sizeof(sf)], stub, sizeof(stub));
+
+    if (!copy_to_user((void*)new_esp, buf, total)) {
+        return tasking_exit(frame, -EFAULT);
+    }
+
+    frame_set_user_esp(frame, new_esp);
+    frame_set_user_ss(frame, old_user_ss);
+    frame->eip = handler;
+    return frame;
 }
 
 interrupt_frame_t* tasking_sbrk(interrupt_frame_t* frame, int32_t increment) {
@@ -1094,6 +1394,13 @@ enum {
     VOS_MAP_ANONYMOUS = 0x20u,
 };
 
+// vfs_lseek whence values (match kernel/vfs_posix.c).
+enum {
+    VOS_SEEK_SET = 0,
+    VOS_SEEK_CUR = 1,
+    VOS_SEEK_END = 2,
+};
+
 static uint32_t u32_align_down(uint32_t v, uint32_t a) {
     return v & ~(a - 1u);
 }
@@ -1199,8 +1506,6 @@ static int32_t tasking_mprotect_pages(uint32_t start, uint32_t end, uint32_t pro
 }
 
 int32_t tasking_mmap(uint32_t addr_hint, uint32_t length, uint32_t prot, uint32_t flags, int32_t fd, uint32_t offset, uint32_t* out_addr) {
-    (void)offset;
-
     if (!enabled || !current_task || !current_task->user) {
         return -EINVAL;
     }
@@ -1216,12 +1521,53 @@ int32_t tasking_mmap(uint32_t addr_hint, uint32_t length, uint32_t prot, uint32_
         return -EINVAL;
     }
 
-    // Only anonymous mappings for now (enough for tcc-style heaps).
-    if ((flags & VOS_MAP_ANONYMOUS) == 0) {
-        return -ENOSYS;
-    }
-    if (fd != -1) {
-        return -EINVAL;
+    bool anonymous = (flags & VOS_MAP_ANONYMOUS) != 0;
+    vfs_handle_t* file = NULL;
+    uint32_t file_size = 0;
+    uint32_t file_off_saved = 0;
+
+    if (anonymous) {
+        if (fd != -1) {
+            return -EINVAL;
+        }
+        if (offset != 0) {
+            return -EINVAL;
+        }
+    } else {
+        if (fd < 0 || fd >= (int32_t)TASK_MAX_FDS) {
+            return -EBADF;
+        }
+        if (offset != 0) {
+            // Offset support would require passing it through the syscall ABI.
+            return -EINVAL;
+        }
+
+        uint32_t f = irq_save();
+        fd_entry_t* ent = &current_task->fds[fd];
+        if (ent->kind == FD_KIND_VFS) {
+            file = ent->handle;
+        }
+        irq_restore(f);
+
+        if (!file) {
+            return -EBADF;
+        }
+
+        vfs_stat_t st;
+        int32_t rc = vfs_fstat(file, &st);
+        if (rc < 0) {
+            return rc;
+        }
+        if (st.is_dir) {
+            return -EISDIR;
+        }
+        file_size = st.size;
+
+        // Save current file offset so mmap does not disturb it.
+        rc = vfs_lseek(file, 0, VOS_SEEK_CUR, &file_off_saved);
+        if (rc < 0) {
+            return rc;
+        }
     }
 
     uint32_t size = u32_align_up(length, PAGE_SIZE);
@@ -1300,6 +1646,52 @@ int32_t tasking_mmap(uint32_t addr_hint, uint32_t length, uint32_t prot, uint32_
 
     irq_restore(irq_flags);
     *out_addr = start;
+
+    if (!anonymous) {
+        // Eagerly copy the file contents into the mapping (MAP_SHARED behaves
+        // like MAP_PRIVATE for now; no writeback).
+        uint32_t to_copy = length;
+        if (to_copy > file_size) {
+            to_copy = file_size;
+        }
+        if (to_copy != 0) {
+            int32_t rc = vfs_lseek(file, 0, VOS_SEEK_SET, NULL);
+            if (rc < 0) {
+                (void)tasking_munmap(start, size);
+                return rc;
+            }
+
+            uint32_t copied = 0;
+            uint8_t tmp[512];
+            while (copied < to_copy) {
+                uint32_t want = to_copy - copied;
+                if (want > (uint32_t)sizeof(tmp)) {
+                    want = (uint32_t)sizeof(tmp);
+                }
+
+                uint32_t got = 0;
+                rc = vfs_read(file, tmp, want, &got);
+                if (rc < 0) {
+                    (void)vfs_lseek(file, (int32_t)file_off_saved, VOS_SEEK_SET, NULL);
+                    (void)tasking_munmap(start, size);
+                    return rc;
+                }
+                if (got == 0) {
+                    break;
+                }
+
+                if (!copy_to_user((void*)(start + copied), tmp, got)) {
+                    (void)vfs_lseek(file, (int32_t)file_off_saved, VOS_SEEK_SET, NULL);
+                    (void)tasking_munmap(start, size);
+                    return -EFAULT;
+                }
+                copied += got;
+            }
+
+            (void)vfs_lseek(file, (int32_t)file_off_saved, VOS_SEEK_SET, NULL);
+        }
+    }
+
     return 0;
 }
 
@@ -1451,6 +1843,7 @@ uint32_t tasking_spawn_user_pid(uint32_t entry, uint32_t user_esp, uint32_t* pag
     t->tty = current_task->tty;
     t->uid = current_task->uid;
     t->gid = current_task->gid;
+    fd_inherit(t, current_task);
 
     task_append(t);
     return t->id;
@@ -1667,11 +2060,8 @@ bool tasking_tty_handle_input_char(uint8_t c) {
         return false;
     }
 
-    // Approximate SIGINT using exit code 130 (128 + SIGINT).
-    (void)tasking_kill(tty_foreground_pid, 130);
-    screen_putchar('^');
-    screen_putchar('C');
-    screen_putchar('\n');
+    // Deliver SIGINT to the foreground process.
+    (void)tasking_kill(tty_foreground_pid, 2);
     return true;
 }
 
@@ -1708,6 +2098,42 @@ static uint32_t tty_encode_key(int8_t key, uint8_t seq[8]) {
         case KEY_DELETE:
             seq[0] = 0x1Bu; seq[1] = '['; seq[2] = '3'; seq[3] = '~';
             return 4;
+        case KEY_F1:
+            seq[0] = 0x1Bu; seq[1] = 'O'; seq[2] = 'P';
+            return 3;
+        case KEY_F2:
+            seq[0] = 0x1Bu; seq[1] = 'O'; seq[2] = 'Q';
+            return 3;
+        case KEY_F3:
+            seq[0] = 0x1Bu; seq[1] = 'O'; seq[2] = 'R';
+            return 3;
+        case KEY_F4:
+            seq[0] = 0x1Bu; seq[1] = 'O'; seq[2] = 'S';
+            return 3;
+        case KEY_F5:
+            seq[0] = 0x1Bu; seq[1] = '['; seq[2] = '1'; seq[3] = '5'; seq[4] = '~';
+            return 5;
+        case KEY_F6:
+            seq[0] = 0x1Bu; seq[1] = '['; seq[2] = '1'; seq[3] = '7'; seq[4] = '~';
+            return 5;
+        case KEY_F7:
+            seq[0] = 0x1Bu; seq[1] = '['; seq[2] = '1'; seq[3] = '8'; seq[4] = '~';
+            return 5;
+        case KEY_F8:
+            seq[0] = 0x1Bu; seq[1] = '['; seq[2] = '1'; seq[3] = '9'; seq[4] = '~';
+            return 5;
+        case KEY_F9:
+            seq[0] = 0x1Bu; seq[1] = '['; seq[2] = '2'; seq[3] = '0'; seq[4] = '~';
+            return 5;
+        case KEY_F10:
+            seq[0] = 0x1Bu; seq[1] = '['; seq[2] = '2'; seq[3] = '1'; seq[4] = '~';
+            return 5;
+        case KEY_F11:
+            seq[0] = 0x1Bu; seq[1] = '['; seq[2] = '2'; seq[3] = '3'; seq[4] = '~';
+            return 5;
+        case KEY_F12:
+            seq[0] = 0x1Bu; seq[1] = '['; seq[2] = '2'; seq[3] = '4'; seq[4] = '~';
+            return 5;
         default:
             seq[0] = (uint8_t)key;
             return 1;
@@ -1794,12 +2220,16 @@ static int32_t tty_read_canonical(void* dst_user, uint32_t len) {
     current_task->tty_line_ready = false;
 
     for (;;) {
-        if (tasking_current_should_exit(NULL)) {
+        if (tasking_current_should_interrupt()) {
             return -EINTR;
         }
         int8_t key = (int8_t)keyboard_getchar(); // blocks
-        if (key == 0 && tasking_current_should_exit(NULL)) {
+        if (key == 0 && tasking_current_should_interrupt()) {
             return -EINTR;
+        }
+
+        if (screen_scrollback_active()) {
+            screen_scrollback_reset();
         }
 
         if (key == '\r' && (current_task->tty.c_iflag & VOS_ICRNL) != 0) {
@@ -1914,6 +2344,10 @@ int32_t tasking_fd_read(int32_t fd, void* dst_user, uint32_t len) {
                 break;
             }
 
+            if (read == 0 && screen_scrollback_active()) {
+                screen_scrollback_reset();
+            }
+
             if (!copy_to_user(dst + read, &b, 1u)) {
                 return (read != 0) ? (int32_t)read : -EFAULT;
             }
@@ -1927,7 +2361,7 @@ int32_t tasking_fd_read(int32_t fd, void* dst_user, uint32_t len) {
             block = false;
         }
         while (read < len) {
-            if (tasking_current_should_exit(NULL)) {
+            if (tasking_current_should_interrupt()) {
                 return (read != 0) ? (int32_t)read : -EINTR;
             }
             char c = 0;
@@ -1938,10 +2372,14 @@ int32_t tasking_fd_read(int32_t fd, void* dst_user, uint32_t len) {
                     break;
                 }
             }
-            if (c == 0 && tasking_current_should_exit(NULL)) {
+            if (c == 0 && tasking_current_should_interrupt()) {
                 return (read != 0) ? (int32_t)read : -EINTR;
             }
             block = false;
+
+            if (screen_scrollback_active()) {
+                screen_scrollback_reset();
+            }
 
             if (echo) {
                 tty_echo_key((int8_t)c);
@@ -1990,7 +2428,7 @@ int32_t tasking_fd_read(int32_t fd, void* dst_user, uint32_t len) {
         uint32_t total = 0;
         uint8_t tmp[128];
         while (total < len) {
-            if (tasking_current_should_exit(NULL)) {
+            if (tasking_current_should_interrupt()) {
                 return (total != 0) ? (int32_t)total : -EINTR;
             }
             uint32_t chunk = len - total;
@@ -2098,7 +2536,7 @@ int32_t tasking_fd_write(int32_t fd, const void* src_user, uint32_t len) {
         uint8_t tmp[128];
 
         while (total < len) {
-            if (tasking_current_should_exit(NULL)) {
+            if (tasking_current_should_interrupt()) {
                 return (total != 0) ? (int32_t)total : -EINTR;
             }
             uint32_t chunk = len - total;

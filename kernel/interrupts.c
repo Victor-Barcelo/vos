@@ -156,7 +156,8 @@ interrupt_frame_t* interrupt_handler(interrupt_frame_t* frame) {
     }
 
     if (frame->int_no == 0x80) {
-        return syscall_handle(frame);
+        frame = syscall_handle(frame);
+        return tasking_deliver_pending_signals(frame);
     }
 
     if (frame->int_no >= 32 && frame->int_no < 48) {
@@ -167,10 +168,11 @@ interrupt_frame_t* interrupt_handler(interrupt_frame_t* frame) {
         }
         pic_send_eoi(irq);
         if (irq == 0) {
-            return tasking_on_timer_tick(frame);
+            frame = tasking_on_timer_tick(frame);
+            return tasking_deliver_pending_signals(frame);
         }
-        return frame;
+        return tasking_deliver_pending_signals(frame);
     }
 
-    return frame;
+    return tasking_deliver_pending_signals(frame);
 }

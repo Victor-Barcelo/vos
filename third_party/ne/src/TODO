@@ -1,0 +1,13 @@
+0) Garbage collection. Under some extreme circumstances
+   in which the number of lost characters is
+   intolerably high, ne should allocate a new block of
+   memory and move contiguously the text into it.
+
+1) Fast large copying. When one pastes a *very large*
+   clip, we should create a pool entry just for that
+   copy and copy contiguously in it, instead of
+   allocating line by line.
+
+2) Check that update_partial_line() is always given the best start column.
+
+3) Rewrite SHIFT to use direct buffer access rather than cursor movements.

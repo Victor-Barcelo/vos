@@ -2,6 +2,7 @@
 #include "serial.h"
 #include "screen.h"
 #include "keyboard.h"
+#include "mouse.h"
 #include "idt.h"
 #include "shell.h"
 #include "io.h"
@@ -268,6 +269,8 @@ void kernel_main(uint32_t magic, uint32_t* mboot_info) {
     screen_print("[OK] ");
     screen_set_color(VGA_WHITE, VGA_BLUE);
     screen_println("Keyboard initialized");
+
+    mouse_init();
 
     tasking_init();
 

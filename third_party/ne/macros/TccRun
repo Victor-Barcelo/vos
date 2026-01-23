@@ -1,0 +1,3 @@
+# VOS: run the last compiled binary from /disk/a.out.
+System "/disk/a.out"
+

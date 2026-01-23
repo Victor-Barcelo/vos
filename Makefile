@@ -74,12 +74,13 @@ USER_ASM_SOURCES = $(USER_DIR)/crt0.asm
 USER_ASM_OBJECTS = $(USER_BUILD_DIR)/crt0.o
 USER_CRTI_OBJ = $(USER_BUILD_DIR)/crti.o
 USER_CRTN_OBJ = $(USER_BUILD_DIR)/crtn.o
-USER_RUNTIME_C_SOURCES = $(USER_DIR)/newlib_syscalls.c
+USER_RUNTIME_C_SOURCES = $(USER_DIR)/newlib_syscalls.c $(USER_DIR)/env.c
 USER_RUNTIME_C_OBJECTS = $(patsubst $(USER_DIR)/%.c,$(USER_BUILD_DIR)/%.o,$(USER_RUNTIME_C_SOURCES))
 USER_RUNTIME_OBJECTS = $(USER_ASM_OBJECTS) $(USER_RUNTIME_C_OBJECTS)
 USER_RUNTIME_LIBS = $(USER_BUILD_DIR)/libvosposix.a
 
 USER_LINK_CMD = $(CC) -nostartfiles -Wl,-T,$(USER_DIR)/linker.ld -Wl,--gc-sections -o $@ $(filter-out $(USER_RUNTIME_LIBS),$^) $(USER_RUNTIME_LIBS) -lc -lgcc
+USER_LINK_CMD_MATH = $(CC) -nostartfiles -Wl,-T,$(USER_DIR)/linker.ld -Wl,--gc-sections -o $@ $(filter-out $(USER_RUNTIME_LIBS),$^) $(USER_RUNTIME_LIBS) -lc -lgcc -lm
 USER_INIT_OBJ = $(USER_BUILD_DIR)/init.o
 USER_ELIZA_OBJ = $(USER_BUILD_DIR)/eliza.o
 USER_LSH_OBJ = $(USER_BUILD_DIR)/lsh.o
@@ -94,6 +95,8 @@ USER_FONT_OBJ = $(USER_BUILD_DIR)/font.o
 USER_JSON_OBJ = $(USER_BUILD_DIR)/json.o
 USER_IMG_OBJ = $(USER_BUILD_DIR)/img.o
 USER_LOGIN_OBJ = $(USER_BUILD_DIR)/login.o
+USER_VED_OBJ = $(USER_BUILD_DIR)/ved.o
+USER_RAYCUBE_OBJ = $(USER_BUILD_DIR)/raycube.o
 USER_INIT = $(USER_BUILD_DIR)/init.elf
 USER_ELIZA = $(USER_BUILD_DIR)/eliza.elf
 USER_LSH = $(USER_BUILD_DIR)/lsh.elf
@@ -108,6 +111,10 @@ USER_FONT = $(USER_BUILD_DIR)/font.elf
 USER_JSON = $(USER_BUILD_DIR)/json.elf
 USER_IMG = $(USER_BUILD_DIR)/img.elf
 USER_LOGIN = $(USER_BUILD_DIR)/login.elf
+USER_VED = $(USER_BUILD_DIR)/ved.elf
+USER_RAYCUBE = $(USER_BUILD_DIR)/raycube.elf
+# ne editor (userland)
+USER_NE = $(USER_BUILD_DIR)/ne.elf
 # Zork I (userland)
 USER_ZORK_DIR = $(USER_DIR)/zork1c
 USER_ZORK_C_SOURCES = $(USER_ZORK_DIR)/_parser.c $(USER_ZORK_DIR)/_game.c $(USER_ZORK_DIR)/_villains.c \
@@ -116,6 +123,18 @@ USER_ZORK_OBJECTS = $(patsubst $(USER_DIR)/%.c,$(USER_BUILD_DIR)/%.o,$(USER_ZORK
 USER_ZORK = $(USER_BUILD_DIR)/zork.elf
 
 USER_LINENOISE_OBJ = $(USER_BUILD_DIR)/linenoise.o
+
+# Minimal raylib-like API (VOS framebuffer backend)
+RAYLIB_DIR = $(THIRD_PARTY_DIR)/raylib
+RAYLIB_BUILD_DIR = $(USER_BUILD_DIR)/raylib
+RAYLIB_OBJ = $(RAYLIB_BUILD_DIR)/raylib.o
+USER_RAYLIB = $(USER_BUILD_DIR)/libraylib.a
+
+# Tiny software 3D helper (wireframe cube)
+SMALL3D_DIR = $(THIRD_PARTY_DIR)/small3dlib
+SMALL3D_BUILD_DIR = $(USER_BUILD_DIR)/small3dlib
+SMALL3D_OBJ = $(SMALL3D_BUILD_DIR)/small3d.o
+USER_SMALL3D = $(USER_BUILD_DIR)/libsmall3d.a
 
 # TinyCC (native compiler inside VOS)
 TCC_DIR = $(THIRD_PARTY_DIR)/tcc
@@ -133,6 +152,55 @@ TCC_ALLOCA86_OBJ = $(TCC_RUNTIME_BUILD_DIR)/alloca86.o
 TCC_ALLOCA86_BT_OBJ = $(TCC_RUNTIME_BUILD_DIR)/alloca86-bt.o
 TCC_LIBTCC1_OBJS = $(TCC_LIBTCC1_OBJ) $(TCC_ALLOCA86_OBJ) $(TCC_ALLOCA86_BT_OBJ)
 TCC_LIBTCC1 = $(USER_BUILD_DIR)/libtcc1.a
+
+# ne (nice editor) - ANSI/termcap mode (no curses/terminfo)
+NE_DIR = $(THIRD_PARTY_DIR)/ne
+NE_SRC_DIR = $(NE_DIR)/src
+NE_BUILD_DIR = $(USER_BUILD_DIR)/ne
+
+# Build with the built-in ANSI termcap and without wide-char dependencies.
+NE_C_SOURCES = \
+	$(NE_SRC_DIR)/actions.c \
+	$(NE_SRC_DIR)/ansi.c \
+	$(NE_SRC_DIR)/autocomp.c \
+	$(NE_SRC_DIR)/buffer.c \
+	$(NE_SRC_DIR)/clips.c \
+	$(NE_SRC_DIR)/cm.c \
+	$(NE_SRC_DIR)/command.c \
+	$(NE_SRC_DIR)/display.c \
+	$(NE_SRC_DIR)/edit.c \
+	$(NE_SRC_DIR)/errors.c \
+	$(NE_SRC_DIR)/exec.c \
+	$(NE_SRC_DIR)/ext.c \
+	$(NE_SRC_DIR)/hash.c \
+	$(NE_SRC_DIR)/help.c \
+	$(NE_SRC_DIR)/input.c \
+	$(NE_SRC_DIR)/inputclass.c \
+	$(NE_SRC_DIR)/keys.c \
+	$(NE_SRC_DIR)/menu.c \
+	$(NE_SRC_DIR)/names.c \
+	$(NE_SRC_DIR)/navigation.c \
+	$(NE_SRC_DIR)/ne.c \
+	$(NE_SRC_DIR)/prefs.c \
+	$(NE_SRC_DIR)/regex.c \
+	$(NE_SRC_DIR)/request.c \
+	$(NE_SRC_DIR)/search.c \
+	$(NE_SRC_DIR)/signals.c \
+	$(NE_SRC_DIR)/streams.c \
+	$(NE_SRC_DIR)/support.c \
+	$(NE_SRC_DIR)/syn_hash.c \
+	$(NE_SRC_DIR)/syn_regex.c \
+	$(NE_SRC_DIR)/syn_utf8.c \
+	$(NE_SRC_DIR)/syn_utils.c \
+	$(NE_SRC_DIR)/syntax.c \
+	$(NE_SRC_DIR)/term.c \
+	$(NE_SRC_DIR)/termcap.c \
+	$(NE_SRC_DIR)/tparam.c \
+	$(NE_SRC_DIR)/info2cap.c \
+	$(NE_SRC_DIR)/undo.c \
+	$(NE_SRC_DIR)/utf8.c
+
+NE_OBJECTS = $(patsubst $(NE_SRC_DIR)/%.c,$(NE_BUILD_DIR)/%.o,$(NE_C_SOURCES))
 
 # sbase (portable Unix userland tools) - minimal subset
 SBASE_DIR = $(THIRD_PARTY_DIR)/sbase
@@ -194,7 +262,7 @@ USER_BASIC_C_SOURCES = $(USER_BASIC_DIR)/basic.c $(USER_BASIC_DIR)/ubasic.c $(US
 USER_BASIC_OBJECTS = $(patsubst $(USER_DIR)/%.c,$(USER_BUILD_DIR)/%.o,$(USER_BASIC_C_SOURCES))
 USER_BASIC = $(USER_BUILD_DIR)/basic.elf
 
-USER_BINS = $(USER_INIT) $(USER_ELIZA) $(USER_LSH) $(USER_SH) $(USER_UPTIME) $(USER_DATE) $(USER_SETDATE) $(USER_PS) $(USER_TOP) $(USER_NEOFETCH) $(USER_FONT) $(USER_JSON) $(USER_IMG) $(USER_LOGIN) $(USER_BASIC) $(USER_ZORK) $(USER_TCC) \
+USER_BINS = $(USER_INIT) $(USER_ELIZA) $(USER_LSH) $(USER_SH) $(USER_UPTIME) $(USER_DATE) $(USER_SETDATE) $(USER_PS) $(USER_TOP) $(USER_NEOFETCH) $(USER_FONT) $(USER_JSON) $(USER_IMG) $(USER_LOGIN) $(USER_VED) $(USER_RAYCUBE) $(USER_NE) $(USER_BASIC) $(USER_ZORK) $(USER_TCC) \
             $(SBASE_CAT) $(SBASE_ECHO) $(SBASE_BASENAME) $(SBASE_DIRNAME) $(SBASE_HEAD) $(SBASE_WC) $(SBASE_GREP) $(SBASE_YES) $(SBASE_TRUE) $(SBASE_FALSE)
 
 # QEMU defaults
@@ -257,11 +325,29 @@ $(USER_BUILD_DIR)/%.o: $(USER_DIR)/%.asm | $(USER_BUILD_DIR)
 # Compile userland C
 $(USER_BUILD_DIR)/%.o: $(USER_DIR)/%.c | $(USER_BUILD_DIR)
 	mkdir -p $(dir $@)
-	$(CC) -ffreestanding -fno-stack-protector -fno-pie -Wall -Wextra -O2 -D_POSIX_C_SOURCE=200809L -I$(USER_DIR) -I$(THIRD_PARTY_DIR)/linenoise -I$(THIRD_PARTY_DIR)/jsmn -I$(THIRD_PARTY_DIR)/sheredom_json -I$(THIRD_PARTY_DIR)/stb -c $< -o $@
+	$(CC) -ffreestanding -fno-stack-protector -fno-pie -Wall -Wextra -O2 -D_POSIX_C_SOURCE=200809L -I$(USER_DIR) -I$(THIRD_PARTY_DIR)/linenoise -I$(THIRD_PARTY_DIR)/jsmn -I$(THIRD_PARTY_DIR)/sheredom_json -I$(THIRD_PARTY_DIR)/stb -I$(RAYLIB_DIR) -I$(SMALL3D_DIR) -c $< -o $@
 
 # Vendored linenoise (userland line editing)
 $(USER_LINENOISE_OBJ): $(THIRD_PARTY_DIR)/linenoise/linenoise.c | $(USER_BUILD_DIR)
 	$(CC) -ffreestanding -fno-stack-protector -fno-pie -Wall -Wextra -O2 -D_POSIX_C_SOURCE=200809L -I$(USER_DIR) -I$(THIRD_PARTY_DIR)/linenoise -I$(THIRD_PARTY_DIR)/jsmn -I$(THIRD_PARTY_DIR)/sheredom_json -I$(THIRD_PARTY_DIR)/stb -c $< -o $@
+
+# Minimal raylib backend (static library installed into /usr/lib for TCC).
+$(RAYLIB_OBJ): $(RAYLIB_DIR)/raylib.c $(RAYLIB_DIR)/raylib.h | $(USER_BUILD_DIR)
+	mkdir -p $(dir $@)
+	$(CC) -ffreestanding -fno-stack-protector -fno-pie -Wall -Wextra -O2 -D_POSIX_C_SOURCE=200809L -I$(USER_DIR) -I$(RAYLIB_DIR) -c $< -o $@
+
+$(USER_RAYLIB): $(RAYLIB_OBJ) | $(USER_BUILD_DIR)
+	rm -f $@
+	$(AR) rcs $@ $^
+
+# Tiny software 3D helper (static library installed into /usr/lib for TCC).
+$(SMALL3D_OBJ): $(SMALL3D_DIR)/small3d.c $(SMALL3D_DIR)/small3d.h | $(USER_BUILD_DIR)
+	mkdir -p $(dir $@)
+	$(CC) -ffreestanding -fno-stack-protector -fno-pie -Wall -Wextra -O2 -D_POSIX_C_SOURCE=200809L -I$(SMALL3D_DIR) -c $< -o $@
+
+$(USER_SMALL3D): $(SMALL3D_OBJ) | $(USER_BUILD_DIR)
+	rm -f $@
+	$(AR) rcs $@ $^
 
 # Vendored tcc sources (userland native compiler)
 $(TCC_BUILD_DIR)/%.o: $(TCC_DIR)/%.c | $(USER_BUILD_DIR)
@@ -304,6 +390,22 @@ $(USER_SH): $(USER_RUNTIME_OBJECTS) $(USER_LINENOISE_OBJ) $(USER_SH_OBJ) $(USER_
 # Link userland login (auth + session)
 $(USER_LOGIN): $(USER_RUNTIME_OBJECTS) $(USER_LOGIN_OBJ) $(USER_RUNTIME_LIBS)
 	$(USER_LINK_CMD)
+
+# Link userland full-screen editor (VED)
+$(USER_VED): $(USER_RUNTIME_OBJECTS) $(USER_VED_OBJ) $(USER_RUNTIME_LIBS)
+	$(USER_LINK_CMD)
+
+# Compile ne sources
+$(NE_BUILD_DIR)/%.o: $(NE_SRC_DIR)/%.c | $(USER_BUILD_DIR)
+	mkdir -p $(dir $@)
+	$(CC) -ffreestanding -fno-stack-protector -fno-pie -Wall -Wextra -O2 -std=c99 -fno-strict-aliasing \
+		-D_POSIX_C_SOURCE=200809L -D_GNU_SOURCE -D_REGEX_LARGE_OFFSETS -DSTDC_HEADERS -DHAVE_SNPRINTF \
+		-DNE_TERMCAP -DNE_ANSI -DNOWCHAR -DGLOBALDIR=\"/usr/share/ne\" \
+		-I$(USER_DIR) -I$(NE_SRC_DIR) -c $< -o $@
+
+# Link ne editor
+$(USER_NE): $(USER_RUNTIME_OBJECTS) $(NE_OBJECTS) $(USER_RUNTIME_LIBS)
+	$(USER_LINK_CMD_MATH)
 
 # Link userland uptime/date/setdate/ps/top (static, freestanding)
 $(USER_UPTIME): $(USER_RUNTIME_OBJECTS) $(USER_UPTIME_OBJ) $(USER_RUNTIME_LIBS)
@@ -390,6 +492,10 @@ $(USER_ZORK): $(USER_RUNTIME_OBJECTS) $(USER_ZORK_OBJECTS) $(USER_RUNTIME_LIBS)
 $(USER_TCC): $(USER_RUNTIME_OBJECTS) $(TCC_OBJECTS) $(USER_RUNTIME_LIBS)
 	$(USER_LINK_CMD)
 
+# Link raycube demo (raylib + small3d)
+$(USER_RAYCUBE): $(USER_RUNTIME_OBJECTS) $(USER_RAYCUBE_OBJ) $(USER_RAYLIB) $(USER_SMALL3D) $(USER_RUNTIME_LIBS)
+	$(USER_LINK_CMD_MATH)
+
 # Compile C files
 $(BUILD_DIR)/%.o: $(KERNEL_DIR)/%.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) $< -o $@
@@ -415,6 +521,8 @@ $(ISO): $(KERNEL) $(USER_BINS) $(FAT_IMG) $(INITRAMFS_FILES) $(INITRAMFS_DIRS)
 	cp $(USER_ELIZA) $(INITRAMFS_ROOT)/bin/eliza
 	cp $(USER_LSH) $(INITRAMFS_ROOT)/bin/lsh
 	cp $(USER_SH) $(INITRAMFS_ROOT)/bin/sh
+	cp $(USER_VED) $(INITRAMFS_ROOT)/bin/ved
+	cp $(USER_NE) $(INITRAMFS_ROOT)/bin/ne
 	cp $(USER_UPTIME) $(INITRAMFS_ROOT)/bin/uptime
 	cp $(USER_DATE) $(INITRAMFS_ROOT)/bin/date
 	cp $(USER_SETDATE) $(INITRAMFS_ROOT)/bin/setdate
@@ -424,6 +532,7 @@ $(ISO): $(KERNEL) $(USER_BINS) $(FAT_IMG) $(INITRAMFS_FILES) $(INITRAMFS_DIRS)
 	cp $(USER_FONT) $(INITRAMFS_ROOT)/bin/font
 	cp $(USER_JSON) $(INITRAMFS_ROOT)/bin/json
 	cp $(USER_IMG) $(INITRAMFS_ROOT)/bin/img
+	cp $(USER_RAYCUBE) $(INITRAMFS_ROOT)/bin/raycube
 	cp $(USER_BASIC) $(INITRAMFS_ROOT)/bin/basic
 	cp $(USER_ZORK) $(INITRAMFS_ROOT)/bin/zork
 	cp $(USER_TCC) $(INITRAMFS_ROOT)/bin/tcc
@@ -460,7 +569,7 @@ $(DISK_IMG):
 	mkfs.fat -F 16 -n VOSDISK $@
 
 # Install a sysroot onto $(DISK_IMG) so /usr is populated inside VOS.
-sysroot: $(USER_RUNTIME_OBJECTS) $(USER_RUNTIME_LIBS) $(USER_CRTI_OBJ) $(USER_CRTN_OBJ) $(TCC_LIBTCC1) $(USER_TCC) $(DISK_IMG)
+sysroot: $(USER_RUNTIME_OBJECTS) $(USER_RUNTIME_LIBS) $(USER_CRTI_OBJ) $(USER_CRTN_OBJ) $(TCC_LIBTCC1) $(USER_TCC) $(USER_RAYLIB) $(USER_SMALL3D) $(DISK_IMG)
 	bash $(SYSROOT_SCRIPT) $(DISK_IMG)
 
 # Clean build artifacts

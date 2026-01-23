@@ -67,6 +67,9 @@ enum {
     SYS_SETUID = 52,
     SYS_GETGID = 53,
     SYS_SETGID = 54,
+    SYS_SIGNAL = 55,
+    SYS_SIGRETURN = 56,
+    SYS_SIGPROCMASK = 57,
 };
 
 typedef struct vos_task_info_user {
@@ -188,8 +191,8 @@ interrupt_frame_t* syscall_handle(interrupt_frame_t* frame) {
             return tasking_wait(frame, frame->ebx);
         case SYS_KILL: {
             uint32_t pid = frame->ebx;
-            int32_t code = (int32_t)frame->ecx;
-            int32_t rc = tasking_kill(pid, code);
+            int32_t sig = (int32_t)frame->ecx;
+            int32_t rc = tasking_kill(pid, sig);
             frame->eax = (uint32_t)rc;
             return frame;
         }
@@ -782,6 +785,24 @@ interrupt_frame_t* syscall_handle(interrupt_frame_t* frame) {
             frame->eax = (uint32_t)rc;
             return frame;
         }
+        case SYS_SIGNAL: {
+            int32_t sig = (int32_t)frame->ebx;
+            uint32_t handler = frame->ecx;
+            uint32_t old = 0;
+            int32_t rc = tasking_signal_set_handler(sig, handler, &old);
+            frame->eax = (uint32_t)((rc < 0) ? rc : (int32_t)old);
+            return frame;
+        }
+        case SYS_SIGPROCMASK: {
+            int32_t how = (int32_t)frame->ebx;
+            const void* set_user = (const void*)frame->ecx;
+            void* old_user = (void*)frame->edx;
+            int32_t rc = tasking_sigprocmask(how, set_user, old_user);
+            frame->eax = (uint32_t)rc;
+            return frame;
+        }
+        case SYS_SIGRETURN:
+            return tasking_sigreturn(frame);
         default:
             frame->eax = (uint32_t)-1;
             return frame;

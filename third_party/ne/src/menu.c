@@ -22,6 +22,7 @@
 #include "ne.h"
 #include "support.h"
 #include "termchar.h"
+#include "cm.h"
 
 /* The default number of menus. */
 
@@ -309,6 +310,35 @@ static int current_menu, menu_num = DEF_MENU_NUM;
 
 static menu *menus = def_menus;
 
+void draw_menu_bar(void) {
+	/* Draw the top menu bar permanently (independent of the editor row offset). */
+	const int saved_y = curY;
+	const int saved_x = curX;
+	const uint32_t saved_attr = curr_attr;
+
+	/* Physical row 0 (ANSI is 1-based). */
+	fprintf(stdout, "\x1b[1;1H");
+
+	/* High-contrast title bar: black text on white background. */
+	set_attr(BG_WHITE | FG_BLACK | BOLD);
+	fprintf(stdout, "\x1b[2K"); /* erase entire line */
+
+	fputc(' ', stdout);
+	for (int n = 0; n < menu_num; n++) {
+		if (!menus[n].text) continue;
+		fputs(menus[n].text, stdout);
+		fputc(' ', stdout);
+	}
+
+	/* Restore attribute + cursor state for the renderer. */
+	set_attr(saved_attr);
+	if (saved_y >= 0 && saved_x >= 0) {
+		move_cursor(saved_y, saved_x);
+	} else {
+		losecursor();
+	}
+}
+
 
 #ifdef NE_TEST
 void dump_menu_config(FILE *f) {
@@ -327,7 +357,7 @@ void dump_menu_config(FILE *f) {
 #endif
 
 static void draw_cur_item(const int n) {
-	move_cursor(menus[n].cur_item + 1, menus[n].xpos - (fast_gui || !standout_ok));
+	move_cursor_physical(menus[n].cur_item + 1, menus[n].xpos - (fast_gui || !standout_ok));
 	if (!fast_gui && standout_ok) output_chars(menus[n].items[menus[n].cur_item].text, NULL, menus[n].width - (cursor_on_off_ok ? 0 : 1), true);
 }
 
@@ -336,7 +366,7 @@ static void undraw_cur_item(const int n) {
 	if (!fast_gui && standout_ok)  {
 		set_attr(0);
 		standout_on();
-		move_cursor(menus[n].cur_item + 1, menus[n].xpos);
+		move_cursor_physical(menus[n].cur_item + 1, menus[n].xpos);
 		output_chars(menus[n].items[menus[n].cur_item].text, NULL, menus[n].width - (cursor_on_off_ok ? 0 : 1), true);
 		standout_off();
 	}
@@ -350,15 +380,17 @@ static void draw_menu(const int n) {
 
 	if (menus[n].cur_item + 1 + (standout_ok == 0) >= ne_lines - 1) menus[n].cur_item = 0;
 
+#ifndef VOS_NE_MENUBAR
 	move_cursor(0, menus[n].xpos);
 	set_attr(0);
 	output_string(menus[n].text, true);
+#endif
 
 	int i;
 	for(i = 0; i < menus[n].item_num; i++) {
 		if (i + 1 + (standout_ok == 0) >= ne_lines - 1) break;
 
-		move_cursor(i + 1, menus[n].xpos - 1);
+		move_cursor_physical(i + 1, menus[n].xpos - 1);
 
 		if (!standout_ok) output_string("|", false);
 
@@ -372,7 +404,7 @@ static void draw_menu(const int n) {
 	}
 
 	if (!standout_ok) {
-		move_cursor(i + 1, menus[n].xpos - 1);
+		move_cursor_physical(i + 1, menus[n].xpos - 1);
 		for(i = 0; i < menus[n].width + (standout_ok ? MENU_EXTRA : MENU_NOSTANDOUT_EXTRA); i++) output_string("-", false);
 	}
 
@@ -384,17 +416,26 @@ static void draw_menu(const int n) {
 screen via output_line_desc(). */
 
 static void undraw_menu(const int n) {
+#ifndef VOS_NE_MENUBAR
 	set_attr(0);
 	standout_on();
 	move_cursor(0, menus[n].xpos);
 	output_string(menus[n].text, true);
 	standout_off();
+#endif
 
 	line_desc *ld = cur_buffer->top_line_desc;
-	for(int i = 1; i <= menus[n].item_num + (standout_ok == 0); i++) {
+	const int max_rows = menus[n].item_num + (standout_ok == 0);
+	for(int i = 0; i < max_rows; i++) {
 		if (i >= ne_lines - 1) break;
-		if (ld->ld_node.next->next) {
-			ld = (line_desc *)ld->ld_node.next;
+		if (i != 0) {
+			if (ld->ld_node.next->next) {
+				ld = (line_desc *)ld->ld_node.next;
+			} else {
+				ld = NULL;
+			}
+		}
+		if (ld) {
 			if (cur_buffer->syn) parse(cur_buffer->syn, ld, ld->highlight_state, cur_buffer->encoding == ENC_UTF8);
 			output_line_desc(i, menus[n].xpos - 1, ld, cur_buffer->win_x + menus[n].xpos - 1, menus[n].width + (standout_ok ? MENU_EXTRA : MENU_NOSTANDOUT_EXTRA), cur_buffer->opt.tab_size, false, cur_buffer->encoding == ENC_UTF8, cur_buffer->syn ? attr_buf : NULL, NULL, 0);
 		}
@@ -481,6 +522,12 @@ static void item_search(const int c) {
 
 
 static void draw_first_menu(void) {
+#ifdef VOS_NE_MENUBAR
+	/* The VOS build keeps a persistent menu bar on the top physical row. */
+	draw_menu_bar();
+	set_attr(0);
+	if (!fast_gui && standout_ok) cursor_off();
+#else
 	move_cursor(0, 0);
 
 	set_attr(0);
@@ -498,6 +545,7 @@ static void draw_first_menu(void) {
 	}
 
 	if (standout_ok) standout_off();
+#endif
 
 	if (menus[current_menu].xpos >= ne_columns) current_menu = 0;
 	draw_menu(current_menu);
@@ -1046,5 +1094,3 @@ void get_menu_configuration(const char * menu_conf_name) {
 	get_menu_conf(menu_conf_name, exists_prefs_dir, USER_PREFS);
 	if (menus == def_menus) get_menu_conf(menu_conf_name, exists_gprefs_dir, GLOBAL_PREFS);
 }
-
-

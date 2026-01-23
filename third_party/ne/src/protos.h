@@ -166,6 +166,7 @@ int search_menu_item(int n, int c);
 void reset_status_bar(void);
 char *gen_flag_string(const buffer *b);
 void draw_status_bar(void);
+void draw_menu_bar(void);
 int print_error(int error_num);
 void print_info(int info_num);
 void alert(void);

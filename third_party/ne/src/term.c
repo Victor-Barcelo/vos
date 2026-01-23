@@ -89,6 +89,13 @@ int ne_lines;
 int ne_columns;
 int ne_no_color_video;
 
+#ifdef VOS_NE_MENUBAR
+// Reserve the top physical row for a persistent menu bar.
+static int vos_row_offset = 1;
+#else
+static int vos_row_offset = 0;
+#endif
+
 char *ne_column_address;
 char *ne_row_address;
 
@@ -636,10 +643,20 @@ void cursor_off (void) {
 /* Move to absolute position, specified origin 0 */
 
 void move_cursor (const int row, const int col) {
-	if (curY == row && curX == col) return;
 	if (!ne_move_standout_mode) turn_off_standout();
 	if (!ne_move_insert_mode) turn_off_insert ();
-	cmgoto (row, col);
+
+	const int phys_row = row + vos_row_offset;
+	printf("\x1b[%d;%dH", phys_row + 1, col + 1);
+	cmat(row, col);
+}
+
+void move_cursor_physical(const int row, const int col) {
+	if (!ne_move_standout_mode) turn_off_standout();
+	if (!ne_move_insert_mode) turn_off_insert ();
+
+	printf("\x1b[%d;%dH", row + 1, col + 1);
+	cmat(row - vos_row_offset, col);
 }
 
 
@@ -1044,8 +1061,17 @@ int ttysize(void) {
 	const int c = strtol(getenv("COLUMNS"), NULL, 10);
 #endif
 	D(fprintf(stderr,"ttysize:...size is (%d,%d)\n", l, c);)
-	if (((ne_lines != l) || (ne_columns != c)) && l > 0 && c > 0) {
-		ScreenRows = ne_lines    = l;
+
+	int reserve_top = 0;
+#ifdef VOS_NE_MENUBAR
+	if (l > 2) reserve_top = 1;
+#endif
+
+	const int ll = l - reserve_top;
+
+	if (((ne_lines != ll) || (ne_columns != c)) && ll > 0 && c > 0) {
+		vos_row_offset = reserve_top;
+		ScreenRows = ne_lines    = ll;
 		ScreenCols = ne_columns  = c;
 		set_terminal_window(ne_lines - 1);
 		if (scroll_region_ok) set_scroll_region(0, ne_lines - 1);

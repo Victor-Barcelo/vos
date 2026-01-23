@@ -44,8 +44,7 @@ static int vos_handle_mouse_event(int button_code, int x1, int y1, bool press) {
 		return (button_code & 1) ? (-NE_KEY_NPAGE - 1) : (-NE_KEY_PPAGE - 1);
 	}
 
-	/* Ignore motion events and non-left buttons for now. */
-	if ((button_code & 0x20) != 0) return INVALID_CHAR;
+	/* Ignore non-left buttons for now. */
 	if ((button_code & 3) != 0) return INVALID_CHAR;
 
 	if (!cur_buffer) {
@@ -53,8 +52,14 @@ static int vos_handle_mouse_event(int button_code, int x1, int y1, bool press) {
 	}
 
 	int col = x1 - 1;
-	int row = y1 - 1;
-	if (row < 0 || row >= ne_lines - 1) {
+	int screen_row0 = y1 - 1;
+
+	/* Row 0 is the menu bar; last row is reserved for status/messages. */
+	if (screen_row0 <= 0) {
+		return INVALID_CHAR;
+	}
+	int row = screen_row0 - 1;
+	if (row >= ne_lines - 1) {
 		return INVALID_CHAR;
 	}
 	if (col < 0) col = 0;

@@ -400,7 +400,7 @@ $(NE_BUILD_DIR)/%.o: $(NE_SRC_DIR)/%.c | $(USER_BUILD_DIR)
 	mkdir -p $(dir $@)
 	$(CC) -ffreestanding -fno-stack-protector -fno-pie -Wall -Wextra -O2 -std=c99 -fno-strict-aliasing \
 		-D_POSIX_C_SOURCE=200809L -D_GNU_SOURCE -D_REGEX_LARGE_OFFSETS -DSTDC_HEADERS -DHAVE_SNPRINTF \
-		-DNE_TERMCAP -DNE_ANSI -DNOWCHAR -DGLOBALDIR=\"/usr/share/ne\" \
+		-DNE_TERMCAP -DNE_ANSI -DNOWCHAR -DVOS_NE_MENUBAR -DGLOBALDIR=\"/usr/share/ne\" \
 		-I$(USER_DIR) -I$(NE_SRC_DIR) -c $< -o $@
 
 # Link ne editor

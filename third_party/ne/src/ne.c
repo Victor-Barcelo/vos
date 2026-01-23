@@ -489,7 +489,9 @@ int main(int argc, char **argv) {
 	else if (first_file) {
 		/* If there is no file to load, and no macro to execute, we display
 		   the "NO WARRANTY" message. */
+#ifndef VOS_NE_MENUBAR
 		about();
+#endif
 	}
 
 	while(true) {
@@ -501,6 +503,9 @@ int main(int argc, char **argv) {
 			if (cur_buffer->opt.automatch) automatch_bracket(cur_buffer, true);
 		}
 
+#ifdef VOS_NE_MENUBAR
+		draw_menu_bar();
+#endif
 		draw_status_bar();
 		move_cursor(cur_buffer->cur_y, cur_buffer->cur_x);
 

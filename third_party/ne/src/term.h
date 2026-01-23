@@ -36,6 +36,7 @@ void underline_off(void);
 void cursor_on(void);
 void cursor_off(void);
 void move_cursor(int row, int col);
+void move_cursor_physical(int row, int col);
 void clear_end_of_line(int first_unused_hpos);
 void clear_to_eol(void);
 void clear_to_end(void);

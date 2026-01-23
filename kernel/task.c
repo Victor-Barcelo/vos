@@ -10,6 +10,7 @@
 #include "usercopy.h"
 #include "kerrno.h"
 #include "screen.h"
+#include "serial.h"
 #include "vfs.h"
 #include "keyboard.h"
 
@@ -2295,6 +2296,64 @@ static int32_t tty_read_canonical(void* dst_user, uint32_t len) {
     return tty_deliver_canon_line(dst_user, len);
 }
 
+static bool tty_try_getchar_any(char* out) {
+    if (!out) {
+        return false;
+    }
+    if (keyboard_try_getchar(out)) {
+        return true;
+    }
+    if (serial_try_read_char(out)) {
+        return true;
+    }
+    return false;
+}
+
+// Wait up to timeout_ticks for a character from the keyboard buffer or COM1.
+// Returns true if a character was read into *out, false on timeout.
+static bool tty_wait_getchar_timeout(uint32_t timeout_ticks, char* out) {
+    if (!out) {
+        return false;
+    }
+
+    uint32_t hz = timer_get_hz();
+    uint32_t start = timer_get_ticks();
+    uint32_t deadline = start + timeout_ticks;
+
+    bool were_enabled = irq_are_enabled();
+    if (!were_enabled) {
+        sti();
+    }
+
+    for (;;) {
+        if (tty_try_getchar_any(out)) {
+            if (!were_enabled) {
+                cli();
+            }
+            return true;
+        }
+        if (tasking_current_should_interrupt()) {
+            if (!were_enabled) {
+                cli();
+            }
+            return false;
+        }
+        if (timeout_ticks == 0 || hz == 0) {
+            if (!were_enabled) {
+                cli();
+            }
+            return false;
+        }
+        if ((int32_t)(timer_get_ticks() - deadline) >= 0) {
+            if (!were_enabled) {
+                cli();
+            }
+            return false;
+        }
+        hlt();
+    }
+}
+
 int32_t tasking_fd_read(int32_t fd, void* dst_user, uint32_t len) {
     if (!current_task || !dst_user) {
         return -EFAULT;
@@ -2354,11 +2413,24 @@ int32_t tasking_fd_read(int32_t fd, void* dst_user, uint32_t len) {
             read++;
         }
 
-        bool block = (read == 0);
-        // Support the most common non-canonical "polling" mode:
-        // VMIN=0, VTIME=0 => return immediately if no input is available.
-        if (vmin == 0 && vtime == 0) {
-            block = false;
+        // Non-canonical timeout semantics (partial, but enough for ports like ne):
+        // - VMIN=0, VTIME=0: non-blocking poll
+        // - VMIN=0, VTIME>0: wait up to VTIME*0.1s for the first byte, then return
+        const bool poll_mode = (vmin == 0 && vtime == 0);
+        const bool first_byte_timeout = (vmin == 0 && vtime != 0);
+        bool block = (read == 0) && !poll_mode && !first_byte_timeout;
+
+        uint32_t first_timeout_ticks = 0;
+        if (first_byte_timeout) {
+            uint32_t hz = timer_get_hz();
+            if (hz != 0) {
+                // VTIME is in tenths of a second.
+                // Round up so small timeouts still wait at least one tick.
+                first_timeout_ticks = ((uint32_t)vtime * hz + 9u) / 10u;
+                if (first_timeout_ticks == 0) {
+                    first_timeout_ticks = 1;
+                }
+            }
         }
         while (read < len) {
             if (tasking_current_should_interrupt()) {
@@ -2366,9 +2438,20 @@ int32_t tasking_fd_read(int32_t fd, void* dst_user, uint32_t len) {
             }
             char c = 0;
             if (block) {
-                c = keyboard_getchar(); // guarantees progress
+                c = keyboard_getchar(); // guarantees progress (also checks serial)
+            } else if (poll_mode || read != 0) {
+                if (!tty_try_getchar_any(&c)) {
+                    break;
+                }
+            } else if (first_byte_timeout) {
+                if (!tty_wait_getchar_timeout(first_timeout_ticks, &c)) {
+                    if (tasking_current_should_interrupt()) {
+                        return -EINTR;
+                    }
+                    break;
+                }
             } else {
-                if (!keyboard_try_getchar(&c)) {
+                if (!tty_try_getchar_any(&c)) {
                     break;
                 }
             }

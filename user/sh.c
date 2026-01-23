@@ -30,6 +30,85 @@ typedef struct vos_stat {
     unsigned short wdate;
 } vos_stat_t;
 
+static char g_username[32] = "user";
+static char g_home[128] = "/";
+
+static void trim_newline(char* s) {
+    if (!s) return;
+    size_t n = strlen(s);
+    while (n > 0 && (s[n - 1u] == '\n' || s[n - 1u] == '\r')) {
+        s[n - 1u] = '\0';
+        n--;
+    }
+}
+
+static int parse_u32(const char* s, unsigned int* out) {
+    if (!out) return -1;
+    *out = 0;
+    if (!s || *s == '\0') return -1;
+    char* end = NULL;
+    unsigned long v = strtoul(s, &end, 10);
+    if (!end || end == s) return -1;
+    *out = (unsigned int)v;
+    return 0;
+}
+
+static void resolve_user_identity(void) {
+    uid_t uid = getuid();
+    if (uid == 0) {
+        strncpy(g_username, "root", sizeof(g_username) - 1u);
+        g_username[sizeof(g_username) - 1u] = '\0';
+        strncpy(g_home, "/home/root", sizeof(g_home) - 1u);
+        g_home[sizeof(g_home) - 1u] = '\0';
+    }
+
+    FILE* f = fopen("/etc/passwd", "r");
+    if (!f) {
+        return;
+    }
+
+    char line[256];
+    while (fgets(line, sizeof(line), f)) {
+        trim_newline(line);
+
+        char* p = line;
+        while (*p == ' ' || *p == '\t') p++;
+        if (*p == '\0' || *p == '#') continue;
+
+        // name:pass:uid:gid:home:shell
+        char* fields[6] = {0};
+        int nf = 0;
+        char* q = p;
+        for (; nf < 6; nf++) {
+            fields[nf] = q;
+            char* c = strchr(q, ':');
+            if (!c) break;
+            *c = '\0';
+            q = c + 1;
+        }
+
+        if (!fields[0] || fields[0][0] == '\0') continue;
+        if (!fields[2] || fields[2][0] == '\0') continue;
+
+        unsigned int file_uid = 0;
+        if (parse_u32(fields[2], &file_uid) != 0) continue;
+        if ((uid_t)file_uid != uid) continue;
+
+        strncpy(g_username, fields[0], sizeof(g_username) - 1u);
+        g_username[sizeof(g_username) - 1u] = '\0';
+
+        if (fields[4] && fields[4][0] != '\0') {
+            strncpy(g_home, fields[4], sizeof(g_home) - 1u);
+            g_home[sizeof(g_home) - 1u] = '\0';
+        } else {
+            snprintf(g_home, sizeof(g_home), "/home/%s", g_username);
+        }
+        break;
+    }
+
+    fclose(f);
+}
+
 static int sys_readdir(int fd, vos_dirent_t* out) {
     int ret;
     __asm__ volatile (
@@ -143,6 +222,44 @@ static void cmd_help(void) {
     for (int i = 0; i < count; i++) {
         printf("  %s\n", names[i]);
     }
+
+    puts("");
+    puts("\x1b[36;1mPrograms in /usr/bin:\x1b[0m");
+
+    fd = open("/usr/bin", O_RDONLY | O_DIRECTORY);
+    if (fd < 0) {
+        // /usr is optional (disk-backed).
+        return;
+    }
+
+    count = 0;
+    while (count < (int)(sizeof(names) / sizeof(names[0])) && sys_readdir(fd, &de) > 0) {
+        if (de.name[0] == '\0') continue;
+        if (de.is_dir) continue;
+        strncpy(names[count], de.name, sizeof(names[count]) - 1u);
+        names[count][sizeof(names[count]) - 1u] = '\0';
+        count++;
+    }
+    close(fd);
+
+    for (int i = 1; i < count; i++) {
+        char tmp2[64];
+        strncpy(tmp2, names[i], sizeof(tmp2));
+        tmp2[sizeof(tmp2) - 1u] = '\0';
+
+        int j = i;
+        while (j > 0 && strcmp(names[j - 1], tmp2) > 0) {
+            strncpy(names[j], names[j - 1], sizeof(names[j]));
+            names[j][sizeof(names[j]) - 1u] = '\0';
+            j--;
+        }
+        strncpy(names[j], tmp2, sizeof(names[j]));
+        names[j][sizeof(names[j]) - 1u] = '\0';
+    }
+
+    for (int i = 0; i < count; i++) {
+        printf("  %s\n", names[i]);
+    }
 }
 
 static void cmd_pwd(void) {
@@ -155,7 +272,16 @@ static void cmd_pwd(void) {
 }
 
 static void cmd_cd(int argc, char** argv) {
-    const char* dir = (argc >= 2) ? argv[1] : "/";
+    const char* dir = (argc >= 2) ? argv[1] : g_home;
+    char tmp[256];
+    if (dir && dir[0] == '~') {
+        if (dir[1] == '\0') {
+            dir = g_home;
+        } else if (dir[1] == '/') {
+            snprintf(tmp, sizeof(tmp), "%s%s", g_home, dir + 1);
+            dir = tmp;
+        }
+    }
     if (chdir(dir) < 0) {
         print_errno("cd");
     }
@@ -585,16 +711,22 @@ static void complete_first_word(const char* word, linenoiseCompletions* lc) {
         }
     }
 
-    // Complete executables from /bin.
+    // Complete executables from /bin and /usr/bin.
     const char* prefix = word;
     const char* base = "";
+    const char* dir = "/bin";
     char tmp[128];
     if (strncmp(word, "/bin/", 5) == 0) {
         prefix = word + 5;
         base = "/bin/";
+        dir = "/bin";
+    } else if (strncmp(word, "/usr/bin/", 9) == 0) {
+        prefix = word + 9;
+        base = "/usr/bin/";
+        dir = "/usr/bin";
     }
 
-    int fd = open("/bin", O_RDONLY | O_DIRECTORY);
+    int fd = open(dir, O_RDONLY | O_DIRECTORY);
     if (fd >= 0) {
         vos_dirent_t de;
         while (sys_readdir(fd, &de) > 0) {
@@ -605,6 +737,21 @@ static void complete_first_word(const char* word, linenoiseCompletions* lc) {
             linenoiseAddCompletion(lc, tmp);
         }
         close(fd);
+    }
+
+    // If completing a bare word, also look in /usr/bin.
+    if (base[0] == '\0') {
+        fd = open("/usr/bin", O_RDONLY | O_DIRECTORY);
+        if (fd >= 0) {
+            vos_dirent_t de;
+            while (sys_readdir(fd, &de) > 0) {
+                if (de.is_dir) continue;
+                if (de.name[0] == '\0') continue;
+                if (strncmp(de.name, prefix, strlen(prefix)) != 0) continue;
+                linenoiseAddCompletion(lc, de.name);
+            }
+            close(fd);
+        }
     }
 }
 
@@ -642,6 +789,12 @@ static int run_external(int argc, char** argv) {
         sargv[0] = exec_path;
         pid = sys_spawn(exec_path, sargv, (uint32_t)argc);
     }
+    if (pid < 0 && strchr(cmd, '/') == NULL) {
+        snprintf(pathbuf, sizeof(pathbuf), "/usr/bin/%s", cmd);
+        exec_path = pathbuf;
+        sargv[0] = exec_path;
+        pid = sys_spawn(exec_path, sargv, (uint32_t)argc);
+    }
 
     if (pid < 0) {
         errno = -pid;
@@ -672,14 +825,26 @@ int main(int argc, char** argv) {
 
     puts("\x1b[36;1mVOS user shell\x1b[0m (linenoise). Type '\x1b[33;1mhelp\x1b[0m' for help.");
 
+    resolve_user_identity();
+
     char cwd[256];
     for (;;) {
         if (!getcwd(cwd, sizeof(cwd))) {
             strcpy(cwd, "/");
         }
 
+        char display_cwd[256];
+        const char* shown = cwd;
+        if (g_home[0] == '/' && g_home[1] != '\0') {
+            size_t hl = strlen(g_home);
+            if (strncmp(cwd, g_home, hl) == 0 && (cwd[hl] == '\0' || cwd[hl] == '/')) {
+                snprintf(display_cwd, sizeof(display_cwd), "~%s", cwd + hl);
+                shown = display_cwd;
+            }
+        }
+
         char prompt[320];
-        snprintf(prompt, sizeof(prompt), "vos:%s$ ", cwd);
+        snprintf(prompt, sizeof(prompt), "%s@vos:%s$ ", g_username, shown);
 
         char* line = linenoise(prompt);
         if (!line) {

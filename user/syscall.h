@@ -83,6 +83,10 @@ enum {
     SYS_MMAP = 48,
     SYS_MUNMAP = 49,
     SYS_MPROTECT = 50,
+    SYS_GETUID = 51,
+    SYS_SETUID = 52,
+    SYS_GETGID = 53,
+    SYS_SETGID = 54,
 };
 
 static inline int sys_write(int fd, const char* buf, uint32_t len) {
@@ -443,6 +447,50 @@ static inline int sys_mprotect(void* addr, uint32_t length, uint32_t prot) {
         "int $0x80"
         : "=a"(ret)
         : "a"(SYS_MPROTECT), "b"(addr), "c"(length), "d"(prot)
+        : "memory"
+    );
+    return ret;
+}
+
+static inline uint32_t sys_getuid(void) {
+    uint32_t ret;
+    __asm__ volatile (
+        "int $0x80"
+        : "=a"(ret)
+        : "a"(SYS_GETUID)
+        : "memory"
+    );
+    return ret;
+}
+
+static inline uint32_t sys_getgid(void) {
+    uint32_t ret;
+    __asm__ volatile (
+        "int $0x80"
+        : "=a"(ret)
+        : "a"(SYS_GETGID)
+        : "memory"
+    );
+    return ret;
+}
+
+static inline int sys_setuid(uint32_t uid) {
+    int ret;
+    __asm__ volatile (
+        "int $0x80"
+        : "=a"(ret)
+        : "a"(SYS_SETUID), "b"(uid)
+        : "memory"
+    );
+    return ret;
+}
+
+static inline int sys_setgid(uint32_t gid) {
+    int ret;
+    __asm__ volatile (
+        "int $0x80"
+        : "=a"(ret)
+        : "a"(SYS_SETGID), "b"(gid)
         : "memory"
     );
     return ret;

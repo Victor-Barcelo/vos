@@ -137,6 +137,10 @@ enum {
     SYS_MMAP = 48,
     SYS_MUNMAP = 49,
     SYS_MPROTECT = 50,
+    SYS_GETUID = 51,
+    SYS_SETUID = 52,
+    SYS_GETGID = 53,
+    SYS_SETGID = 54,
 };
 
 typedef struct vos_stat {
@@ -503,6 +507,50 @@ static inline int vos_sys_kill(int pid, int sig) {
         "int $0x80"
         : "=a"(ret)
         : "a"(SYS_KILL), "b"(pid), "c"(sig)
+        : "memory"
+    );
+    return ret;
+}
+
+static inline int vos_sys_getuid(void) {
+    int ret;
+    __asm__ volatile (
+        "int $0x80"
+        : "=a"(ret)
+        : "a"(SYS_GETUID)
+        : "memory"
+    );
+    return ret;
+}
+
+static inline int vos_sys_getgid(void) {
+    int ret;
+    __asm__ volatile (
+        "int $0x80"
+        : "=a"(ret)
+        : "a"(SYS_GETGID)
+        : "memory"
+    );
+    return ret;
+}
+
+static inline int vos_sys_setuid(int uid) {
+    int ret;
+    __asm__ volatile (
+        "int $0x80"
+        : "=a"(ret)
+        : "a"(SYS_SETUID), "b"(uid)
+        : "memory"
+    );
+    return ret;
+}
+
+static inline int vos_sys_setgid(int gid) {
+    int ret;
+    __asm__ volatile (
+        "int $0x80"
+        : "=a"(ret)
+        : "a"(SYS_SETGID), "b"(gid)
         : "memory"
     );
     return ret;
@@ -1130,6 +1178,50 @@ int kill(int pid, int sig) {
 
 int getpid(void) {
     return vos_sys_getpid();
+}
+
+uid_t getuid(void) {
+    int rc = vos_sys_getuid();
+    if (rc < 0) {
+        errno = -rc;
+        return (uid_t)-1;
+    }
+    return (uid_t)rc;
+}
+
+gid_t getgid(void) {
+    int rc = vos_sys_getgid();
+    if (rc < 0) {
+        errno = -rc;
+        return (gid_t)-1;
+    }
+    return (gid_t)rc;
+}
+
+uid_t geteuid(void) {
+    return getuid();
+}
+
+gid_t getegid(void) {
+    return getgid();
+}
+
+int setuid(uid_t uid) {
+    int rc = vos_sys_setuid((int)uid);
+    if (rc < 0) {
+        errno = -rc;
+        return -1;
+    }
+    return 0;
+}
+
+int setgid(gid_t gid) {
+    int rc = vos_sys_setgid((int)gid);
+    if (rc < 0) {
+        errno = -rc;
+        return -1;
+    }
+    return 0;
 }
 
 mode_t umask(mode_t mask) {

@@ -89,10 +89,8 @@ fi
 
 mkdir_usr() {
   local dir="$1"
-  if mdu -i "$DISK_IMG" "$dir" >/dev/null 2>&1; then
-    return 0
-  fi
-  mmd -i "$DISK_IMG" "$dir" >/dev/null 2>&1 || true
+  # Avoid mtools' interactive clash prompts in non-interactive installs.
+  mmd -D s -i "$DISK_IMG" "$dir" >/dev/null 2>&1 || true
 }
 
 copy_one() {
@@ -116,6 +114,14 @@ mkdir_usr ::/usr
 mkdir_usr ::/usr/include
 mkdir_usr ::/usr/lib
 mkdir_usr ::/usr/bin
+
+# Linux-like top-level layout (stored on disk; exposed via VFS aliases).
+mkdir_usr ::/etc
+mkdir_usr ::/home
+mkdir_usr ::/home/root
+mkdir_usr ::/home/victor
+mkdir_usr ::/var
+mkdir_usr ::/var/log
 
 mkdir_usr ::/usr/lib/gcc
 mkdir_usr ::/usr/lib/gcc/i686-elf
@@ -162,5 +168,16 @@ copy_one "$VLINKER" ::/usr/lib/vos.ld
 copy_one "$VTCC" ::/usr/bin/tcc
 copy_one "$VTCC1" ::/usr/lib/tcc/libtcc1.a
 copy_tree "$VTCC_INC" ::/usr/lib/tcc/include
+
+if ! img_has_file ::/etc/passwd; then
+  echo "  seeding /etc/passwd"
+  PASSWD_TMP="$(mktemp)"
+  cat >"$PASSWD_TMP" <<'EOF'
+root:root:0:0:/home/root:/bin/sh
+victor::1000:1000:/home/victor:/bin/sh
+EOF
+  mcopy -i "$DISK_IMG" -o "$PASSWD_TMP" ::/etc/passwd >/dev/null
+  rm -f "$PASSWD_TMP"
+fi
 
 echo "Done."

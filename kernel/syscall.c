@@ -63,6 +63,10 @@ enum {
     SYS_MMAP = 48,
     SYS_MUNMAP = 49,
     SYS_MPROTECT = 50,
+    SYS_GETUID = 51,
+    SYS_SETUID = 52,
+    SYS_GETGID = 53,
+    SYS_SETGID = 54,
 };
 
 typedef struct vos_task_info_user {
@@ -757,6 +761,24 @@ interrupt_frame_t* syscall_handle(interrupt_frame_t* frame) {
             uint32_t length = frame->ecx;
             uint32_t prot = frame->edx;
             int32_t rc = tasking_mprotect(addr, length, prot);
+            frame->eax = (uint32_t)rc;
+            return frame;
+        }
+        case SYS_GETUID:
+            frame->eax = tasking_getuid();
+            return frame;
+        case SYS_SETUID: {
+            uint32_t uid = frame->ebx;
+            int32_t rc = tasking_setuid(uid);
+            frame->eax = (uint32_t)rc;
+            return frame;
+        }
+        case SYS_GETGID:
+            frame->eax = tasking_getgid();
+            return frame;
+        case SYS_SETGID: {
+            uint32_t gid = frame->ebx;
+            int32_t rc = tasking_setgid(gid);
             frame->eax = (uint32_t)rc;
             return frame;
         }

@@ -20,7 +20,7 @@
 #define TASK_MAX_FDS 64
 
 // User virtual address layout (must match kernel/elf.c and kernel/paging.c).
-#define USER_BASE  0x01000000u
+#define USER_BASE  0x02000000u
 #define USER_LIMIT 0xC0000000u
 
 // Keep the user stack high to leave plenty of room for heap + mmaps.
@@ -120,6 +120,8 @@ typedef struct task {
     uint32_t kstack_top;     // top of kernel stack (for TSS.esp0)
     uint32_t* page_directory;
     bool user;
+    uint32_t uid;
+    uint32_t gid;
     uint32_t user_brk;
     uint32_t user_brk_min;
     vm_area_t* vm_areas;
@@ -579,6 +581,50 @@ static void task_append(task_t* t) {
 
 uint32_t tasking_current_pid(void) {
     return current_task ? current_task->id : 0;
+}
+
+uint32_t tasking_getuid(void) {
+    uint32_t irq_flags = irq_save();
+    uint32_t uid = current_task ? current_task->uid : 0u;
+    irq_restore(irq_flags);
+    return uid;
+}
+
+uint32_t tasking_getgid(void) {
+    uint32_t irq_flags = irq_save();
+    uint32_t gid = current_task ? current_task->gid : 0u;
+    irq_restore(irq_flags);
+    return gid;
+}
+
+int32_t tasking_setuid(uint32_t uid) {
+    uint32_t irq_flags = irq_save();
+    if (!current_task) {
+        irq_restore(irq_flags);
+        return -EINVAL;
+    }
+    if (current_task->uid != 0u && uid != current_task->uid) {
+        irq_restore(irq_flags);
+        return -EPERM;
+    }
+    current_task->uid = uid;
+    irq_restore(irq_flags);
+    return 0;
+}
+
+int32_t tasking_setgid(uint32_t gid) {
+    uint32_t irq_flags = irq_save();
+    if (!current_task) {
+        irq_restore(irq_flags);
+        return -EINVAL;
+    }
+    if (current_task->uid != 0u && gid != current_task->gid) {
+        irq_restore(irq_flags);
+        return -EPERM;
+    }
+    current_task->gid = gid;
+    irq_restore(irq_flags);
+    return 0;
 }
 
 bool tasking_current_should_exit(int32_t* out_exit_code) {
@@ -1403,6 +1449,8 @@ uint32_t tasking_spawn_user_pid(uint32_t entry, uint32_t user_esp, uint32_t* pag
     strncpy(t->cwd, current_task->cwd, sizeof(t->cwd) - 1u);
     t->cwd[sizeof(t->cwd) - 1u] = '\0';
     t->tty = current_task->tty;
+    t->uid = current_task->uid;
+    t->gid = current_task->gid;
 
     task_append(t);
     return t->id;

@@ -20,7 +20,7 @@
 #define PF_W 0x2u
 #define PF_R 0x4u
 
-#define USER_BASE 0x01000000u
+#define USER_BASE 0x02000000u
 #define USER_LIMIT 0xC0000000u
 
 // Place the initial user stack high enough to leave plenty of virtual space

@@ -2,7 +2,7 @@ ENTRY(_start)
 
 SECTIONS
 {
-    . = 0x01000000;
+    . = 0x02000000;
 
     .text : ALIGN(4K)
     {
@@ -31,4 +31,3 @@ SECTIONS
         *(.eh_frame)
     }
 }
-

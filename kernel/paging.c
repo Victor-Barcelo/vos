@@ -7,7 +7,7 @@ static uint32_t* page_directory = NULL;
 static uint32_t* kernel_directory = NULL;
 
 // VOS user address space layout.
-static const uint32_t USER_BASE = 0x01000000u;
+static const uint32_t USER_BASE = 0x02000000u;
 static const uint32_t USER_LIMIT = 0xC0000000u;
 
 static inline uint32_t page_align_down(uint32_t addr) {
@@ -153,7 +153,7 @@ void paging_init(const multiboot_info_t* mbi) {
     // is enabled (before IDT is set up).
     uint32_t mapped_end = 0;
     for (;;) {
-        uint32_t target_end = 16u * 1024u * 1024u;
+        uint32_t target_end = USER_BASE;
 
         uint32_t early_end = early_alloc_current();
         if (early_end > target_end) {
@@ -281,7 +281,7 @@ bool paging_user_accessible_range(uint32_t vaddr, uint32_t size, bool write) {
     }
 
     // VOS user address range (matches kernel/elf.c).
-    if (vaddr < 0x01000000u) {
+    if (vaddr < USER_BASE) {
         return false;
     }
     if (end > 0xC0000000u) {

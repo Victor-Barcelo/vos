@@ -2,6 +2,7 @@
 #include <fcntl.h>
 #include <stdio.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 #include "syscall.h"
@@ -82,15 +83,18 @@ int main(int argc, char** argv) {
     tag("[init] ", CLR_CYAN);
     tag("done.\n", CLR_GREEN);
 
+    // Linux-like temp directory (mapped to RAM via the VFS alias).
+    (void)mkdir("/tmp", 0777);
+
     // Keep init (PID 1) alive and supervise the user shell.
     for (;;) {
-        const char* const sh_argv[] = {"/bin/sh"};
-        int pid = sys_spawn("/bin/sh", sh_argv, 1u);
+        const char* const login_argv[] = {"/bin/login"};
+        int pid = sys_spawn("/bin/login", login_argv, 1u);
         if (pid < 0) {
             errno = -pid;
             tag("[init] ", CLR_CYAN);
             tag("error: ", CLR_RED);
-            printf("spawn /bin/sh failed: %s\n", strerror(errno));
+            printf("spawn /bin/login failed: %s\n", strerror(errno));
             (void)sys_sleep(1000u);
             continue;
         }
@@ -98,6 +102,6 @@ int main(int argc, char** argv) {
         int code = sys_wait((uint32_t)pid);
         tag("[init] ", CLR_CYAN);
         tag("warn: ", CLR_YELLOW);
-        printf("/bin/sh exited (%d), restarting...\n", code);
+        printf("/bin/login exited (%d), restarting...\n", code);
     }
 }

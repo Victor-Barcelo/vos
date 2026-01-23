@@ -41,6 +41,10 @@ typedef struct task_info {
 } task_info_t;
 
 uint32_t tasking_current_pid(void);
+uint32_t tasking_getuid(void);
+uint32_t tasking_getgid(void);
+int32_t tasking_setuid(uint32_t uid);
+int32_t tasking_setgid(uint32_t gid);
 uint32_t tasking_task_count(void);
 bool tasking_get_task_info(uint32_t index, task_info_t* out);
 

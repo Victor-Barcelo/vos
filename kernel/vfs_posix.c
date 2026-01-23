@@ -120,9 +120,7 @@ static bool abs_is_mount(const char* abs, const char* mount) {
     return next == '\0' || next == '/';
 }
 
-// /usr is a convenience alias for /disk/usr so we can keep large toolchains and
-// sysroot files on persistent storage while exposing standard paths to userland.
-static bool abs_usr_to_disk(const char* abs, char out[VFS_PATH_MAX]) {
+static bool abs_alias_to(const char* abs, const char* mount, const char* target, char out[VFS_PATH_MAX]) {
     if (!out) {
         return false;
     }
@@ -130,34 +128,48 @@ static bool abs_usr_to_disk(const char* abs, char out[VFS_PATH_MAX]) {
     if (!abs || abs[0] != '/') {
         return false;
     }
-    if (!abs_is_mount(abs, "/usr")) {
+    if (!abs_is_mount(abs, mount)) {
         return false;
     }
 
-    if (ci_eq(abs, "/usr")) {
-        strncpy(out, "/disk/usr", VFS_PATH_MAX - 1u);
-        out[VFS_PATH_MAX - 1u] = '\0';
+    size_t mlen = strlen(mount);
+    strncpy(out, target, VFS_PATH_MAX - 1u);
+    out[VFS_PATH_MAX - 1u] = '\0';
+    if (ci_eq(abs, mount)) {
         return true;
     }
 
-    if (ci_starts_with(abs, "/usr/")) {
-        // abs + 4 points at "/..."
-        strncpy(out, "/disk/usr", VFS_PATH_MAX - 1u);
-        out[VFS_PATH_MAX - 1u] = '\0';
-        size_t used = strlen(out);
-        if (used < VFS_PATH_MAX - 1u) {
-            strncat(out, abs + 4, (VFS_PATH_MAX - 1u) - used);
-        }
-        return true;
+    size_t used = strlen(out);
+    if (used < VFS_PATH_MAX - 1u) {
+        strncat(out, abs + mlen, (VFS_PATH_MAX - 1u) - used);
     }
-    return false;
+    return true;
 }
 
-static const char* abs_apply_usr_alias(const char* abs, char tmp[VFS_PATH_MAX]) {
+// Convenience aliases so userland can use Linux-like paths while we keep the
+// actual mountpoints simple:
+//   /usr  -> /disk/usr   (toolchains, headers, libs)
+//   /etc  -> /disk/etc   (persistent config)
+//   /home -> /disk/home  (user homes)
+//   /var  -> /disk/var   (logs/state; optional)
+//   /tmp  -> /ram/tmp    (ephemeral scratch)
+static const char* abs_apply_posix_aliases(const char* abs, char tmp[VFS_PATH_MAX]) {
     if (!abs || !tmp) {
         return abs;
     }
-    if (abs_usr_to_disk(abs, tmp)) {
+    if (abs_alias_to(abs, "/usr", "/disk/usr", tmp)) {
+        return tmp;
+    }
+    if (abs_alias_to(abs, "/etc", "/disk/etc", tmp)) {
+        return tmp;
+    }
+    if (abs_alias_to(abs, "/home", "/disk/home", tmp)) {
+        return tmp;
+    }
+    if (abs_alias_to(abs, "/var", "/disk/var", tmp)) {
+        return tmp;
+    }
+    if (abs_alias_to(abs, "/tmp", "/ram/tmp", tmp)) {
         return tmp;
     }
     return abs;
@@ -563,7 +575,7 @@ int32_t vfs_stat_path(const char* cwd, const char* path, vfs_stat_t* out) {
     }
 
     char abs_usr[VFS_PATH_MAX];
-    const char* eff = abs_apply_usr_alias(abs, abs_usr);
+    const char* eff = abs_apply_posix_aliases(abs, abs_usr);
 
     if (abs_is_mount(eff, "/disk")) {
         if (!fatdisk_is_ready()) {
@@ -613,7 +625,7 @@ int32_t vfs_mkdir_path(const char* cwd, const char* path) {
     }
 
     char abs_usr[VFS_PATH_MAX];
-    const char* eff = abs_apply_usr_alias(abs, abs_usr);
+    const char* eff = abs_apply_posix_aliases(abs, abs_usr);
 
     if (abs_is_mount(eff, "/disk")) {
         if (!fatdisk_is_ready()) {
@@ -857,7 +869,7 @@ int32_t vfs_open_path(const char* cwd, const char* path, uint32_t flags, vfs_han
     }
 
     char abs_usr[VFS_PATH_MAX];
-    const char* eff = abs_apply_usr_alias(abs, abs_usr);
+    const char* eff = abs_apply_posix_aliases(abs, abs_usr);
 
     uint32_t acc = flags & VFS_O_ACCMODE;
     bool want_write = (acc == VFS_O_WRONLY || acc == VFS_O_RDWR);
@@ -1273,7 +1285,7 @@ int32_t vfs_unlink_path(const char* cwd, const char* path) {
     }
 
     char abs_usr[VFS_PATH_MAX];
-    const char* eff = abs_apply_usr_alias(abs, abs_usr);
+    const char* eff = abs_apply_posix_aliases(abs, abs_usr);
 
     if (abs_is_mount(eff, "/disk")) {
         if (!fatdisk_is_ready()) {
@@ -1320,7 +1332,7 @@ int32_t vfs_rmdir_path(const char* cwd, const char* path) {
     }
 
     char abs_usr[VFS_PATH_MAX];
-    const char* eff = abs_apply_usr_alias(abs, abs_usr);
+    const char* eff = abs_apply_posix_aliases(abs, abs_usr);
 
     if (abs_is_mount(eff, "/disk")) {
         if (!fatdisk_is_ready()) {
@@ -1418,8 +1430,8 @@ int32_t vfs_rename_path(const char* cwd, const char* old_path, const char* new_p
 
     char abs_old_usr[VFS_PATH_MAX];
     char abs_new_usr[VFS_PATH_MAX];
-    const char* old_eff = abs_apply_usr_alias(abs_old, abs_old_usr);
-    const char* new_eff = abs_apply_usr_alias(abs_new, abs_new_usr);
+    const char* old_eff = abs_apply_posix_aliases(abs_old, abs_old_usr);
+    const char* new_eff = abs_apply_posix_aliases(abs_new, abs_new_usr);
 
     bool old_disk = abs_is_mount(old_eff, "/disk");
     bool old_ram = abs_is_mount(old_eff, "/ram");

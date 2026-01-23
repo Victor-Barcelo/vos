@@ -847,7 +847,12 @@ char *cur_dir(void) {
 /* Key bindings override easily, so pull in any global bindings
    first, then override with the users bindings. */
 void get_key_bindings(const char * key_bindings_name) {
-   char * const term_name = getenv("TERM"), *key_bindings_term_name = NULL;
+   const char *term_name = getenv("TERM");
+   char *key_bindings_term_name = NULL;
+
+   if (!term_name || term_name[0] == '\0') {
+      term_name = "xterm";
+   }
 
 	if (!key_bindings_name) key_bindings_name = KEY_BINDINGS_NAME;
 	key_bindings_term_name = malloc(strlen(key_bindings_name) + strlen(term_name) + 2);
@@ -868,4 +873,3 @@ void get_key_bindings(const char * key_bindings_name) {
 
 	free(key_bindings_term_name);
 }
-

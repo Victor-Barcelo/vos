@@ -1191,12 +1191,16 @@ ST_FUNC void tcc_add_runtime(TCCState *s1)
     tcc_add_pragma_libs(s1);
     /* add libc */
     if (!s1->nostdlib) {
+#ifdef TCC_ON_VOS
+        /* VOS-specific POSIX shim (syscalls, dirent, etc.).
+           Link it first so its syscall/override symbols prevent libc from
+           pulling in conflicting objects (e.g. newlib's signal.o). */
+        tcc_add_library_err(s1, "vosposix");
+#endif
         tcc_add_library_err(s1, "c");
 #ifdef TCC_ON_VOS
-        /* VOS-specific POSIX shim (syscalls, dirent, etc.). */
+        /* Second pass over libvosposix: libc references syscalls in this archive. */
         tcc_add_library_err(s1, "vosposix");
-        /* Second pass over libc: libvosposix pulls in objects that depend on libc. */
-        tcc_add_library_err(s1, "c");
 #endif
 #ifdef TCC_LIBGCC
         if (!s1->static_link) {

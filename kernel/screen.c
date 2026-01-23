@@ -45,6 +45,7 @@ static uint8_t current_fg = 15; // bright white
 static uint8_t current_bg = 4;  // blue
 static uint8_t default_fg = 15;
 static uint8_t default_bg = 4;
+static bool sgr_reverse_video = false;
 
 // Current VGA text attribute (derived from current_fg/current_bg).
 static uint8_t current_color = 0x0F;
@@ -452,9 +453,17 @@ static inline uint8_t vga_color(uint8_t fg, uint8_t bg) {
     return fg | (bg << 4);
 }
 
+static inline uint8_t sgr_effective_fg(void) {
+    return sgr_reverse_video ? current_bg : current_fg;
+}
+
+static inline uint8_t sgr_effective_bg(void) {
+    return sgr_reverse_video ? current_fg : current_bg;
+}
+
 static void update_vga_colors(void) {
-    uint8_t fg = vga_from_xterm_index(current_fg);
-    uint8_t bg = vga_from_xterm_index(current_bg);
+    uint8_t fg = vga_from_xterm_index(sgr_effective_fg());
+    uint8_t bg = vga_from_xterm_index(sgr_effective_bg());
     current_color = vga_color(fg, bg);
 }
 
@@ -682,7 +691,7 @@ static void scrollback_push_line(const fb_cell_t* line, int cols) {
 
     memcpy(dst, line, (size_t)cols * sizeof(fb_cell_t));
     if (cols < FB_MAX_COLS) {
-        fb_cell_t blank = fb_cell_make((uint8_t)' ', current_fg, current_bg);
+        fb_cell_t blank = fb_cell_make((uint8_t)' ', sgr_effective_fg(), sgr_effective_bg());
         for (int x = cols; x < FB_MAX_COLS; x++) {
             dst[x] = blank;
         }
@@ -749,7 +758,7 @@ static void ansi_erase_to_eol(void) {
     bool render_now = !(backend == SCREEN_BACKEND_FRAMEBUFFER && scrollback_view_offset > 0);
 
     if (backend == SCREEN_BACKEND_FRAMEBUFFER) {
-        fb_cell_t blank = fb_cell_make((uint8_t)' ', current_fg, current_bg);
+        fb_cell_t blank = fb_cell_make((uint8_t)' ', sgr_effective_fg(), sgr_effective_bg());
         fb_cell_t* row = &fb_cells[y * screen_cols_value];
         for (int x = cursor_x; x < screen_cols_value; x++) {
             row[x] = blank;
@@ -795,7 +804,7 @@ static void ansi_erase_line(int mode) {
     bool render_now = !(backend == SCREEN_BACKEND_FRAMEBUFFER && scrollback_view_offset > 0);
 
     if (backend == SCREEN_BACKEND_FRAMEBUFFER) {
-        fb_cell_t blank = fb_cell_make((uint8_t)' ', current_fg, current_bg);
+        fb_cell_t blank = fb_cell_make((uint8_t)' ', sgr_effective_fg(), sgr_effective_bg());
         fb_cell_t* row = &fb_cells[y * screen_cols_value];
         for (int x = x0; x <= x1; x++) {
             row[x] = blank;
@@ -895,7 +904,7 @@ static void ansi_insert_lines(int n) {
             memmove(&fb_cells[(top + n) * cols], &fb_cells[top * cols], row_bytes * (size_t)move_rows);
         }
 
-        fb_cell_t blank = fb_cell_make((uint8_t)' ', current_fg, current_bg);
+        fb_cell_t blank = fb_cell_make((uint8_t)' ', sgr_effective_fg(), sgr_effective_bg());
         for (int y = 0; y < n; y++) {
             fb_cell_t* row = &fb_cells[(top + y) * cols];
             for (int x = 0; x < cols; x++) {
@@ -916,7 +925,7 @@ static void ansi_insert_lines(int n) {
             uint8_t* dst = src + shift_px * fb_pitch;
             memmove(dst, src, copy_bytes);
 
-            uint32_t bg_px = fb_color_from_xterm(current_bg);
+            uint32_t bg_px = fb_color_from_xterm(sgr_effective_bg());
             fb_fill_rect(0, region_y, fb_width, shift_px, bg_px);
         }
 
@@ -981,7 +990,7 @@ static void ansi_delete_lines(int n) {
             memmove(&fb_cells[top * cols], &fb_cells[(top + n) * cols], row_bytes * (size_t)move_rows);
         }
 
-        fb_cell_t blank = fb_cell_make((uint8_t)' ', current_fg, current_bg);
+        fb_cell_t blank = fb_cell_make((uint8_t)' ', sgr_effective_fg(), sgr_effective_bg());
         for (int y = bottom - n + 1; y <= bottom; y++) {
             fb_cell_t* row = &fb_cells[y * cols];
             for (int x = 0; x < cols; x++) {
@@ -1002,7 +1011,7 @@ static void ansi_delete_lines(int n) {
             uint8_t* src = dst + shift_px * fb_pitch;
             memmove(dst, src, copy_bytes);
 
-            uint32_t bg_px = fb_color_from_xterm(current_bg);
+            uint32_t bg_px = fb_color_from_xterm(sgr_effective_bg());
             uint32_t clear_y = region_y + (region_px_height - shift_px);
             fb_fill_rect(0, clear_y, fb_width, shift_px, bg_px);
         }
@@ -1069,7 +1078,7 @@ static void ansi_delete_chars(int n) {
             memmove(&row[cursor_x], &row[cursor_x + n], move_bytes);
         }
 
-        fb_cell_t blank = fb_cell_make((uint8_t)' ', current_fg, current_bg);
+        fb_cell_t blank = fb_cell_make((uint8_t)' ', sgr_effective_fg(), sgr_effective_bg());
         for (int x = cols - n; x < cols; x++) {
             row[x] = blank;
         }
@@ -1135,6 +1144,7 @@ static void ansi_apply_sgr_params(void) {
     if (ansi_param_count == 0) {
         current_fg = default_fg;
         current_bg = default_bg;
+        sgr_reverse_video = false;
         update_vga_colors();
         return;
     }
@@ -1145,6 +1155,7 @@ static void ansi_apply_sgr_params(void) {
         if (p == 0) {
             current_fg = default_fg;
             current_bg = default_bg;
+            sgr_reverse_video = false;
             continue;
         }
         if (p == 1) { // bold/bright (only affects the base 16 colors)
@@ -1160,14 +1171,11 @@ static void ansi_apply_sgr_params(void) {
             continue;
         }
         if (p == 7) { // reverse video
-            uint8_t tmp = current_fg;
-            current_fg = current_bg;
-            current_bg = tmp;
+            sgr_reverse_video = true;
             continue;
         }
-        if (p == 27) { // reverse off (best-effort)
-            current_fg = default_fg;
-            current_bg = default_bg;
+        if (p == 27) { // reverse off
+            sgr_reverse_video = false;
             continue;
         }
 
@@ -1701,31 +1709,40 @@ static void fb_draw_mouse_cursor_overlay(int x, int y) {
     uint32_t base_y = fb_origin_y + (uint32_t)y * fb_font.height;
     uint32_t w = fb_font.width;
     uint32_t h = fb_font.height;
-    uint32_t px = fb_color_from_vga(VGA_LIGHT_CYAN);
+    uint32_t outline_px = fb_color_from_vga(VGA_BLACK);
+    uint32_t fill_px = fb_color_from_vga(VGA_LIGHT_CYAN);
 
-    // Small filled arrow in the top-left of the cell.
-    uint32_t aw = (w < 9u) ? w : 9u;
-    uint32_t ah = (h < 13u) ? h : 13u;
-    if (aw < 2u || ah < 2u) {
-        fb_put_pixel(base_x, base_y, px);
+    // Small arrow pointer in the top-left of the cell (drawn in pixels).
+    uint32_t max_w = (w < 12u) ? w : 12u;
+    uint32_t tri_h = (h < 12u) ? h : 12u;
+    if (tri_h > max_w) {
+        tri_h = max_w;
+    }
+    if (max_w < 2u || tri_h < 2u) {
+        fb_put_pixel(base_x, base_y, fill_px);
         return;
     }
 
-    for (uint32_t yy = 0; yy < ah; yy++) {
+    // Filled triangle with outline.
+    for (uint32_t yy = 0; yy < tri_h; yy++) {
         uint32_t roww = yy + 1u;
-        if (roww > aw) roww = aw;
+        if (roww > max_w) roww = max_w;
         for (uint32_t xx = 0; xx < roww; xx++) {
-            fb_put_pixel(base_x + xx, base_y + yy, px);
+            bool edge = (xx == 0u) || (xx + 1u == roww) || (yy + 1u == tri_h);
+            fb_put_pixel(base_x + xx, base_y + yy, edge ? outline_px : fill_px);
         }
     }
 
-    uint32_t stem_y = ah;
-    uint32_t stem_h = 4u;
+    // Tail/stem.
+    uint32_t stem_y = tri_h;
+    uint32_t stem_h = 5u;
     if (stem_y + stem_h > h) stem_h = (stem_y < h) ? (h - stem_y) : 0u;
     for (uint32_t yy = 0; yy < stem_h; yy++) {
-        fb_put_pixel(base_x + 0u, base_y + stem_y + yy, px);
-        if (aw > 2u) {
-            fb_put_pixel(base_x + 1u, base_y + stem_y + yy, px);
+        uint32_t py = base_y + stem_y + yy;
+        // 2px wide stem, outlined on the left.
+        fb_put_pixel(base_x + 0u, py, outline_px);
+        if (max_w > 2u) {
+            fb_put_pixel(base_x + 1u, py, fill_px);
         }
     }
 }
@@ -1901,7 +1918,7 @@ static void fb_scroll(void) {
     size_t row_bytes = (size_t)cols * sizeof(fb_cell_t);
     memmove(&fb_cells[top * cols], &fb_cells[(top + 1) * cols], row_bytes * (size_t)(bottom - top));
 
-    fb_cell_t blank = fb_cell_make((uint8_t)' ', current_fg, current_bg);
+    fb_cell_t blank = fb_cell_make((uint8_t)' ', sgr_effective_fg(), sgr_effective_bg());
     for (int x = 0; x < cols; x++) {
         fb_cells[bottom * cols + x] = blank;
     }
@@ -1916,7 +1933,7 @@ static void fb_scroll(void) {
         uint8_t* src = dst + fb_font.height * fb_pitch;
         memmove(dst, src, copy_bytes);
 
-        uint32_t bg_px = fb_color_from_xterm(current_bg);
+        uint32_t bg_px = fb_color_from_xterm(sgr_effective_bg());
         uint32_t clear_y = fb_origin_y + (uint32_t)bottom * fb_font.height;
         fb_fill_rect(0, clear_y, fb_width, fb_font.height, bg_px);
     }
@@ -1988,7 +2005,7 @@ static void fb_scroll_down(void) {
     size_t row_bytes = (size_t)cols * sizeof(fb_cell_t);
     memmove(&fb_cells[(top + 1) * cols], &fb_cells[top * cols], row_bytes * (size_t)(bottom - top));
 
-    fb_cell_t blank = fb_cell_make((uint8_t)' ', current_fg, current_bg);
+    fb_cell_t blank = fb_cell_make((uint8_t)' ', sgr_effective_fg(), sgr_effective_bg());
     for (int x = 0; x < cols; x++) {
         fb_cells[top * cols + x] = blank;
     }
@@ -2003,7 +2020,7 @@ static void fb_scroll_down(void) {
         uint8_t* dst = src + fb_font.height * fb_pitch;
         memmove(dst, src, copy_bytes);
 
-        uint32_t bg_px = fb_color_from_xterm(current_bg);
+        uint32_t bg_px = fb_color_from_xterm(sgr_effective_bg());
         fb_fill_rect(0, region_y, fb_width, fb_font.height, bg_px);
     }
 
@@ -2124,7 +2141,7 @@ void screen_clear(void) {
     cursor_force_hidden = false;
 
     if (backend == SCREEN_BACKEND_FRAMEBUFFER) {
-        fb_cell_t blank = fb_cell_make((uint8_t)' ', current_fg, current_bg);
+        fb_cell_t blank = fb_cell_make((uint8_t)' ', sgr_effective_fg(), sgr_effective_bg());
         int cols = screen_cols_value;
         int rows = screen_rows_value;
 
@@ -2134,7 +2151,7 @@ void screen_clear(void) {
             }
         }
 
-        uint32_t bg_px = fb_color_from_xterm(current_bg);
+        uint32_t bg_px = fb_color_from_xterm(sgr_effective_bg());
         fb_fill_rect(0, 0, fb_width, fb_height, bg_px);
     } else {
         for (int y = 0; y < VGA_HEIGHT; y++) {
@@ -2157,6 +2174,7 @@ void screen_init(uint32_t multiboot_magic, uint32_t* mboot_info) {
     default_bg = xterm_from_vga_index(VGA_BLUE);
     current_fg = default_fg;
     current_bg = default_bg;
+    sgr_reverse_video = false;
     update_vga_colors();
     reserved_bottom_rows = 0;
     cursor_x = 0;
@@ -2427,7 +2445,7 @@ static void screen_put_codepoint(uint32_t cp) {
         if (cursor_x > 0) {
             cursor_x--;
             if (backend == SCREEN_BACKEND_FRAMEBUFFER) {
-                fb_cells[cursor_y * screen_cols_value + cursor_x] = fb_cell_make((uint8_t)' ', current_fg, current_bg);
+                fb_cells[cursor_y * screen_cols_value + cursor_x] = fb_cell_make((uint8_t)' ', sgr_effective_fg(), sgr_effective_bg());
                 if (render_now) {
                     fb_render_cell(cursor_x, cursor_y);
                 }
@@ -2438,7 +2456,7 @@ static void screen_put_codepoint(uint32_t cp) {
     } else {
         uint8_t glyph = screen_glyph_for_codepoint(cp);
         if (backend == SCREEN_BACKEND_FRAMEBUFFER) {
-            fb_cells[cursor_y * screen_cols_value + cursor_x] = fb_cell_make(glyph, current_fg, current_bg);
+            fb_cells[cursor_y * screen_cols_value + cursor_x] = fb_cell_make(glyph, sgr_effective_fg(), sgr_effective_bg());
             if (render_now) {
                 fb_render_cell(cursor_x, cursor_y);
             }
@@ -2593,6 +2611,7 @@ void screen_set_color(uint8_t fg, uint8_t bg) {
     default_bg = xterm_from_vga_index(bg);
     current_fg = default_fg;
     current_bg = default_bg;
+    sgr_reverse_video = false;
     update_vga_colors();
 }
 
@@ -2614,7 +2633,7 @@ void screen_backspace(void) {
     if (cursor_x > 0) {
         cursor_x--;
         if (backend == SCREEN_BACKEND_FRAMEBUFFER) {
-            fb_cells[cursor_y * screen_cols_value + cursor_x] = fb_cell_make((uint8_t)' ', current_fg, current_bg);
+            fb_cells[cursor_y * screen_cols_value + cursor_x] = fb_cell_make((uint8_t)' ', sgr_effective_fg(), sgr_effective_bg());
             fb_render_cell(cursor_x, cursor_y);
         } else {
             VGA_BUFFER[screen_phys_y(cursor_y) * VGA_WIDTH + screen_phys_x(cursor_x)] = vga_entry(' ', current_color);

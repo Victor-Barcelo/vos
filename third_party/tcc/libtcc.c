@@ -847,6 +847,29 @@ LIBTCCAPI TCCState *tcc_new(void)
     tcc_define_symbol(s, "__SIZE_TYPE__", "unsigned int");
     tcc_define_symbol(s, "__PTRDIFF_TYPE__", "int");
     tcc_define_symbol(s, "__ILP32__", NULL);
+
+    /* GCC-style type/limit macros expected by newlib's stdint/inttypes headers. */
+    tcc_define_symbol(s, "__INT8_TYPE__", "signed char");
+    tcc_define_symbol(s, "__UINT8_TYPE__", "unsigned char");
+    tcc_define_symbol(s, "__INT16_TYPE__", "short int");
+    tcc_define_symbol(s, "__UINT16_TYPE__", "unsigned short int");
+    tcc_define_symbol(s, "__INT32_TYPE__", "int");
+    tcc_define_symbol(s, "__UINT32_TYPE__", "unsigned int");
+    tcc_define_symbol(s, "__INT64_TYPE__", "long long int");
+    tcc_define_symbol(s, "__UINT64_TYPE__", "unsigned long long int");
+    tcc_define_symbol(s, "__INTPTR_TYPE__", "int");
+    tcc_define_symbol(s, "__UINTPTR_TYPE__", "unsigned int");
+
+    tcc_define_symbol(s, "__INT8_MAX__", "127");
+    tcc_define_symbol(s, "__UINT8_MAX__", "255");
+    tcc_define_symbol(s, "__INT16_MAX__", "32767");
+    tcc_define_symbol(s, "__UINT16_MAX__", "65535");
+    tcc_define_symbol(s, "__INT32_MAX__", "2147483647");
+    tcc_define_symbol(s, "__UINT32_MAX__", "4294967295U");
+    tcc_define_symbol(s, "__INT64_MAX__", "9223372036854775807LL");
+    tcc_define_symbol(s, "__UINT64_MAX__", "18446744073709551615ULL");
+    tcc_define_symbol(s, "__INTPTR_MAX__", "2147483647");
+    tcc_define_symbol(s, "__UINTPTR_MAX__", "4294967295U");
 #elif LONG_SIZE == 4
     /* 64bit Windows. */
     tcc_define_symbol(s, "__SIZE_TYPE__", "unsigned long long");

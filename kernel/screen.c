@@ -41,10 +41,10 @@ static int mouse_drawn_y = -1;
 
 // Canonical console colors as xterm palette indices (0-255).
 // In VGA text mode we map these down to the nearest VGA 16-color entry.
-static uint8_t current_fg = VGA_WHITE;
-static uint8_t current_bg = VGA_BLUE;
-static uint8_t default_fg = VGA_WHITE;
-static uint8_t default_bg = VGA_BLUE;
+static uint8_t current_fg = 15; // bright white
+static uint8_t current_bg = 4;  // blue
+static uint8_t default_fg = 15;
+static uint8_t default_bg = 4;
 
 // Current VGA text attribute (derived from current_fg/current_bg).
 static uint8_t current_color = 0x0F;
@@ -1125,23 +1125,6 @@ static int ansi_get_param(int idx, int def) {
     return def;
 }
 
-static uint8_t ansi_basic_to_vga(uint8_t idx) {
-    static const uint8_t map[8] = {
-        VGA_BLACK,      // 30 black
-        VGA_RED,        // 31 red
-        VGA_GREEN,      // 32 green
-        VGA_BROWN,      // 33 yellow (dim)
-        VGA_BLUE,       // 34 blue
-        VGA_MAGENTA,    // 35 magenta
-        VGA_CYAN,       // 36 cyan
-        VGA_LIGHT_GREY, // 37 white (dim)
-    };
-    if (idx < 8u) {
-        return map[idx];
-    }
-    return VGA_LIGHT_GREY;
-}
-
 static uint32_t ansi_clamp_u8(int v) {
     if (v < 0) return 0;
     if (v > 255) return 255;
@@ -1189,19 +1172,19 @@ static void ansi_apply_sgr_params(void) {
         }
 
         if (p >= 30 && p <= 37) {
-            current_fg = ansi_basic_to_vga((uint8_t)(p - 30));
+            current_fg = (uint8_t)(p - 30);
             continue;
         }
         if (p >= 90 && p <= 97) {
-            current_fg = (uint8_t)(ansi_basic_to_vga((uint8_t)(p - 90)) + 8u);
+            current_fg = (uint8_t)(8 + (p - 90));
             continue;
         }
         if (p >= 40 && p <= 47) {
-            current_bg = ansi_basic_to_vga((uint8_t)(p - 40));
+            current_bg = (uint8_t)(p - 40);
             continue;
         }
         if (p >= 100 && p <= 107) {
-            current_bg = (uint8_t)(ansi_basic_to_vga((uint8_t)(p - 100)) + 8u);
+            current_bg = (uint8_t)(8 + (p - 100));
             continue;
         }
         if (p == 39) { // default fg
@@ -1859,7 +1842,7 @@ static void vga_scroll(void) {
             uint8_t attr = (uint8_t)((v >> 8) & 0xFFu);
             uint8_t fg = (uint8_t)(attr & 0x0Fu);
             uint8_t bg = (uint8_t)((attr >> 4) & 0x0Fu);
-            line[x] = fb_cell_make(ch, fg, bg);
+            line[x] = fb_cell_make(ch, xterm_from_vga_index(fg), xterm_from_vga_index(bg));
         }
         scrollback_push_line(line, cols);
     }
@@ -2170,8 +2153,8 @@ void screen_clear(void) {
 }
 
 void screen_init(uint32_t multiboot_magic, uint32_t* mboot_info) {
-    default_fg = VGA_WHITE;
-    default_bg = VGA_BLUE;
+    default_fg = xterm_from_vga_index(VGA_WHITE);
+    default_bg = xterm_from_vga_index(VGA_BLUE);
     current_fg = default_fg;
     current_bg = default_bg;
     update_vga_colors();
@@ -2606,8 +2589,8 @@ void screen_print_dec(int32_t num) {
 }
 
 void screen_set_color(uint8_t fg, uint8_t bg) {
-    default_fg = (uint8_t)(fg & 0x0Fu);
-    default_bg = (uint8_t)(bg & 0x0Fu);
+    default_fg = xterm_from_vga_index(fg);
+    default_bg = xterm_from_vga_index(bg);
     current_fg = default_fg;
     current_bg = default_bg;
     update_vga_colors();
@@ -2662,8 +2645,8 @@ void screen_write_char_at(int x, int y, char c, uint8_t color) {
         return;
     }
     if (backend == SCREEN_BACKEND_FRAMEBUFFER) {
-        uint8_t fg = (uint8_t)(color & 0x0Fu);
-        uint8_t bg = (uint8_t)((color >> 4) & 0x0Fu);
+        uint8_t fg = xterm_from_vga_index((uint8_t)(color & 0x0Fu));
+        uint8_t bg = xterm_from_vga_index((uint8_t)((color >> 4) & 0x0Fu));
         fb_cells[y * screen_cols_value + x] = fb_cell_make((uint8_t)c, fg, bg);
         fb_render_cell(x, y);
         if (cursor_drawn_x == x && cursor_drawn_y == y) {
@@ -2869,7 +2852,11 @@ bool screen_graphics_clear(uint8_t bg_vga) {
     if (backend != SCREEN_BACKEND_FRAMEBUFFER) {
         return false;
     }
-    uint32_t px = fb_color_from_xterm(bg_vga);
+    uint8_t idx = bg_vga;
+    if (idx < 16u) {
+        idx = xterm_from_vga_index(idx);
+    }
+    uint32_t px = fb_color_from_xterm(idx);
     fb_fill_rect(0, 0, fb_width, fb_height, px);
     return true;
 }
@@ -2881,7 +2868,11 @@ bool screen_graphics_putpixel(int32_t x, int32_t y, uint8_t vga_color) {
     if (!fb_xy_in_bounds(x, y)) {
         return false;
     }
-    uint32_t px = fb_color_from_xterm(vga_color);
+    uint8_t idx = vga_color;
+    if (idx < 16u) {
+        idx = xterm_from_vga_index(idx);
+    }
+    uint32_t px = fb_color_from_xterm(idx);
     fb_put_pixel((uint32_t)x, (uint32_t)y, px);
     return true;
 }
@@ -2891,7 +2882,11 @@ bool screen_graphics_line(int32_t x0, int32_t y0, int32_t x1, int32_t y1, uint8_
         return false;
     }
 
-    uint32_t px = fb_color_from_xterm(vga_color);
+    uint8_t idx = vga_color;
+    if (idx < 16u) {
+        idx = xterm_from_vga_index(idx);
+    }
+    uint32_t px = fb_color_from_xterm(idx);
 
     int32_t dx = x1 - x0;
     int32_t sx = (dx >= 0) ? 1 : -1;

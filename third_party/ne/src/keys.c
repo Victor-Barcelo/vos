@@ -63,7 +63,16 @@ static int vos_handle_mouse_event(int button_code, int x1, int y1, bool press) {
 		return INVALID_CHAR;
 	}
 	if (col < 0) col = 0;
-	if (col >= ne_columns) col = ne_columns - 1;
+#ifdef VOS_NE_LINENUM
+	const int left = vos_term_reserved_left_cols();
+	if (left > 0) {
+		if (col < left) {
+			// Left gutter (line numbers) is not part of the editable text area.
+			return INVALID_CHAR;
+		}
+		col -= left;
+	}
+#endif
 
 	buffer * const b = cur_buffer;
 	int64_t line = b->win_y + row;

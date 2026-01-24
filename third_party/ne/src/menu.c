@@ -316,6 +316,14 @@ void draw_menu_bar(void) {
 	const int saved_x = curX;
 	const uint32_t saved_attr = curr_attr;
 
+	int cols = vos_term_total_columns();
+	if (cols <= 0) {
+		cols = ne_columns;
+	}
+	// Avoid printing into the last column to prevent autowrap.
+	const int max_chars = cols > 1 ? (cols - 1) : 1;
+	int printed = 0;
+
 	/* Physical row 0 (ANSI is 1-based). */
 	fprintf(stdout, "\x1b[1;1H");
 
@@ -323,11 +331,20 @@ void draw_menu_bar(void) {
 	set_attr(BG_WHITE | FG_BLACK | BOLD);
 	fprintf(stdout, "\x1b[2K"); /* erase entire line */
 
-	fputc(' ', stdout);
+	if (printed++ < max_chars) {
+		fputc(' ', stdout);
+	}
 	for (int n = 0; n < menu_num; n++) {
 		if (!menus[n].text) continue;
-		fputs(menus[n].text, stdout);
+		for (const char *p = menus[n].text; *p && printed < max_chars; p++) {
+			fputc(*p, stdout);
+			printed++;
+		}
+		if (printed >= max_chars) {
+			break;
+		}
 		fputc(' ', stdout);
+		printed++;
 	}
 
 	/* Restore attribute + cursor state for the renderer. */
@@ -416,6 +433,7 @@ static void draw_menu(const int n) {
 screen via output_line_desc(). */
 
 static void undraw_menu(const int n) {
+	(void)n;
 #ifndef VOS_NE_MENUBAR
 	set_attr(0);
 	standout_on();
@@ -424,25 +442,13 @@ static void undraw_menu(const int n) {
 	standout_off();
 #endif
 
-	line_desc *ld = cur_buffer->top_line_desc;
-	const int max_rows = menus[n].item_num + (standout_ok == 0);
-	for(int i = 0; i < max_rows; i++) {
-		if (i >= ne_lines - 1) break;
-		if (i != 0) {
-			if (ld->ld_node.next->next) {
-				ld = (line_desc *)ld->ld_node.next;
-			} else {
-				ld = NULL;
-			}
-		}
-		if (ld) {
-			if (cur_buffer->syn) parse(cur_buffer->syn, ld, ld->highlight_state, cur_buffer->encoding == ENC_UTF8);
-			output_line_desc(i, menus[n].xpos - 1, ld, cur_buffer->win_x + menus[n].xpos - 1, menus[n].width + (standout_ok ? MENU_EXTRA : MENU_NOSTANDOUT_EXTRA), cur_buffer->opt.tab_size, false, cur_buffer->encoding == ENC_UTF8, cur_buffer->syn ? attr_buf : NULL, NULL, 0);
-		}
-		else {
-			move_cursor(i, menus[n].xpos - 1);
-			clear_to_eol();
-		}
+	/* In the VOS build, menus are drawn in physical coordinates (row 0 is a
+	   persistent menu bar and we may have a left gutter for line numbers). The
+	   simplest reliable way to remove a menu is to redraw the full editor
+	   window and then redraw the gutter. */
+	if (cur_buffer) {
+		update_window_lines(cur_buffer, cur_buffer->top_line_desc, 0, ne_lines - 2, true);
+		vos_draw_line_numbers(cur_buffer);
 	}
 }
 

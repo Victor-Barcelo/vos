@@ -421,3 +421,9 @@ void keyboard_getline(char* buffer, size_t max_len) {
 void keyboard_set_idle_hook(void (*hook)(void)) {
     idle_hook = hook;
 }
+
+void keyboard_idle_poll(void) {
+    if (idle_hook) {
+        idle_hook();
+    }
+}

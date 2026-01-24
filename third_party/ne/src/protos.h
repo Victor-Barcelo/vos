@@ -120,6 +120,7 @@ void ensure_attributes(buffer *b);
 void store_attributes(buffer *b, line_desc *ld);
 void automatch_bracket(buffer * const b, const bool show);
 void highlight_mark(buffer * const b, const bool show);
+void vos_draw_line_numbers(buffer *b);
 
 /* edit.c */
 int to_upper(buffer *b);

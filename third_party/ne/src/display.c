@@ -687,6 +687,78 @@ void refresh_window(buffer * const b) {
 	}
 }
 
+#ifdef VOS_NE_LINENUM
+void vos_draw_line_numbers(buffer * const b) {
+	if (!b) {
+		return;
+	}
+
+	const int left = vos_term_reserved_left_cols();
+	/* Need space for at least: digits + separator. */
+	if (left <= 2) {
+		return;
+	}
+	const int digits = left - 2;
+	const int out_digits = digits < 32 ? digits : 32;
+
+	const int row_offset = vos_term_row_offset();
+	const int saved_y = curY;
+	const int saved_x = curX;
+	const uint32_t saved_attr = curr_attr;
+
+	for (int row = 0; row < ne_lines; row++) {
+		const int phys_row = row + row_offset;
+		fprintf(stdout, "\x1b[%d;1H", phys_row + 1);
+
+		char buf[32];
+		for (int i = 0; i < out_digits; i++) {
+			buf[i] = ' ';
+		}
+
+		const int64_t line_idx = b->win_y + (int64_t)row;
+		const bool valid = (row < ne_lines - 1) && (line_idx >= 0) && (line_idx < b->num_lines);
+		if (valid) {
+			char tmp[32];
+			int len = snprintf(tmp, sizeof(tmp), "%" PRId64, line_idx + 1);
+			if (len < 0) len = 0;
+			if (len > out_digits) {
+				memcpy(buf, tmp + (len - out_digits), (size_t)out_digits);
+			} else {
+				memcpy(buf + (out_digits - len), tmp, (size_t)len);
+			}
+		}
+
+		if (valid && line_idx == b->cur_line) {
+			set_attr(FG_BYELLOW | BOLD);
+		} else {
+			set_attr(FG_BCYAN);
+		}
+		fwrite(buf, 1, (size_t)out_digits, stdout);
+
+		/* Pad any remaining digit columns (out_digits is capped). */
+		for (int i = out_digits; i < digits; i++) {
+			fputc(' ', stdout);
+		}
+
+		/* Separator at the left edge of the text area. */
+		set_attr(FG_BBLACK);
+		fputc(' ', stdout);
+		fputc('|', stdout);
+	}
+
+	set_attr(saved_attr);
+	if (saved_y >= 0 && saved_x >= 0) {
+		move_cursor(saved_y, saved_x);
+	} else {
+		losecursor();
+	}
+}
+#else
+void vos_draw_line_numbers(buffer *b) {
+	(void)b;
+}
+#endif
+
 
 
 /* Scrolls a region starting at a given line upward (n == -1) or downward
@@ -894,4 +966,3 @@ void highlight_mark(buffer * const b, const bool show) {
 		}
 	}
 }
-

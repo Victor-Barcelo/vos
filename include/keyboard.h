@@ -54,6 +54,10 @@ void keyboard_history_add(const char* cmd);
 // Optional idle hook called while waiting for input (e.g. status bar refresh).
 void keyboard_set_idle_hook(void (*hook)(void));
 
+// Call the idle hook once (if any). Useful for updating UI bits (blink/statusbar)
+// while a user task is blocked waiting for terminal input.
+void keyboard_idle_poll(void);
+
 // Inject raw bytes into the keyboard input buffer (used by mouse/serial helpers).
 void keyboard_inject_bytes(const uint8_t* bytes, size_t len);
 

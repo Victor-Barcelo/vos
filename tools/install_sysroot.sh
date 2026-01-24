@@ -34,13 +34,19 @@ VLINKER="$ROOT_DIR/user/linker.ld"
 VTCC="$ROOT_DIR/build/user/tcc.elf"
 VTCC1="$ROOT_DIR/build/user/libtcc1.a"
 VTCC_INC="$ROOT_DIR/third_party/tcc/include"
+VSYSCALL_H="$ROOT_DIR/user/syscall.h"
+VTERMIOS_H="$ROOT_DIR/user/sys/termios.h"
+VIOCTL_H="$ROOT_DIR/user/sys/ioctl.h"
 
-VRAYLIB="$ROOT_DIR/build/user/libraylib.a"
-VRAYLIB_H="$ROOT_DIR/third_party/raylib/raylib.h"
-VSMALL3D="$ROOT_DIR/build/user/libsmall3d.a"
+VOLIVE="$ROOT_DIR/build/user/libolive.a"
+VOLIVE_H="$ROOT_DIR/third_party/olive/olive.h"
+VOLIVE_C="$ROOT_DIR/third_party/olive/olive.c"
+
 VSMALL3D_H="$ROOT_DIR/third_party/small3dlib/small3d.h"
+VSMALL3DLIB_H="$ROOT_DIR/third_party/small3dlib/small3dlib.h"
 
-VRAYCUBE_SRC="$ROOT_DIR/user/raycube.c"
+VOLIVEDEMO_SRC="$ROOT_DIR/user/olivedemo.c"
+VS3LCUBE_SRC="$ROOT_DIR/user/s3lcube.c"
 
 if [[ ! -f "$DISK_IMG" ]]; then
   echo "error: disk image not found: $DISK_IMG" >&2
@@ -93,26 +99,45 @@ if [[ ! -d "$VTCC_INC" ]]; then
   echo "error: tcc include dir not found: $VTCC_INC" >&2
   exit 1
 fi
-if [[ ! -f "$VRAYLIB" ]]; then
-  echo "error: raylib not built: $VRAYLIB" >&2
-  echo "hint: run 'make sysroot' (or 'make $VRAYLIB') first." >&2
+if [[ ! -f "$VSYSCALL_H" ]]; then
+  echo "error: VOS syscall header not found: $VSYSCALL_H" >&2
   exit 1
 fi
-if [[ ! -f "$VRAYLIB_H" ]]; then
-  echo "error: raylib header not found: $VRAYLIB_H" >&2
+if [[ ! -f "$VTERMIOS_H" ]]; then
+  echo "error: VOS termios header not found: $VTERMIOS_H" >&2
   exit 1
 fi
-if [[ ! -f "$VSMALL3D" ]]; then
-  echo "error: small3d not built: $VSMALL3D" >&2
-  echo "hint: run 'make sysroot' (or 'make $VSMALL3D') first." >&2
+if [[ ! -f "$VIOCTL_H" ]]; then
+  echo "error: VOS ioctl header not found: $VIOCTL_H" >&2
+  exit 1
+fi
+if [[ ! -f "$VOLIVE" ]]; then
+  echo "error: olive not built: $VOLIVE" >&2
+  echo "hint: run 'make sysroot' (or 'make $VOLIVE') first." >&2
+  exit 1
+fi
+if [[ ! -f "$VOLIVE_H" ]]; then
+  echo "error: olive header not found: $VOLIVE_H" >&2
+  exit 1
+fi
+if [[ ! -f "$VOLIVE_C" ]]; then
+  echo "error: olive source not found: $VOLIVE_C" >&2
   exit 1
 fi
 if [[ ! -f "$VSMALL3D_H" ]]; then
-  echo "error: small3d header not found: $VSMALL3D_H" >&2
+  echo "error: small3d wrapper header not found: $VSMALL3D_H" >&2
   exit 1
 fi
-if [[ ! -f "$VRAYCUBE_SRC" ]]; then
-  echo "error: raycube example not found: $VRAYCUBE_SRC" >&2
+if [[ ! -f "$VSMALL3DLIB_H" ]]; then
+  echo "error: small3dlib header not found: $VSMALL3DLIB_H" >&2
+  exit 1
+fi
+if [[ ! -f "$VOLIVEDEMO_SRC" ]]; then
+  echo "error: olive demo not found: $VOLIVEDEMO_SRC" >&2
+  exit 1
+fi
+if [[ ! -f "$VS3LCUBE_SRC" ]]; then
+  echo "error: small3dlib cube demo not found: $VS3LCUBE_SRC" >&2
   exit 1
 fi
 
@@ -134,6 +159,12 @@ copy_tree() {
   mcopy -i "$DISK_IMG" -o -s "$src"/* "$dst" >/dev/null
 }
 
+rm_img_path() {
+  local p="$1"
+  mdel -i "$DISK_IMG" "$p" >/dev/null 2>&1 || true
+  mrd -i "$DISK_IMG" "$p" >/dev/null 2>&1 || true
+}
+
 img_has_file() {
   local p="$1"
   mtype -i "$DISK_IMG" "$p" >/dev/null 2>&1
@@ -141,11 +172,11 @@ img_has_file() {
 
 mkdir_usr ::/usr
 mkdir_usr ::/usr/include
+mkdir_usr ::/usr/include/sys
 mkdir_usr ::/usr/lib
 mkdir_usr ::/usr/bin
 mkdir_usr ::/usr/share
 mkdir_usr ::/usr/share/ne
-mkdir_usr ::/usr/share/ne/extensions
 mkdir_usr ::/usr/share/ne/macros
 mkdir_usr ::/usr/share/ne/syntax
 
@@ -204,12 +235,23 @@ copy_one "$VTCC" ::/usr/bin/tcc
 copy_one "$VTCC1" ::/usr/lib/tcc/libtcc1.a
 copy_tree "$VTCC_INC" ::/usr/lib/tcc/include
 
-copy_one "$VRAYLIB_H" ::/usr/include/raylib.h
-copy_one "$VSMALL3D_H" ::/usr/include/small3d.h
-copy_one "$VRAYLIB" ::/usr/lib/libraylib.a
-copy_one "$VSMALL3D" ::/usr/lib/libsmall3d.a
+copy_one "$VSYSCALL_H" ::/usr/include/syscall.h
+copy_one "$VTERMIOS_H" ::/usr/include/sys/termios.h
+copy_one "$VIOCTL_H" ::/usr/include/sys/ioctl.h
 
-copy_one "$VRAYCUBE_SRC" ::/home/victor/examples/raycube.c
+copy_one "$VOLIVE" ::/usr/lib/libolive.a
+copy_one "$VOLIVE_H" ::/usr/include/olive.h
+copy_one "$VOLIVE_C" ::/usr/include/olive.c
+copy_one "$VSMALL3D_H" ::/usr/include/small3d.h
+copy_one "$VSMALL3DLIB_H" ::/usr/include/small3dlib.h
+
+copy_one "$VOLIVEDEMO_SRC" ::/home/victor/examples/olivedemo.c
+copy_one "$VS3LCUBE_SRC" ::/home/victor/examples/s3lcube.c
+
+# Remove legacy raylib artifacts from older disk images.
+rm_img_path ::/usr/include/raylib.h
+rm_img_path ::/usr/lib/libraylib.a
+rm_img_path ::/home/victor/examples/raycube.c
 
 # ne runtime data (syntax highlighting, macros, extensions)
 NE_DIR="$ROOT_DIR/third_party/ne"
@@ -219,8 +261,9 @@ fi
 if [[ -d "$NE_DIR/macros" ]]; then
   copy_tree "$NE_DIR/macros" ::/usr/share/ne/macros
 fi
-if [[ -d "$NE_DIR/extensions" ]]; then
-  copy_tree "$NE_DIR/extensions" ::/usr/share/ne/extensions
+if [[ -f "$NE_DIR/extensions" ]]; then
+  rm_img_path ::/usr/share/ne/extensions
+  copy_one "$NE_DIR/extensions" ::/usr/share/ne/extensions
 fi
 if [[ -f "$NE_DIR/COPYING" ]]; then
   copy_one "$NE_DIR/COPYING" ::/usr/share/ne/COPYING

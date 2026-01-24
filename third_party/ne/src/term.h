@@ -52,3 +52,8 @@ void delete_chars(int n);
 int ins_del_lines(int vpos, int n);
 int ttysize(void);
 void term_init(void);
+
+/* VOS-specific helpers (used by the VOS port glue). */
+int vos_term_row_offset(void);
+int vos_term_total_columns(void);
+int vos_term_reserved_left_cols(void);

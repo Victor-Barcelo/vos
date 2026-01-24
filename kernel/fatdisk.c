@@ -722,6 +722,8 @@ static bool dir_iter_find_by_name_str(fat_dir_t dir, const char* name, dir_loc_t
     lfn_reset(&lfn);
 
     char cur_name[256];
+    uint8_t want11[11];
+    bool have_want11 = fat_make_83(name, want11);
 
     if (dir.is_root) {
         uint32_t total = g_fs.root_dir_sectors;
@@ -756,7 +758,7 @@ static bool dir_iter_find_by_name_str(fat_dir_t dir, const char* name, dir_loc_t
                 }
                 lfn_reset(&lfn);
 
-                if (ci_eq(cur_name, name)) {
+                if (ci_eq(cur_name, name) || (have_want11 && name11_eq(e + 0, want11))) {
                     if (out_loc) {
                         out_loc->lba = lba;
                         out_loc->off = (uint16_t)off;
@@ -814,7 +816,7 @@ static bool dir_iter_find_by_name_str(fat_dir_t dir, const char* name, dir_loc_t
                 }
                 lfn_reset(&lfn);
 
-                if (ci_eq(cur_name, name)) {
+                if (ci_eq(cur_name, name) || (have_want11 && name11_eq(e + 0, want11))) {
                     if (out_loc) {
                         out_loc->lba = lba;
                         out_loc->off = (uint16_t)off;

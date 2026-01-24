@@ -506,6 +506,7 @@ int main(int argc, char **argv) {
 #ifdef VOS_NE_MENUBAR
 		draw_menu_bar();
 #endif
+		vos_draw_line_numbers(cur_buffer);
 		draw_status_bar();
 		move_cursor(cur_buffer->cur_y, cur_buffer->cur_x);
 

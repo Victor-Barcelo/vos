@@ -6,3 +6,8 @@
 KEY	14B	TccCompile
 KEY	14C	TccRun
 
+# Ensure arrow keys always map to cursor-movement actions (menus use these too).
+KEY	101	LineUp
+KEY	102	LineDown
+KEY	103	MoveLeft
+KEY	104	MoveRight

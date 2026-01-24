@@ -2351,6 +2351,7 @@ static bool tty_wait_getchar_timeout(uint32_t timeout_ticks, char* out) {
             return false;
         }
         hlt();
+        keyboard_idle_poll();
     }
 }
 
@@ -3159,15 +3160,19 @@ int32_t tasking_fd_ioctl(int32_t fd, uint32_t req, void* argp_user) {
             // Keep only the bits we support; preserve other bits so userland can round-trip.
             current_task->tty = t;
 
-            // Drop any partially buffered input when terminal settings change.
-            irq_flags = irq_save();
-            ent = &current_task->fds[fd];
-            ent->pending_len = 0;
-            ent->pending_off = 0;
-            irq_restore(irq_flags);
-            current_task->tty_line_len = 0;
-            current_task->tty_line_off = 0;
-            current_task->tty_line_ready = false;
+            // Only TCSAFLUSH (TCSETSF) flushes queued input. Programs like ne temporarily
+            // tweak VMIN/VTIME to disambiguate escape sequences; dropping buffered bytes
+            // here breaks multi-byte keys (arrows, function keys, etc.).
+            if (req == VOS_TCSETSF) {
+                irq_flags = irq_save();
+                ent = &current_task->fds[fd];
+                ent->pending_len = 0;
+                ent->pending_off = 0;
+                irq_restore(irq_flags);
+                current_task->tty_line_len = 0;
+                current_task->tty_line_off = 0;
+                current_task->tty_line_ready = false;
+            }
             return 0;
         }
         default:

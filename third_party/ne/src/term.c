@@ -96,6 +96,11 @@ static int vos_row_offset = 1;
 static int vos_row_offset = 0;
 #endif
 
+#ifdef VOS_NE_LINENUM
+static int vos_total_columns = 0;
+static int vos_reserved_left_cols = 0;
+#endif
+
 char *ne_column_address;
 char *ne_row_address;
 
@@ -647,7 +652,11 @@ void move_cursor (const int row, const int col) {
 	if (!ne_move_insert_mode) turn_off_insert ();
 
 	const int phys_row = row + vos_row_offset;
-	printf("\x1b[%d;%dH", phys_row + 1, col + 1);
+	int phys_col = col;
+#ifdef VOS_NE_LINENUM
+	phys_col += vos_reserved_left_cols;
+#endif
+	printf("\x1b[%d;%dH", phys_row + 1, phys_col + 1);
 	cmat(row, col);
 }
 
@@ -1067,12 +1076,22 @@ int ttysize(void) {
 	if (l > 2) reserve_top = 1;
 #endif
 
-	const int ll = l - reserve_top;
+	int reserve_left = 0;
+#ifdef VOS_NE_LINENUM
+	// Reserve a left-side gutter for line numbers (digits + separator).
+	const int want = 8;
+	if (c > want + 20) reserve_left = want;
+	vos_total_columns = c;
+	vos_reserved_left_cols = reserve_left;
+#endif
 
-	if (((ne_lines != ll) || (ne_columns != c)) && ll > 0 && c > 0) {
+	const int ll = l - reserve_top;
+	const int cc = c - reserve_left;
+
+	if (((ne_lines != ll) || (ne_columns != cc)) && ll > 0 && cc > 0) {
 		vos_row_offset = reserve_top;
 		ScreenRows = ne_lines    = ll;
-		ScreenCols = ne_columns  = c;
+		ScreenCols = ne_columns  = cc;
 		set_terminal_window(ne_lines - 1);
 		if (scroll_region_ok) set_scroll_region(0, ne_lines - 1);
 		D(fprintf(stderr,"ttysize: size changed.\n");)
@@ -1080,6 +1099,26 @@ int ttysize(void) {
 	}
 
 	return 0;
+}
+
+int vos_term_row_offset(void) {
+	return vos_row_offset;
+}
+
+int vos_term_total_columns(void) {
+#ifdef VOS_NE_LINENUM
+	return vos_total_columns;
+#else
+	return ne_columns;
+#endif
+}
+
+int vos_term_reserved_left_cols(void) {
+#ifdef VOS_NE_LINENUM
+	return vos_reserved_left_cols;
+#else
+	return 0;
+#endif
 }
 
 

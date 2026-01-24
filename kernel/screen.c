@@ -31,6 +31,9 @@ static bool cursor_enabled = true;
 static bool cursor_vt_hidden = false;
 static int cursor_drawn_x = -1;
 static int cursor_drawn_y = -1;
+// VT100-style autowrap: when writing into the last column, wrap happens on
+// the *next* printable character (not immediately).
+static bool cursor_wrap_pending = false;
 
 // Mouse cursor overlay (framebuffer text console only).
 static bool mouse_cursor_enabled = false;
@@ -81,7 +84,10 @@ static bool vt_mouse_sgr = false;
 
 static inline int screen_phys_x(int x);
 static inline int screen_phys_y(int y);
+static void fb_render_cell_base(int x, int y);
 static void fb_render_cell(int x, int y);
+static void fb_draw_cursor_overlay(int x, int y);
+static void fb_draw_mouse_cursor_overlay(int x, int y);
 static void fb_update_mouse_cursor(void);
 static uint32_t fb_color_from_vga(uint8_t idx);
 static uint32_t fb_color_from_xterm(uint8_t idx);
@@ -889,12 +895,12 @@ static void ansi_insert_lines(int n) {
     if (backend == SCREEN_BACKEND_FRAMEBUFFER) {
         // Undraw cursor overlay before copying pixel rows.
         if (cursor_drawn_x >= 0 && cursor_drawn_y >= 0) {
-            fb_render_cell(cursor_drawn_x, cursor_drawn_y);
+            fb_render_cell_base(cursor_drawn_x, cursor_drawn_y);
             cursor_drawn_x = -1;
             cursor_drawn_y = -1;
         }
         if (mouse_cursor_enabled && mouse_drawn_x >= 0 && mouse_drawn_y >= 0) {
-            fb_render_cell(mouse_drawn_x, mouse_drawn_y);
+            fb_render_cell_base(mouse_drawn_x, mouse_drawn_y);
         }
 
         int cols = screen_cols_value;
@@ -975,12 +981,12 @@ static void ansi_delete_lines(int n) {
 
     if (backend == SCREEN_BACKEND_FRAMEBUFFER) {
         if (cursor_drawn_x >= 0 && cursor_drawn_y >= 0) {
-            fb_render_cell(cursor_drawn_x, cursor_drawn_y);
+            fb_render_cell_base(cursor_drawn_x, cursor_drawn_y);
             cursor_drawn_x = -1;
             cursor_drawn_y = -1;
         }
         if (mouse_cursor_enabled && mouse_drawn_x >= 0 && mouse_drawn_y >= 0) {
-            fb_render_cell(mouse_drawn_x, mouse_drawn_y);
+            fb_render_cell_base(mouse_drawn_x, mouse_drawn_y);
         }
 
         int cols = screen_cols_value;
@@ -1259,6 +1265,7 @@ static bool ansi_handle_char(char c) {
         if (c == '8') { // DECRC restore cursor
             cursor_x = ansi_saved_x;
             cursor_y = ansi_saved_y;
+            cursor_wrap_pending = false;
             cursor_clamp();
             update_cursor();
             ansi_reset();
@@ -1295,6 +1302,7 @@ static bool ansi_handle_char(char c) {
         case 'A': { // cursor up
             int n = ansi_get_param(0, 1);
             cursor_y -= n;
+            cursor_wrap_pending = false;
             cursor_clamp();
             update_cursor();
             break;
@@ -1302,6 +1310,7 @@ static bool ansi_handle_char(char c) {
         case 'B': { // cursor down
             int n = ansi_get_param(0, 1);
             cursor_y += n;
+            cursor_wrap_pending = false;
             cursor_clamp();
             update_cursor();
             break;
@@ -1309,6 +1318,7 @@ static bool ansi_handle_char(char c) {
         case 'C': { // cursor forward
             int n = ansi_get_param(0, 1);
             cursor_x += n;
+            cursor_wrap_pending = false;
             cursor_clamp();
             update_cursor();
             break;
@@ -1316,6 +1326,7 @@ static bool ansi_handle_char(char c) {
         case 'D': { // cursor back
             int n = ansi_get_param(0, 1);
             cursor_x -= n;
+            cursor_wrap_pending = false;
             cursor_clamp();
             update_cursor();
             break;
@@ -1326,6 +1337,7 @@ static bool ansi_handle_char(char c) {
             int col = ansi_get_param(1, 1);
             cursor_y = row - 1;
             cursor_x = col - 1;
+            cursor_wrap_pending = false;
             cursor_clamp();
             update_cursor();
             break;
@@ -1333,6 +1345,7 @@ static bool ansi_handle_char(char c) {
         case 'G': { // cursor horizontal absolute
             int col = ansi_get_param(0, 1);
             cursor_x = col - 1;
+            cursor_wrap_pending = false;
             cursor_clamp();
             update_cursor();
             break;
@@ -1368,6 +1381,7 @@ static bool ansi_handle_char(char c) {
 
             cursor_x = 0;
             cursor_y = 0;
+            cursor_wrap_pending = false;
             cursor_clamp();
             update_cursor();
             break;
@@ -1386,6 +1400,7 @@ static bool ansi_handle_char(char c) {
             }
             cursor_x = saved_x;
             cursor_y = saved_y;
+            cursor_wrap_pending = false;
             cursor_clamp();
             update_cursor();
             break;
@@ -1400,6 +1415,7 @@ static bool ansi_handle_char(char c) {
                     vga_scroll_down();
                 }
             }
+            cursor_wrap_pending = false;
             cursor_clamp();
             update_cursor();
             break;
@@ -1412,6 +1428,7 @@ static bool ansi_handle_char(char c) {
         case 'u': { // restore cursor
             cursor_x = ansi_saved_x;
             cursor_y = ansi_saved_y;
+            cursor_wrap_pending = false;
             cursor_clamp();
             update_cursor();
             break;
@@ -1673,11 +1690,24 @@ static void fb_render_entry(int x, int y, fb_cell_t entry) {
     }
 }
 
-static void fb_render_cell(int x, int y) {
+static void fb_render_cell_base(int x, int y) {
     if (x < 0 || y < 0 || x >= screen_cols_value || y >= screen_rows_value) {
         return;
     }
     fb_render_entry(x, y, fb_cells[y * screen_cols_value + x]);
+}
+
+static void fb_render_cell(int x, int y) {
+    fb_render_cell_base(x, y);
+
+    // Overlays are drawn directly into the framebuffer pixels, so any cell
+    // redraw can wipe them. Re-apply overlays when redrawing their cells.
+    if (!cursor_force_hidden && !cursor_vt_hidden && cursor_enabled && x == cursor_x && y == cursor_y) {
+        fb_draw_cursor_overlay(x, y);
+    }
+    if (mouse_cursor_enabled && x == mouse_cursor_x && y == mouse_cursor_y) {
+        fb_draw_mouse_cursor_overlay(x, y);
+    }
 }
 
 static uint32_t fb_cursor_thickness(void) {
@@ -1903,12 +1933,12 @@ static void fb_scroll(void) {
     // If we scroll by memcpy-ing framebuffer rows, that overlay will get copied too,
     // leaving "underscore trails" behind. Undraw it before copying any pixels.
     if (cursor_drawn_x >= 0 && cursor_drawn_y >= 0) {
-        fb_render_cell(cursor_drawn_x, cursor_drawn_y);
+        fb_render_cell_base(cursor_drawn_x, cursor_drawn_y);
         cursor_drawn_x = -1;
         cursor_drawn_y = -1;
     }
     if (mouse_cursor_enabled && mouse_drawn_x >= 0 && mouse_drawn_y >= 0) {
-        fb_render_cell(mouse_drawn_x, mouse_drawn_y);
+        fb_render_cell_base(mouse_drawn_x, mouse_drawn_y);
     }
 
     int cols = screen_cols_value;
@@ -1993,12 +2023,12 @@ static void fb_scroll_down(void) {
     }
 
     if (cursor_drawn_x >= 0 && cursor_drawn_y >= 0) {
-        fb_render_cell(cursor_drawn_x, cursor_drawn_y);
+        fb_render_cell_base(cursor_drawn_x, cursor_drawn_y);
         cursor_drawn_x = -1;
         cursor_drawn_y = -1;
     }
     if (mouse_cursor_enabled && mouse_drawn_x >= 0 && mouse_drawn_y >= 0) {
-        fb_render_cell(mouse_drawn_x, mouse_drawn_y);
+        fb_render_cell_base(mouse_drawn_x, mouse_drawn_y);
     }
 
     int cols = screen_cols_value;
@@ -2067,6 +2097,11 @@ static void scrollback_render_view(void) {
         for (int x = 0; x < cols; x++) {
             fb_render_entry(x, y, src[x]);
         }
+    }
+
+    // Full redraw can wipe the mouse cursor overlay; redraw it last.
+    if (mouse_cursor_enabled) {
+        fb_update_mouse_cursor();
     }
 }
 
@@ -2165,6 +2200,7 @@ void screen_clear(void) {
     cursor_y = 0;
     cursor_drawn_x = -1;
     cursor_drawn_y = -1;
+    cursor_wrap_pending = false;
     update_cursor();
     fb_update_mouse_cursor();
 }
@@ -2182,6 +2218,7 @@ void screen_init(uint32_t multiboot_magic, uint32_t* mboot_info) {
     cursor_enabled = true;
     cursor_drawn_x = -1;
     cursor_drawn_y = -1;
+    cursor_wrap_pending = false;
     mouse_cursor_enabled = false;
     mouse_cursor_x = 0;
     mouse_cursor_y = 0;
@@ -2435,13 +2472,17 @@ static void screen_put_codepoint(uint32_t cp) {
     bool render_now = !(backend == SCREEN_BACKEND_FRAMEBUFFER && scrollback_view_offset > 0);
 
     if (cp == (uint32_t)'\n') {
+        cursor_wrap_pending = false;
         cursor_x = 0;
         cursor_y++;
     } else if (cp == (uint32_t)'\r') {
+        cursor_wrap_pending = false;
         cursor_x = 0;
     } else if (cp == (uint32_t)'\t') {
+        cursor_wrap_pending = false;
         cursor_x = (cursor_x + 8) & ~7;
     } else if (cp == (uint32_t)'\b') {
+        cursor_wrap_pending = false;
         if (cursor_x > 0) {
             cursor_x--;
             if (backend == SCREEN_BACKEND_FRAMEBUFFER) {
@@ -2454,6 +2495,21 @@ static void screen_put_codepoint(uint32_t cp) {
             }
         }
     } else {
+        if (cursor_wrap_pending) {
+            cursor_x = 0;
+            cursor_y++;
+            cursor_wrap_pending = false;
+
+            ansi_scroll_region_clamp();
+            if (cursor_y > ansi_scroll_bottom || cursor_y >= height) {
+                if (backend == SCREEN_BACKEND_FRAMEBUFFER) {
+                    fb_scroll();
+                } else {
+                    vga_scroll();
+                }
+            }
+        }
+
         uint8_t glyph = screen_glyph_for_codepoint(cp);
         if (backend == SCREEN_BACKEND_FRAMEBUFFER) {
             fb_cells[cursor_y * screen_cols_value + cursor_x] = fb_cell_make(glyph, sgr_effective_fg(), sgr_effective_bg());
@@ -2463,16 +2519,23 @@ static void screen_put_codepoint(uint32_t cp) {
         } else {
             VGA_BUFFER[screen_phys_y(cursor_y) * VGA_WIDTH + screen_phys_x(cursor_x)] = vga_entry((char)glyph, current_color);
         }
-        cursor_x++;
+
+        if (cursor_x >= screen_cols_value - 1) {
+            cursor_wrap_pending = true;
+        } else {
+            cursor_x++;
+        }
     }
 
     if (cursor_x >= screen_cols_value) {
+        cursor_wrap_pending = false;
         cursor_x = 0;
         cursor_y++;
     }
 
     ansi_scroll_region_clamp();
     if (cursor_y > ansi_scroll_bottom || cursor_y >= height) {
+        cursor_wrap_pending = false;
         if (backend == SCREEN_BACKEND_FRAMEBUFFER) {
             fb_scroll();
         } else {
@@ -2618,6 +2681,7 @@ void screen_set_color(uint8_t fg, uint8_t bg) {
 void screen_set_cursor(int x, int y) {
     cursor_x = x;
     cursor_y = y;
+    cursor_wrap_pending = false;
     update_cursor();
 }
 
@@ -2631,6 +2695,7 @@ int screen_get_cursor_y(void) {
 
 void screen_backspace(void) {
     if (cursor_x > 0) {
+        cursor_wrap_pending = false;
         cursor_x--;
         if (backend == SCREEN_BACKEND_FRAMEBUFFER) {
             fb_cells[cursor_y * screen_cols_value + cursor_x] = fb_cell_make((uint8_t)' ', sgr_effective_fg(), sgr_effective_bg());
@@ -2655,6 +2720,7 @@ void screen_set_reserved_bottom_rows(int rows) {
         cursor_y = usable_height() - 1;
         if (cursor_y < 0) cursor_y = 0;
         if (cursor_x >= screen_cols_value) cursor_x = 0;
+        cursor_wrap_pending = false;
         update_cursor();
     }
 }

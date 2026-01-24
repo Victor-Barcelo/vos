@@ -70,6 +70,19 @@ enum {
     SYS_SIGNAL = 55,
     SYS_SIGRETURN = 56,
     SYS_SIGPROCMASK = 57,
+    SYS_GETPPID = 58,
+    SYS_GETPGRP = 59,
+    SYS_SETPGID = 60,
+    SYS_FCNTL = 61,
+    SYS_ALARM = 62,
+    SYS_LSTAT = 63,
+    SYS_SYMLINK = 64,
+    SYS_READLINK = 65,
+    SYS_CHMOD = 66,
+    SYS_FCHMOD = 67,
+    SYS_FORK = 68,
+    SYS_EXECVE = 69,
+    SYS_WAITPID = 70,
 };
 
 typedef struct vos_task_info_user {
@@ -189,8 +202,14 @@ interrupt_frame_t* syscall_handle(interrupt_frame_t* frame) {
         }
         case SYS_WAIT:
             return tasking_wait(frame, frame->ebx);
+        case SYS_WAITPID: {
+            int32_t pid = (int32_t)frame->ebx;
+            void* status_user = (void*)frame->ecx;
+            int32_t options = (int32_t)frame->edx;
+            return tasking_waitpid(frame, pid, status_user, options);
+        }
         case SYS_KILL: {
-            uint32_t pid = frame->ebx;
+            int32_t pid = (int32_t)frame->ebx;
             int32_t sig = (int32_t)frame->ecx;
             int32_t rc = tasking_kill(pid, sig);
             frame->eax = (uint32_t)rc;
@@ -315,6 +334,20 @@ interrupt_frame_t* syscall_handle(interrupt_frame_t* frame) {
             frame->eax = (uint32_t)rc;
             return frame;
         }
+        case SYS_LSTAT: {
+            const char* path_user = (const char*)frame->ebx;
+            void* st_user = (void*)frame->ecx;
+
+            char path[128];
+            if (!copy_user_cstring(path, sizeof(path), path_user)) {
+                frame->eax = (uint32_t)-EINVAL;
+                return frame;
+            }
+
+            int32_t rc = tasking_lstat(path, st_user);
+            frame->eax = (uint32_t)rc;
+            return frame;
+        }
         case SYS_MKDIR: {
             const char* path_user = (const char*)frame->ebx;
 
@@ -431,6 +464,58 @@ interrupt_frame_t* syscall_handle(interrupt_frame_t* frame) {
             frame->eax = (uint32_t)rc;
             return frame;
         }
+        case SYS_SYMLINK: {
+            const char* target_user = (const char*)frame->ebx;
+            const char* linkpath_user = (const char*)frame->ecx;
+
+            char target[256];
+            char linkpath[256];
+            if (!copy_user_cstring(target, sizeof(target), target_user) ||
+                !copy_user_cstring(linkpath, sizeof(linkpath), linkpath_user)) {
+                frame->eax = (uint32_t)-EINVAL;
+                return frame;
+            }
+
+            int32_t rc = tasking_symlink(target, linkpath);
+            frame->eax = (uint32_t)rc;
+            return frame;
+        }
+        case SYS_READLINK: {
+            const char* path_user = (const char*)frame->ebx;
+            void* buf_user = (void*)frame->ecx;
+            uint32_t cap = frame->edx;
+
+            char path[256];
+            if (!copy_user_cstring(path, sizeof(path), path_user)) {
+                frame->eax = (uint32_t)-EINVAL;
+                return frame;
+            }
+
+            int32_t rc = tasking_readlink(path, buf_user, cap);
+            frame->eax = (uint32_t)rc;
+            return frame;
+        }
+        case SYS_CHMOD: {
+            const char* path_user = (const char*)frame->ebx;
+            uint32_t mode = frame->ecx;
+
+            char path[256];
+            if (!copy_user_cstring(path, sizeof(path), path_user)) {
+                frame->eax = (uint32_t)-EINVAL;
+                return frame;
+            }
+
+            int32_t rc = tasking_chmod(path, (uint16_t)mode);
+            frame->eax = (uint32_t)rc;
+            return frame;
+        }
+        case SYS_FCHMOD: {
+            int32_t fd = (int32_t)frame->ebx;
+            uint32_t mode = frame->ecx;
+            int32_t rc = tasking_fd_fchmod(fd, (uint16_t)mode);
+            frame->eax = (uint32_t)rc;
+            return frame;
+        }
         case SYS_DUP: {
             int32_t oldfd = (int32_t)frame->ebx;
             int32_t rc = tasking_fd_dup(oldfd);
@@ -450,8 +535,72 @@ interrupt_frame_t* syscall_handle(interrupt_frame_t* frame) {
             frame->eax = (uint32_t)rc;
             return frame;
         }
+        case SYS_FCNTL: {
+            int32_t fd = (int32_t)frame->ebx;
+            int32_t cmd = (int32_t)frame->ecx;
+            int32_t arg = (int32_t)frame->edx;
+            int32_t rc = tasking_fd_fcntl(fd, cmd, arg);
+            frame->eax = (uint32_t)rc;
+            return frame;
+        }
+        case SYS_ALARM: {
+            uint32_t seconds = frame->ebx;
+            int32_t rc = tasking_alarm(seconds);
+            frame->eax = (uint32_t)rc;
+            return frame;
+        }
         case SYS_GETPID: {
             frame->eax = tasking_current_pid();
+            return frame;
+        }
+        case SYS_FORK: {
+            int32_t pid = tasking_fork(frame);
+            frame->eax = (uint32_t)pid;
+            return frame;
+        }
+        case SYS_EXECVE: {
+            const char* path_user = (const char*)frame->ebx;
+            const char* const* argv_user = (const char* const*)frame->ecx;
+            uint32_t argc = frame->edx;
+
+            if (argc > 32u) {
+                frame->eax = (uint32_t)-EINVAL;
+                return frame;
+            }
+
+            char path[128];
+            if (!copy_user_cstring(path, sizeof(path), path_user)) {
+                frame->eax = (uint32_t)-EFAULT;
+                return frame;
+            }
+
+            const char* kargv[32];
+            char argv_buf[32][128];
+
+            if (argc != 0 && argv_user) {
+                for (uint32_t i = 0; i < argc; i++) {
+                    const char* argp_user = NULL;
+                    if (!copy_from_user(&argp_user, argv_user + i, (uint32_t)sizeof(argp_user))) {
+                        frame->eax = (uint32_t)-EFAULT;
+                        return frame;
+                    }
+
+                    if (!argp_user) {
+                        argv_buf[i][0] = '\0';
+                        kargv[i] = argv_buf[i];
+                        continue;
+                    }
+
+                    if (!copy_user_cstring(argv_buf[i], sizeof(argv_buf[i]), argp_user)) {
+                        frame->eax = (uint32_t)-ENAMETOOLONG;
+                        return frame;
+                    }
+                    kargv[i] = argv_buf[i];
+                }
+            }
+
+            int32_t rc = tasking_execve(frame, path, (argc != 0 && argv_user) ? kargv : NULL, argc);
+            frame->eax = (uint32_t)rc;
             return frame;
         }
         case SYS_SPAWN: {
@@ -803,6 +952,18 @@ interrupt_frame_t* syscall_handle(interrupt_frame_t* frame) {
         }
         case SYS_SIGRETURN:
             return tasking_sigreturn(frame);
+        case SYS_GETPPID:
+            frame->eax = tasking_current_ppid();
+            return frame;
+        case SYS_GETPGRP:
+            frame->eax = tasking_getpgrp();
+            return frame;
+        case SYS_SETPGID: {
+            int32_t pid = (int32_t)frame->ebx;
+            int32_t pgid = (int32_t)frame->ecx;
+            frame->eax = (uint32_t)tasking_setpgid(pid, pgid);
+            return frame;
+        }
         default:
             frame->eax = (uint32_t)-1;
             return frame;

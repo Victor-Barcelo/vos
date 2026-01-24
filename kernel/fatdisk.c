@@ -20,6 +20,14 @@ enum {
     FAT_ATTR_LFN      = 0x0F,
 };
 
+// Store minimal POSIX-ish metadata in otherwise-unused SFN bytes on FAT16.
+// - NT reserved byte (offset 12): use high bits as a meta marker.
+// - FAT32 hi-cluster (offset 20..21): unused on FAT16, store mode bits.
+enum {
+    FAT_META_PRESENT = 0x80,
+    FAT_META_SYMLINK = 0x40,
+};
+
 typedef struct fatdisk_fs {
     bool ready;
     uint16_t bytes_per_sector;
@@ -1366,9 +1374,8 @@ bool fatdisk_is_dir(const char* abs_path) {
     if (is_root_path(abs_path)) {
         return true;
     }
-    dir_loc_t loc;
     uint8_t ent[32];
-    if (!lookup_path_entry(abs_path, &loc, ent)) {
+    if (!lookup_path_entry(abs_path, NULL, ent)) {
         return false;
     }
     return (ent[11] & FAT_ATTR_DIR) != 0;
@@ -1478,6 +1485,74 @@ bool fatdisk_stat_ex(const char* abs_path, bool* out_is_dir, uint32_t* out_size,
     return true;
 }
 
+bool fatdisk_get_meta(const char* abs_path, bool* out_is_symlink, uint16_t* out_mode) {
+    if (out_is_symlink) {
+        *out_is_symlink = false;
+    }
+    if (out_mode) {
+        *out_mode = 0;
+    }
+    if (!g_fs.ready || !abs_path) {
+        return false;
+    }
+
+    if (is_root_path(abs_path)) {
+        if (out_is_symlink) *out_is_symlink = false;
+        if (out_mode) *out_mode = 0755u;
+        return true;
+    }
+
+    dir_loc_t loc;
+    uint8_t ent[32];
+    if (!lookup_path_entry(abs_path, &loc, ent)) {
+        return false;
+    }
+
+    bool is_dir = (ent[11] & FAT_ATTR_DIR) != 0;
+    bool is_symlink = false;
+    uint16_t mode = is_dir ? 0755u : 0644u;
+
+    if ((ent[12] & FAT_META_PRESENT) != 0) {
+        is_symlink = (ent[12] & FAT_META_SYMLINK) != 0;
+        mode = (uint16_t)(read_le16(ent + 20) & 07777u);
+    }
+
+    if (out_is_symlink) *out_is_symlink = is_symlink;
+    if (out_mode) *out_mode = mode;
+    return true;
+}
+
+bool fatdisk_set_meta(const char* abs_path, bool is_symlink, uint16_t mode) {
+    if (!g_fs.ready || !abs_path) {
+        return false;
+    }
+    if (is_root_path(abs_path)) {
+        return false;
+    }
+
+    dir_loc_t loc;
+    uint8_t ent[32];
+    if (!lookup_path_entry(abs_path, &loc, ent)) {
+        return false;
+    }
+
+    uint8_t nt = ent[12];
+    nt |= FAT_META_PRESENT;
+    if (is_symlink) {
+        nt |= FAT_META_SYMLINK;
+    } else {
+        nt &= (uint8_t)~FAT_META_SYMLINK;
+    }
+    ent[12] = nt;
+    write_le16(ent + 20, (uint16_t)(mode & 07777u));
+
+    if (!write_dir_entry_at(loc, ent)) {
+        return false;
+    }
+    (void)ata_flush();
+    return true;
+}
+
 uint32_t fatdisk_list_dir(const char* abs_path, fatdisk_dirent_t* out, uint32_t max) {
     if (!g_fs.ready || !out || max == 0) {
         return 0;
@@ -1555,6 +1630,12 @@ uint32_t fatdisk_list_dir(const char* abs_path, fatdisk_dirent_t* out, uint32_t 
                 strncpy(out[count].name, long_name, sizeof(out[count].name) - 1u);
                 out[count].name[sizeof(out[count].name) - 1u] = '\0';
                 out[count].is_dir = (e[11] & FAT_ATTR_DIR) != 0;
+                out[count].is_symlink = false;
+                out[count].mode = out[count].is_dir ? 0755u : 0644u;
+                if ((e[12] & FAT_META_PRESENT) != 0) {
+                    out[count].is_symlink = (e[12] & FAT_META_SYMLINK) != 0;
+                    out[count].mode = (uint16_t)(read_le16(e + 20) & 07777u);
+                }
                 out[count].size = out[count].is_dir ? 0u : read_le32(e + 28);
                 uint16_t wtime = 0;
                 uint16_t wdate = 0;
@@ -1631,6 +1712,12 @@ uint32_t fatdisk_list_dir(const char* abs_path, fatdisk_dirent_t* out, uint32_t 
                 strncpy(out[count].name, long_name, sizeof(out[count].name) - 1u);
                 out[count].name[sizeof(out[count].name) - 1u] = '\0';
                 out[count].is_dir = (e[11] & FAT_ATTR_DIR) != 0;
+                out[count].is_symlink = false;
+                out[count].mode = out[count].is_dir ? 0755u : 0644u;
+                if ((e[12] & FAT_META_PRESENT) != 0) {
+                    out[count].is_symlink = (e[12] & FAT_META_SYMLINK) != 0;
+                    out[count].mode = (uint16_t)(read_le16(e + 20) & 07777u);
+                }
                 out[count].size = out[count].is_dir ? 0u : read_le32(e + 28);
                 uint16_t wtime = 0;
                 uint16_t wdate = 0;

@@ -11,6 +11,8 @@
 #define EIO     5
 #define ENOEXEC 8
 #define EBADF   9
+#define ECHILD  10
+#define EAGAIN  11
 #define ENOMEM  12
 #define EACCES  13
 #define EFAULT  14
@@ -30,6 +32,7 @@
 #define ENOSYS  88
 #define ENOTEMPTY 90
 #define ENAMETOOLONG 91
+#define ELOOP   92
 #define EOVERFLOW 139
 
 #endif

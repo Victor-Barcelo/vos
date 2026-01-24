@@ -7,10 +7,12 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <grp.h>
 #include <pwd.h>
 #include <sys/stat.h>
 #include <sys/time.h>
 #include <sys/types.h>
+#include <sys/utsname.h>
 #include <sys/ioctl.h>
 #include <sys/mman.h>
 #include <dirent.h>
@@ -29,6 +31,159 @@ ssize_t getdelim(char** lineptr, size_t* n, int delim, FILE* stream) {
 
 ssize_t getline(char** lineptr, size_t* n, FILE* stream) {
     return __getline(lineptr, n, stream);
+}
+
+// ---------------------------------------------------------------------------
+// Minimal POSIX compatibility helpers (for ports like sbase)
+// ---------------------------------------------------------------------------
+
+#ifndef VOS_PATH_MAX
+#define VOS_PATH_MAX 256
+#endif
+
+#ifndef VOS_MAX_TRACK_FDS
+#define VOS_MAX_TRACK_FDS 64
+#endif
+
+static char g_fd_paths[VOS_MAX_TRACK_FDS][VOS_PATH_MAX];
+static unsigned char g_fd_path_valid[VOS_MAX_TRACK_FDS];
+
+static void fd_path_clear(int fd) {
+    if (fd < 0 || fd >= (int)VOS_MAX_TRACK_FDS) {
+        return;
+    }
+    g_fd_path_valid[fd] = 0;
+    g_fd_paths[fd][0] = '\0';
+}
+
+static void fd_path_set(int fd, const char* abs_path) {
+    if (fd < 0 || fd >= (int)VOS_MAX_TRACK_FDS) {
+        return;
+    }
+    if (!abs_path) {
+        fd_path_clear(fd);
+        return;
+    }
+    strncpy(g_fd_paths[fd], abs_path, sizeof(g_fd_paths[fd]) - 1u);
+    g_fd_paths[fd][sizeof(g_fd_paths[fd]) - 1u] = '\0';
+    g_fd_path_valid[fd] = 1;
+}
+
+static const char* fd_path_get(int fd) {
+    if (fd < 0 || fd >= (int)VOS_MAX_TRACK_FDS) {
+        return NULL;
+    }
+    if (!g_fd_path_valid[fd]) {
+        return NULL;
+    }
+    if (g_fd_paths[fd][0] == '\0') {
+        return NULL;
+    }
+    return g_fd_paths[fd];
+}
+
+static void fd_path_copy(int newfd, int oldfd) {
+    if (newfd < 0 || newfd >= (int)VOS_MAX_TRACK_FDS) {
+        return;
+    }
+    const char* p = fd_path_get(oldfd);
+    if (!p) {
+        fd_path_clear(newfd);
+        return;
+    }
+    fd_path_set(newfd, p);
+}
+
+static int path_is_abs(const char* path) {
+    return path && path[0] == '/';
+}
+
+static int path_join(char out[VOS_PATH_MAX], const char* base, const char* rel) {
+    if (!out || !base || !rel) {
+        errno = EINVAL;
+        return -1;
+    }
+    if (rel[0] == '\0') {
+        errno = EINVAL;
+        return -1;
+    }
+    if (rel[0] == '/') {
+        if (strlen(rel) >= VOS_PATH_MAX) {
+            errno = ENAMETOOLONG;
+            return -1;
+        }
+        strncpy(out, rel, VOS_PATH_MAX - 1u);
+        out[VOS_PATH_MAX - 1u] = '\0';
+        return 0;
+    }
+
+    size_t blen = strlen(base);
+    size_t rlen = strlen(rel);
+    size_t need = blen + (blen && base[blen - 1u] != '/' ? 1u : 0u) + rlen + 1u;
+    if (need > VOS_PATH_MAX) {
+        errno = ENAMETOOLONG;
+        return -1;
+    }
+
+    strncpy(out, base, VOS_PATH_MAX - 1u);
+    out[VOS_PATH_MAX - 1u] = '\0';
+    if (blen && out[blen - 1u] != '/') {
+        out[blen] = '/';
+        out[blen + 1u] = '\0';
+    }
+    strncat(out, rel, VOS_PATH_MAX - 1u - strlen(out));
+    return 0;
+}
+
+static int path_make_abs(char out[VOS_PATH_MAX], const char* path) {
+    if (!out || !path) {
+        errno = EINVAL;
+        return -1;
+    }
+    if (path_is_abs(path)) {
+        if (strlen(path) >= VOS_PATH_MAX) {
+            errno = ENAMETOOLONG;
+            return -1;
+        }
+        strncpy(out, path, VOS_PATH_MAX - 1u);
+        out[VOS_PATH_MAX - 1u] = '\0';
+        return 0;
+    }
+
+    char cwd[VOS_PATH_MAX];
+    if (!getcwd(cwd, sizeof(cwd))) {
+        return -1;
+    }
+    return path_join(out, cwd, path);
+}
+
+static dev_t dev_from_path(const char* abs_path) {
+    if (!abs_path || abs_path[0] != '/') {
+        return 0;
+    }
+    if (!strncmp(abs_path, "/disk", 5) || !strncmp(abs_path, "/usr", 4) || !strncmp(abs_path, "/etc", 4) ||
+        !strncmp(abs_path, "/home", 5) || !strncmp(abs_path, "/var", 4)) {
+        return 1;
+    }
+    if (!strncmp(abs_path, "/ram", 4) || !strncmp(abs_path, "/tmp", 4)) {
+        return 2;
+    }
+    return 0;
+}
+
+static ino_t ino_from_path(const char* abs_path) {
+    if (!abs_path) {
+        return 0;
+    }
+    uint32_t h = 2166136261u; // FNV-1a 32-bit offset
+    for (const unsigned char* p = (const unsigned char*)abs_path; *p; p++) {
+        h ^= (uint32_t)(*p);
+        h *= 16777619u;
+    }
+    if (h == 0) {
+        h = 1;
+    }
+    return (ino_t)h;
 }
 
 // Minimal POSIX basename/dirname for userland ports (e.g. sbase).
@@ -213,6 +368,7 @@ static char g_pw_name[64];
 static char g_pw_passwd[64];
 static char g_pw_dir[128];
 static char g_pw_shell[128];
+static char g_login_name[64];
 
 static struct passwd* passwd_lookup_name(const char* name) {
     if (!name || name[0] == '\0') {
@@ -319,6 +475,134 @@ struct passwd* getpwuid(uid_t uid) {
     return out;
 }
 
+char* getlogin(void) {
+    struct passwd* pw = getpwuid(geteuid());
+    if (!pw || !pw->pw_name) {
+        errno = ENOENT;
+        return NULL;
+    }
+    strncpy(g_login_name, pw->pw_name, sizeof(g_login_name) - 1u);
+    g_login_name[sizeof(g_login_name) - 1u] = '\0';
+    return g_login_name;
+}
+
+int getlogin_r(char* buf, size_t buflen) {
+    if (!buf || buflen == 0) {
+        return ERANGE;
+    }
+    char* login = getlogin();
+    if (!login) {
+        return errno ? errno : ENOENT;
+    }
+    size_t n = strlen(login) + 1u;
+    if (n > buflen) {
+        return ERANGE;
+    }
+    memcpy(buf, login, n);
+    return 0;
+}
+
+static struct group g_gr;
+static char g_gr_name[64];
+static char g_gr_passwd[64];
+static char* g_gr_mem[1];
+
+static struct group* group_lookup_name(const char* name) {
+    if (!name || name[0] == '\0') {
+        return NULL;
+    }
+
+    FILE* f = fopen("/etc/group", "r");
+    if (!f) {
+        return NULL;
+    }
+
+    char line[256];
+    struct group* out = NULL;
+
+    while (fgets(line, sizeof(line), f)) {
+        // name:pass:gid:members
+        char* nl = strchr(line, '\n');
+        if (nl) *nl = '\0';
+
+        char* fields[4] = {0};
+        int nf = 0;
+        char* p = line;
+        for (; nf < 4; nf++) {
+            fields[nf] = p;
+            char* c = strchr(p, ':');
+            if (!c) break;
+            *c = '\0';
+            p = c + 1;
+        }
+
+        if (!fields[0] || strcmp(fields[0], name) != 0) {
+            continue;
+        }
+
+        g_gr.gr_name = g_gr_name;
+        g_gr.gr_passwd = g_gr_passwd;
+        g_gr.gr_mem = g_gr_mem;
+        g_gr_mem[0] = NULL;
+
+        strncpy(g_gr_name, fields[0], sizeof(g_gr_name) - 1u);
+        g_gr_name[sizeof(g_gr_name) - 1u] = '\0';
+        strncpy(g_gr_passwd, (fields[1] ? fields[1] : ""), sizeof(g_gr_passwd) - 1u);
+        g_gr_passwd[sizeof(g_gr_passwd) - 1u] = '\0';
+
+        g_gr.gr_gid = (gid_t)(fields[2] ? strtoul(fields[2], NULL, 10) : 0);
+        out = &g_gr;
+        break;
+    }
+
+    fclose(f);
+    return out;
+}
+
+struct group* getgrnam(const char* name) {
+    return group_lookup_name(name);
+}
+
+struct group* getgrgid(gid_t gid) {
+    FILE* f = fopen("/etc/group", "r");
+    if (!f) {
+        return NULL;
+    }
+
+    char line[256];
+    struct group* out = NULL;
+
+    while (fgets(line, sizeof(line), f)) {
+        char* nl = strchr(line, '\n');
+        if (nl) *nl = '\0';
+
+        char* fields[4] = {0};
+        int nf = 0;
+        char* p = line;
+        for (; nf < 4; nf++) {
+            fields[nf] = p;
+            char* c = strchr(p, ':');
+            if (!c) break;
+            *c = '\0';
+            p = c + 1;
+        }
+
+        if (!fields[2]) {
+            continue;
+        }
+        gid_t file_gid = (gid_t)strtoul(fields[2], NULL, 10);
+        if (file_gid != gid) {
+            continue;
+        }
+
+        out = group_lookup_name(fields[0]);
+        break;
+    }
+
+    fclose(f);
+    return out;
+}
+
 // VOS syscall numbers (kernel/syscall.c)
 enum {
     SYS_WRITE = 0,
@@ -379,11 +663,25 @@ enum {
     SYS_SIGNAL = 55,
     SYS_SIGRETURN = 56,
     SYS_SIGPROCMASK = 57,
+    SYS_GETPPID = 58,
+    SYS_GETPGRP = 59,
+    SYS_SETPGID = 60,
+    SYS_FCNTL = 61,
+    SYS_ALARM = 62,
+    SYS_LSTAT = 63,
+    SYS_SYMLINK = 64,
+    SYS_READLINK = 65,
+    SYS_CHMOD = 66,
+    SYS_FCHMOD = 67,
+    SYS_FORK = 68,
+    SYS_EXECVE = 69,
+    SYS_WAITPID = 70,
 };
 
 typedef struct vos_stat {
     unsigned char is_dir;
-    unsigned char _pad[3];
+    unsigned char is_symlink;
+    unsigned short mode;
     unsigned int size;
     unsigned short wtime;
     unsigned short wdate;
@@ -402,7 +700,8 @@ typedef struct vos_rtc_datetime {
 typedef struct vos_dirent {
     char name[VOS_NAME_MAX];
     unsigned char is_dir;
-    unsigned char _pad[3];
+    unsigned char is_symlink;
+    unsigned short mode;
     unsigned int size;
     unsigned short wtime;
     unsigned short wdate;
@@ -414,6 +713,17 @@ static inline int vos_sys_sleep(unsigned int ms) {
         "int $0x80"
         : "=a"(ret)
         : "a"(SYS_SLEEP), "b"(ms)
+        : "memory"
+    );
+    return ret;
+}
+
+static inline int vos_sys_alarm(unsigned int seconds) {
+    int ret;
+    __asm__ volatile (
+        "int $0x80"
+        : "=a"(ret)
+        : "a"(SYS_ALARM), "b"(seconds)
         : "memory"
     );
     return ret;
@@ -447,6 +757,17 @@ static inline int vos_sys_rtc_get(vos_rtc_datetime_t* dt) {
         "int $0x80"
         : "=a"(ret)
         : "a"(SYS_RTC_GET), "b"(dt)
+        : "memory"
+    );
+    return ret;
+}
+
+static inline int vos_sys_rtc_set(const vos_rtc_datetime_t* dt) {
+    int ret;
+    __asm__ volatile (
+        "int $0x80"
+        : "=a"(ret)
+        : "a"(SYS_RTC_SET), "b"(dt)
         : "memory"
     );
     return ret;
@@ -580,6 +901,61 @@ static inline int vos_sys_stat(const char* path, vos_stat_t* st) {
         "int $0x80"
         : "=a"(ret)
         : "a"(SYS_STAT), "b"(path), "c"(st)
+        : "memory"
+    );
+    return ret;
+}
+
+static inline int vos_sys_lstat(const char* path, vos_stat_t* st) {
+    int ret;
+    __asm__ volatile (
+        "int $0x80"
+        : "=a"(ret)
+        : "a"(SYS_LSTAT), "b"(path), "c"(st)
+        : "memory"
+    );
+    return ret;
+}
+
+static inline int vos_sys_symlink(const char* target, const char* linkpath) {
+    int ret;
+    __asm__ volatile (
+        "int $0x80"
+        : "=a"(ret)
+        : "a"(SYS_SYMLINK), "b"(target), "c"(linkpath)
+        : "memory"
+    );
+    return ret;
+}
+
+static inline int vos_sys_readlink(const char* path, char* buf, unsigned int cap) {
+    int ret;
+    __asm__ volatile (
+        "int $0x80"
+        : "=a"(ret)
+        : "a"(SYS_READLINK), "b"(path), "c"(buf), "d"(cap)
+        : "memory"
+    );
+    return ret;
+}
+
+static inline int vos_sys_chmod(const char* path, unsigned int mode) {
+    int ret;
+    __asm__ volatile (
+        "int $0x80"
+        : "=a"(ret)
+        : "a"(SYS_CHMOD), "b"(path), "c"(mode)
+        : "memory"
+    );
+    return ret;
+}
+
+static inline int vos_sys_fchmod(int fd, unsigned int mode) {
+    int ret;
+    __asm__ volatile (
+        "int $0x80"
+        : "=a"(ret)
+        : "a"(SYS_FCHMOD), "b"(fd), "c"(mode)
         : "memory"
     );
     return ret;
@@ -728,6 +1104,17 @@ static inline int vos_sys_pipe(int* fds) {
     return ret;
 }
 
+static inline int vos_sys_fcntl(int fd, int cmd, int arg) {
+    int ret;
+    __asm__ volatile (
+        "int $0x80"
+        : "=a"(ret)
+        : "a"(SYS_FCNTL), "b"(fd), "c"(cmd), "d"(arg)
+        : "memory"
+    );
+    return ret;
+}
+
 static inline int vos_sys_getpid(void) {
     int ret;
     __asm__ volatile (
@@ -739,12 +1126,78 @@ static inline int vos_sys_getpid(void) {
     return ret;
 }
 
+static inline int vos_sys_getppid(void) {
+    int ret;
+    __asm__ volatile (
+        "int $0x80"
+        : "=a"(ret)
+        : "a"(SYS_GETPPID)
+        : "memory"
+    );
+    return ret;
+}
+
+static inline int vos_sys_getpgrp(void) {
+    int ret;
+    __asm__ volatile (
+        "int $0x80"
+        : "=a"(ret)
+        : "a"(SYS_GETPGRP)
+        : "memory"
+    );
+    return ret;
+}
+
+static inline int vos_sys_setpgid(int pid, int pgid) {
+    int ret;
+    __asm__ volatile (
+        "int $0x80"
+        : "=a"(ret)
+        : "a"(SYS_SETPGID), "b"(pid), "c"(pgid)
+        : "memory"
+    );
+    return ret;
+}
+
 static inline int vos_sys_wait(int pid) {
     int ret;
     __asm__ volatile (
         "int $0x80"
         : "=a"(ret)
         : "a"(SYS_WAIT), "b"(pid)
+        : "memory"
+    );
+    return ret;
+}
+
+static inline int vos_sys_waitpid(int pid, int* status, int options) {
+    int ret;
+    __asm__ volatile (
+        "int $0x80"
+        : "=a"(ret)
+        : "a"(SYS_WAITPID), "b"(pid), "c"(status), "d"(options)
+        : "memory"
+    );
+    return ret;
+}
+
+static inline int vos_sys_fork(void) {
+    int ret;
+    __asm__ volatile (
+        "int $0x80"
+        : "=a"(ret)
+        : "a"(SYS_FORK)
+        : "memory"
+    );
+    return ret;
+}
+
+static inline int vos_sys_execve(const char* path, const char* const* argv, unsigned int argc) {
+    int ret;
+    __asm__ volatile (
+        "int $0x80"
+        : "=a"(ret)
+        : "a"(SYS_EXECVE), "b"(path), "c"(argv), "d"(argc)
         : "memory"
     );
     return ret;
@@ -876,6 +1329,59 @@ static time_t ymdhms_to_epoch(int year, int month, int day, int hour, int minute
     return (time_t)sec;
 }
 
+static void epoch_to_ymdhms(time_t t, int* year, int* month, int* day, int* hour, int* minute, int* second) {
+    if (!year || !month || !day || !hour || !minute || !second) {
+        return;
+    }
+
+    long sec = (long)t;
+    if (sec < 0) {
+        sec = 0;
+    }
+
+    long days = sec / 86400L;
+    long rem = sec % 86400L;
+    if (rem < 0) {
+        rem += 86400L;
+        days -= 1;
+    }
+
+    *hour = (int)(rem / 3600L);
+    rem %= 3600L;
+    *minute = (int)(rem / 60L);
+    *second = (int)(rem % 60L);
+
+    int y = 1970;
+    for (;;) {
+        int ydays = is_leap(y) ? 366 : 365;
+        if (days >= ydays) {
+            days -= ydays;
+            y++;
+            continue;
+        }
+        break;
+    }
+
+    static const int mdays[12] = {31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
+    int m = 1;
+    for (int i = 0; i < 12; i++) {
+        int dim = mdays[i];
+        if (i == 1 && is_leap(y)) {
+            dim++;
+        }
+        if (days >= dim) {
+            days -= dim;
+            m++;
+            continue;
+        }
+        break;
+    }
+
+    *year = y;
+    *month = m;
+    *day = (int)days + 1;
+}
+
 static time_t fat_ts_to_epoch(unsigned short wdate, unsigned short wtime) {
     if (wdate == 0) {
         return (time_t)0;
@@ -889,18 +1395,23 @@ static time_t fat_ts_to_epoch(unsigned short wdate, unsigned short wtime) {
     return ymdhms_to_epoch(year, month, day, hour, minute, second);
 }
 
-static void fill_stat_common(struct stat* st, const vos_stat_t* vst) {
+static void fill_stat_common(struct stat* st, const vos_stat_t* vst, const char* abs_path) {
     if (!st || !vst) {
         return;
     }
 
     memset(st, 0, sizeof(*st));
-    if (vst->is_dir) {
-        st->st_mode = S_IFDIR | 0755;
+    mode_t perm = (mode_t)(vst->mode & 07777u);
+    if (vst->is_symlink) {
+        st->st_mode = S_IFLNK | perm;
+    } else if (vst->is_dir) {
+        st->st_mode = S_IFDIR | perm;
     } else {
-        st->st_mode = S_IFREG | 0644;
+        st->st_mode = S_IFREG | perm;
     }
     st->st_nlink = 1;
+    st->st_uid = getuid();
+    st->st_gid = getgid();
     st->st_size = (off_t)vst->size;
     st->st_blksize = 512;
     st->st_blocks = (blkcnt_t)((vst->size + 511u) / 512u);
@@ -910,6 +1421,11 @@ static void fill_stat_common(struct stat* st, const vos_stat_t* vst) {
     st->st_mtim.tv_nsec = 0;
     st->st_atim = st->st_mtim;
     st->st_ctim = st->st_mtim;
+
+    if (abs_path && abs_path[0] == '/') {
+        st->st_dev = dev_from_path(abs_path);
+        st->st_ino = ino_from_path(abs_path);
+    }
 }
 
 int open(const char* name, int flags, ...) {
@@ -918,11 +1434,23 @@ int open(const char* name, int flags, ...) {
     (void)va_arg(ap, int);
     va_end(ap);
 
-    int rc = vos_sys_open(name, flags);
+    if (!name) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    char abs[VOS_PATH_MAX];
+    const char* eff = name;
+    if (path_make_abs(abs, name) == 0) {
+        eff = abs;
+    }
+
+    int rc = vos_sys_open(eff, flags);
     if (rc < 0) {
         errno = -rc;
         return -1;
     }
+    fd_path_set(rc, eff);
     return rc;
 }
 
@@ -932,6 +1460,7 @@ int close(int file) {
         errno = -rc;
         return -1;
     }
+    fd_path_clear(file);
     return rc;
 }
 
@@ -997,7 +1526,7 @@ int fstat(int file, struct stat* st) {
         return -1;
     }
 
-    fill_stat_common(st, &vst);
+    fill_stat_common(st, &vst, fd_path_get(file));
     return 0;
 }
 
@@ -1028,19 +1557,311 @@ int stat(const char* path, struct stat* st) {
     }
 
     vos_stat_t vst;
-    int rc = vos_sys_stat(path, &vst);
+    char abs[VOS_PATH_MAX];
+    const char* eff = path;
+    if (path_make_abs(abs, path) == 0) {
+        eff = abs;
+    }
+
+    int rc = vos_sys_stat(eff, &vst);
     if (rc < 0) {
         errno = -rc;
         return -1;
     }
 
-    fill_stat_common(st, &vst);
+    fill_stat_common(st, &vst, eff);
     return 0;
 }
 
 int lstat(const char* path, struct stat* st) {
-    // VOS currently doesn't support symlinks, so lstat == stat.
-    return stat(path, st);
+    if (!path || !st) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    vos_stat_t vst;
+    char abs[VOS_PATH_MAX];
+    const char* eff = path;
+    if (path_make_abs(abs, path) == 0) {
+        eff = abs;
+    }
+
+    int rc = vos_sys_lstat(eff, &vst);
+    if (rc < 0) {
+        errno = -rc;
+        return -1;
+    }
+
+    fill_stat_common(st, &vst, eff);
+    return 0;
+}
+
+int fstatat(int dirfd, const char* path, struct stat* st, int flags) {
+    if (!path || !st) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    char abs[VOS_PATH_MAX];
+    const char* eff = path;
+    if (!path_is_abs(path)) {
+        if (dirfd == AT_FDCWD) {
+            if (path_make_abs(abs, path) < 0) {
+                return -1;
+            }
+        } else {
+            const char* base = fd_path_get(dirfd);
+            if (!base) {
+                errno = EBADF;
+                return -1;
+            }
+            if (path_join(abs, base, path) < 0) {
+                return -1;
+            }
+        }
+        eff = abs;
+    }
+
+    if ((flags & AT_SYMLINK_NOFOLLOW) != 0) {
+        return lstat(eff, st);
+    }
+    return stat(eff, st);
+}
+
+int openat(int dirfd, const char* path, int flags, ...) {
+    va_list ap;
+    va_start(ap, flags);
+    int mode = va_arg(ap, int);
+    va_end(ap);
+    (void)mode;
+
+    if (!path) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    char abs[VOS_PATH_MAX];
+    const char* eff = path;
+    if (!path_is_abs(path)) {
+        if (dirfd == AT_FDCWD) {
+            if (path_make_abs(abs, path) < 0) {
+                return -1;
+            }
+        } else {
+            const char* base = fd_path_get(dirfd);
+            if (!base) {
+                errno = EBADF;
+                return -1;
+            }
+            if (path_join(abs, base, path) < 0) {
+                return -1;
+            }
+        }
+        eff = abs;
+    }
+
+    return open(eff, flags, 0);
+}
+
+int creat(const char* path, mode_t mode) {
+    return open(path, O_WRONLY | O_CREAT | O_TRUNC, mode);
+}
+
+int utimensat(int dirfd, const char* path, const struct timespec times[2], int flags) {
+    (void)times;
+    (void)flags;
+    if (!path) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    char abs[VOS_PATH_MAX];
+    const char* eff = path;
+    if (!path_is_abs(path)) {
+        if (dirfd == AT_FDCWD) {
+            if (path_make_abs(abs, path) < 0) {
+                return -1;
+            }
+        } else {
+            const char* base = fd_path_get(dirfd);
+            if (!base) {
+                errno = EBADF;
+                return -1;
+            }
+            if (path_join(abs, base, path) < 0) {
+                return -1;
+            }
+        }
+        eff = abs;
+    }
+
+    // Timestamp writes aren't supported yet. Succeed if the path exists.
+    struct stat st;
+    if (stat(eff, &st) < 0) {
+        return -1;
+    }
+    return 0;
+}
+
+int faccessat(int dirfd, const char* path, int mode, int flags) {
+    (void)flags;
+    if (!path) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    char abs[VOS_PATH_MAX];
+    const char* eff = path;
+    if (!path_is_abs(path)) {
+        if (dirfd == AT_FDCWD) {
+            if (path_make_abs(abs, path) < 0) {
+                return -1;
+            }
+        } else {
+            const char* base = fd_path_get(dirfd);
+            if (!base) {
+                errno = EBADF;
+                return -1;
+            }
+            if (path_join(abs, base, path) < 0) {
+                return -1;
+            }
+        }
+        eff = abs;
+    }
+
+    return access(eff, mode);
+}
+
+int unlinkat(int dirfd, const char* path, int flags) {
+    if (!path) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    char abs[VOS_PATH_MAX];
+    const char* eff = path;
+    if (!path_is_abs(path)) {
+        if (dirfd == AT_FDCWD) {
+            if (path_make_abs(abs, path) < 0) {
+                return -1;
+            }
+        } else {
+            const char* base = fd_path_get(dirfd);
+            if (!base) {
+                errno = EBADF;
+                return -1;
+            }
+            if (path_join(abs, base, path) < 0) {
+                return -1;
+            }
+        }
+        eff = abs;
+    }
+
+    if ((flags & AT_REMOVEDIR) != 0) {
+        return rmdir(eff);
+    }
+    return unlink(eff);
+}
+
+int futimens(int fd, const struct timespec times[2]) {
+    (void)times;
+    if (fd < 0) {
+        errno = EBADF;
+        return -1;
+    }
+    // Timestamp writes aren't supported yet. Treat as success.
+    return 0;
+}
+
+int chmod(const char* path, mode_t mode) {
+    if (!path) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    char abs[VOS_PATH_MAX];
+    const char* eff = path;
+    if (path_make_abs(abs, path) == 0) {
+        eff = abs;
+    }
+
+    int rc = vos_sys_chmod(eff, (unsigned int)mode);
+    if (rc < 0) {
+        errno = -rc;
+        return -1;
+    }
+    return 0;
+}
+
+int chown(const char* path, uid_t owner, gid_t group) {
+    (void)path;
+    (void)owner;
+    (void)group;
+    // VOS does not currently persist ownership. Treat as success.
+    return 0;
+}
+
+int lchown(const char* path, uid_t owner, gid_t group) {
+    return chown(path, owner, group);
+}
+
+int mknod(const char* path, mode_t mode, dev_t dev) {
+    (void)path;
+    (void)mode;
+    (void)dev;
+    errno = ENOSYS;
+    return -1;
+}
+
+int symlink(const char* target, const char* linkpath) {
+    if (!target || !linkpath) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    char abs[VOS_PATH_MAX];
+    const char* eff_link = linkpath;
+    if (path_make_abs(abs, linkpath) == 0) {
+        eff_link = abs;
+    }
+
+    int rc = vos_sys_symlink(target, eff_link);
+    if (rc < 0) {
+        errno = -rc;
+        return -1;
+    }
+    return 0;
+}
+
+ssize_t readlink(const char* path, char* buf, size_t bufsize) {
+    if (!path || (bufsize != 0 && !buf)) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    char abs[VOS_PATH_MAX];
+    const char* eff = path;
+    if (path_make_abs(abs, path) == 0) {
+        eff = abs;
+    }
+
+    int rc = vos_sys_readlink(eff, buf, (unsigned int)bufsize);
+    if (rc < 0) {
+        errno = -rc;
+        return -1;
+    }
+    return (ssize_t)rc;
+}
+
+unsigned int alarm(unsigned int seconds) {
+    int rc = vos_sys_alarm(seconds);
+    if (rc < 0) {
+        errno = -rc;
+        return 0;
+    }
+    return (unsigned int)rc;
 }
 
 unsigned int sleep(unsigned int seconds) {
@@ -1109,6 +1930,55 @@ int clock_gettime(clockid_t clock_id, struct timespec* tp) {
 
     errno = EINVAL;
     return -1;
+}
+
+int clock_settime(clockid_t clock_id, const struct timespec* tp) {
+    if (!tp) {
+        errno = EINVAL;
+        return -1;
+    }
+    if (clock_id != CLOCK_REALTIME) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    int year = 0, month = 0, day = 0, hour = 0, minute = 0, second = 0;
+    epoch_to_ymdhms(tp->tv_sec, &year, &month, &day, &hour, &minute, &second);
+
+    vos_rtc_datetime_t dt;
+    dt.year = (unsigned short)year;
+    dt.month = (unsigned char)month;
+    dt.day = (unsigned char)day;
+    dt.hour = (unsigned char)hour;
+    dt.minute = (unsigned char)minute;
+    dt.second = (unsigned char)second;
+
+    int rc = vos_sys_rtc_set(&dt);
+    if (rc < 0) {
+        errno = -rc;
+        return -1;
+    }
+
+    return 0;
+}
+
+int uname(struct utsname* buf) {
+    if (!buf) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    memset(buf, 0, sizeof(*buf));
+
+    // Keep these stable to make ports deterministic. When VOS grows a real
+    // kernel versioning facility, these can be wired up to it.
+    strncpy(buf->sysname, "VOS", sizeof(buf->sysname) - 1u);
+    strncpy(buf->nodename, "vos", sizeof(buf->nodename) - 1u);
+    strncpy(buf->release, "0.1.0", sizeof(buf->release) - 1u);
+    strncpy(buf->version, "VOS kernel", sizeof(buf->version) - 1u);
+    strncpy(buf->machine, "i386", sizeof(buf->machine) - 1u);
+
+    return 0;
 }
 
 DIR* opendir(const char* name) {
@@ -1348,12 +2218,33 @@ int ioctl(int fd, unsigned long request, ...) {
     return rc;
 }
 
+int fcntl(int fd, int cmd, ...) {
+    int arg = 0;
+    if (cmd == F_DUPFD || cmd == F_DUPFD_CLOEXEC || cmd == F_SETFD || cmd == F_SETFL) {
+        va_list ap;
+        va_start(ap, cmd);
+        arg = va_arg(ap, int);
+        va_end(ap);
+    }
+
+    int rc = vos_sys_fcntl(fd, cmd, arg);
+    if (rc < 0) {
+        errno = -rc;
+        return -1;
+    }
+    if (cmd == F_DUPFD || cmd == F_DUPFD_CLOEXEC) {
+        fd_path_copy(rc, fd);
+    }
+    return rc;
+}
+
 int dup(int oldfd) {
     int rc = vos_sys_dup(oldfd);
     if (rc < 0) {
         errno = -rc;
         return -1;
     }
+    fd_path_copy(rc, oldfd);
     return rc;
 }
 
@@ -1363,6 +2254,7 @@ int dup2(int oldfd, int newfd) {
         errno = -rc;
         return -1;
     }
+    fd_path_copy(newfd, oldfd);
     return rc;
 }
 
@@ -1376,6 +2268,8 @@ int pipe(int fds[2]) {
         errno = -rc;
         return -1;
     }
+    fd_path_clear(fds[0]);
+    fd_path_clear(fds[1]);
     return 0;
 }
 
@@ -1546,6 +2440,80 @@ int getpid(void) {
     return vos_sys_getpid();
 }
 
+pid_t fork(void) {
+    int rc = vos_sys_fork();
+    if (rc < 0) {
+        errno = -rc;
+        return (pid_t)-1;
+    }
+    return (pid_t)rc;
+}
+
+int execve(const char* path, char* const argv[], char* const envp[]) {
+    (void)envp;
+    if (!path) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    unsigned int argc = 0;
+    if (argv) {
+        for (; argc < 32u && argv[argc]; argc++) {
+        }
+        if (argc == 32u && argv[argc]) {
+            errno = E2BIG;
+            return -1;
+        }
+    }
+
+    int rc = vos_sys_execve(path, (const char* const*)argv, argc);
+    if (rc < 0) {
+        errno = -rc;
+        return -1;
+    }
+    return rc;
+}
+
+pid_t waitpid(pid_t pid, int* status, int options) {
+    int rc = vos_sys_waitpid((int)pid, status, options);
+    if (rc < 0) {
+        errno = -rc;
+        return (pid_t)-1;
+    }
+    return (pid_t)rc;
+}
+
+pid_t wait(int* status) {
+    return waitpid((pid_t)-1, status, 0);
+}
+
+int getppid(void) {
+    int rc = vos_sys_getppid();
+    if (rc < 0) {
+        errno = -rc;
+        return -1;
+    }
+    return rc;
+}
+
+int getpgrp(void) {
+    int rc = vos_sys_getpgrp();
+    if (rc < 0) {
+        errno = -rc;
+        return -1;
+    }
+    return rc;
+}
+
+int setpgid(pid_t pid, pid_t pgid) {
+    int rc = vos_sys_setpgid((int)pid, (int)pgid);
+    if (rc < 0) {
+        errno = -rc;
+        return -1;
+    }
+    return 0;
+}
+
 uid_t getuid(void) {
     int rc = vos_sys_getuid();
     if (rc < 0) {
@@ -1596,10 +2564,17 @@ mode_t umask(mode_t mask) {
 }
 
 int fchmod(int fd, mode_t mode) {
-    (void)fd;
-    (void)mode;
-    errno = ENOSYS;
-    return -1;
+    if (fd < 0) {
+        errno = EBADF;
+        return -1;
+    }
+
+    int rc = vos_sys_fchmod(fd, (unsigned int)mode);
+    if (rc < 0) {
+        errno = -rc;
+        return -1;
+    }
+    return 0;
 }
 
 static int vos_system_run(const char* command) {

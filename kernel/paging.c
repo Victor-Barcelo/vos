@@ -24,6 +24,39 @@ static bool is_kernel_vaddr(uint32_t vaddr) {
 
 static uint32_t* ensure_page_table(uint32_t* dir, uint32_t dir_index, uint32_t map_flags);
 
+static void copy_shared_kernel_pdes(uint32_t* dst) {
+    if (!dst || !kernel_directory || dst == kernel_directory) {
+        return;
+    }
+
+    uint32_t low_end = USER_BASE >> 22;     // exclusive
+    uint32_t high_start = USER_LIMIT >> 22; // inclusive
+
+    // Low identity-mapped region (< USER_BASE).
+    for (uint32_t i = 0; i < low_end; i++) {
+        dst[i] = kernel_directory[i];
+    }
+
+    // High kernel region (>= USER_LIMIT).
+    for (uint32_t i = high_start; i < 1024u; i++) {
+        dst[i] = kernel_directory[i];
+    }
+
+    // Keep the early allocator region visible to the kernel even when running
+    // on a user page directory. Large initramfs/modules can push early_alloc()
+    // above USER_BASE, and we still need to access page tables/directories
+    // stored there while setting up user mappings.
+    uint32_t early_start = early_alloc_start();
+    uint32_t early_end = early_alloc_current();
+    if (early_end > early_start) {
+        uint32_t start_idx = early_start >> 22;
+        uint32_t end_idx = (early_end - 1u) >> 22;
+        for (uint32_t i = start_idx; i <= end_idx && i < high_start; i++) {
+            dst[i] = kernel_directory[i];
+        }
+    }
+}
+
 void paging_prepare_range(uint32_t vaddr, uint32_t size, uint32_t flags) {
     if (size == 0) {
         return;
@@ -230,15 +263,7 @@ uint32_t* paging_create_user_directory(void) {
     uint32_t* dir = (uint32_t*)early_alloc(PAGE_SIZE, PAGE_SIZE);
     memset(dir, 0, PAGE_SIZE);
 
-    uint32_t low_end = USER_BASE >> 22;     // exclusive
-    uint32_t high_start = USER_LIMIT >> 22; // inclusive
-
-    for (uint32_t i = 0; i < low_end; i++) {
-        dir[i] = kernel_directory[i];
-    }
-    for (uint32_t i = high_start; i < 1024u; i++) {
-        dir[i] = kernel_directory[i];
-    }
+    copy_shared_kernel_pdes(dir);
 
     return dir;
 }
@@ -255,16 +280,7 @@ void paging_switch_directory(uint32_t* dir) {
     // framebuffer, etc. We copy the PDE entries that cover:
     // - Low identity-mapped region (< USER_BASE)
     // - High kernel region (>= USER_LIMIT)
-    if (kernel_directory && dir != kernel_directory) {
-        uint32_t low_end = USER_BASE >> 22;
-        uint32_t high_start = USER_LIMIT >> 22;
-        for (uint32_t i = 0; i < low_end; i++) {
-            dir[i] = kernel_directory[i];
-        }
-        for (uint32_t i = high_start; i < 1024u; i++) {
-            dir[i] = kernel_directory[i];
-        }
-    }
+    copy_shared_kernel_pdes(dir);
 
     page_directory = dir;
     __asm__ volatile ("mov %0, %%cr3" : : "r"((uint32_t)dir & 0xFFFFF000u) : "memory");

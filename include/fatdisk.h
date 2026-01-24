@@ -6,6 +6,8 @@
 typedef struct fatdisk_dirent {
     char name[64];
     bool is_dir;
+    bool is_symlink;
+    uint16_t mode; // POSIX permission bits (07777)
     uint32_t size;
     // FAT "last write" timestamp (raw on-disk format). 0 means unknown/unset.
     uint16_t wtime;
@@ -22,6 +24,8 @@ bool fatdisk_is_dir(const char* abs_path);
 bool fatdisk_is_file(const char* abs_path);
 bool fatdisk_stat(const char* abs_path, bool* out_is_dir, uint32_t* out_size);
 bool fatdisk_stat_ex(const char* abs_path, bool* out_is_dir, uint32_t* out_size, uint16_t* out_wtime, uint16_t* out_wdate);
+bool fatdisk_get_meta(const char* abs_path, bool* out_is_symlink, uint16_t* out_mode);
+bool fatdisk_set_meta(const char* abs_path, bool is_symlink, uint16_t mode);
 
 uint32_t fatdisk_list_dir(const char* abs_path, fatdisk_dirent_t* out, uint32_t max);
 

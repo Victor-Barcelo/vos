@@ -74,8 +74,6 @@ int enregcomp(int, regex_t *, const char *, int);
 int eregcomp(regex_t *, const char *, int);
 
 /* io */
-ssize_t getdelim(char **, size_t *, int, FILE *);
-ssize_t getline(char **, size_t *, FILE *);
 ssize_t writeall(int, const void *, size_t);
 int concat(int, const char *, int, const char *);
 

@@ -201,47 +201,33 @@ NE_C_SOURCES = \
 
 NE_OBJECTS = $(patsubst $(NE_SRC_DIR)/%.c,$(NE_BUILD_DIR)/%.o,$(NE_C_SOURCES))
 
-# sbase (portable Unix userland tools) - minimal subset
+# sbase (portable Unix userland tools)
 SBASE_DIR = $(THIRD_PARTY_DIR)/sbase
 SBASE_BUILD_DIR = $(USER_BUILD_DIR)/sbase
+SBASE_BIN_DIR = $(USER_BUILD_DIR)/sbase_bin
 
-SBASE_EPRINTF_OBJ = $(SBASE_BUILD_DIR)/libutil/eprintf.o
-SBASE_EALLOC_OBJ = $(SBASE_BUILD_DIR)/libutil/ealloc.o
-SBASE_FSHUT_OBJ = $(SBASE_BUILD_DIR)/libutil/fshut.o
-SBASE_PUTWORD_OBJ = $(SBASE_BUILD_DIR)/libutil/putword.o
-SBASE_WRITEALL_OBJ = $(SBASE_BUILD_DIR)/libutil/writeall.o
-SBASE_CONCAT_OBJ = $(SBASE_BUILD_DIR)/libutil/concat.o
-SBASE_STRTONUM_OBJ = $(SBASE_BUILD_DIR)/libutil/strtonum.o
-SBASE_STRCASESTR_OBJ = $(SBASE_BUILD_DIR)/libutil/strcasestr.o
-SBASE_EREGCOMP_OBJ = $(SBASE_BUILD_DIR)/libutil/eregcomp.o
+SBASE_LIBUTIL_C_SOURCES = $(wildcard $(SBASE_DIR)/libutil/*.c)
+SBASE_LIBUTIL_OBJECTS = $(patsubst $(SBASE_DIR)/%.c,$(SBASE_BUILD_DIR)/%.o,$(SBASE_LIBUTIL_C_SOURCES))
+SBASE_LIBUTIL = $(SBASE_BUILD_DIR)/libsbaseutil.a
 
-SBASE_RUNE_OBJ = $(SBASE_BUILD_DIR)/libutf/rune.o
-SBASE_UTF_OBJ = $(SBASE_BUILD_DIR)/libutf/utf.o
-SBASE_RUNETYPE_OBJ = $(SBASE_BUILD_DIR)/libutf/runetype.o
-SBASE_ISSPACERUNE_OBJ = $(SBASE_BUILD_DIR)/libutf/isspacerune.o
-SBASE_FGETRUNE_OBJ = $(SBASE_BUILD_DIR)/libutf/fgetrune.o
+SBASE_LIBUTF_C_SOURCES = $(wildcard $(SBASE_DIR)/libutf/*.c)
+SBASE_LIBUTF_OBJECTS = $(patsubst $(SBASE_DIR)/%.c,$(SBASE_BUILD_DIR)/%.o,$(SBASE_LIBUTF_C_SOURCES))
+SBASE_LIBUTF = $(SBASE_BUILD_DIR)/libsbaseutf.a
 
-SBASE_CAT_OBJ = $(SBASE_BUILD_DIR)/cat.o
-SBASE_ECHO_OBJ = $(SBASE_BUILD_DIR)/echo.o
-SBASE_BASENAME_OBJ = $(SBASE_BUILD_DIR)/basename.o
-SBASE_DIRNAME_OBJ = $(SBASE_BUILD_DIR)/dirname.o
-SBASE_HEAD_OBJ = $(SBASE_BUILD_DIR)/head.o
-SBASE_WC_OBJ = $(SBASE_BUILD_DIR)/wc.o
-SBASE_GREP_OBJ = $(SBASE_BUILD_DIR)/grep.o
-SBASE_YES_OBJ = $(SBASE_BUILD_DIR)/yes.o
-SBASE_TRUE_OBJ = $(SBASE_BUILD_DIR)/true.o
-SBASE_FALSE_OBJ = $(SBASE_BUILD_DIR)/false.o
+SBASE_LIBS = $(SBASE_LIBUTIL) $(SBASE_LIBUTF)
 
-SBASE_CAT = $(USER_BUILD_DIR)/cat.elf
-SBASE_ECHO = $(USER_BUILD_DIR)/echo.elf
-SBASE_BASENAME = $(USER_BUILD_DIR)/basename.elf
-SBASE_DIRNAME = $(USER_BUILD_DIR)/dirname.elf
-SBASE_HEAD = $(USER_BUILD_DIR)/head.elf
-SBASE_WC = $(USER_BUILD_DIR)/wc.elf
-SBASE_GREP = $(USER_BUILD_DIR)/grep.elf
-SBASE_YES = $(USER_BUILD_DIR)/yes.elf
-SBASE_TRUE = $(USER_BUILD_DIR)/true.elf
-SBASE_FALSE = $(USER_BUILD_DIR)/false.elf
+# Keep this list focused on tools that don't require fork/exec.
+SBASE_TOOLS = \
+	cat echo basename dirname head wc grep yes true false \
+	ls pwd cp mv rm mkdir rmdir tail cut tr sort uniq tee nl seq rev \
+	strings od printf sed du \
+	cksum md5sum sha1sum sha256sum sha512sum \
+	cmp comm cols dd printenv expr fold join paste split sponge \
+	test tsort unexpand expand \
+	cal date sleep uname whoami logname which kill
+
+SBASE_TOOL_OBJECTS = $(patsubst %,$(SBASE_BUILD_DIR)/%.o,$(SBASE_TOOLS))
+SBASE_TOOL_BINS = $(patsubst %,$(SBASE_BIN_DIR)/%.elf,$(SBASE_TOOLS))
 
 # newlib regex (POSIX) sources (used by sbase grep)
 NEWLIB_POSIX_DIR = toolchain/src/newlib-cygwin/newlib/libc/posix
@@ -262,7 +248,7 @@ USER_BASIC_OBJECTS = $(patsubst $(USER_DIR)/%.c,$(USER_BUILD_DIR)/%.o,$(USER_BAS
 USER_BASIC = $(USER_BUILD_DIR)/basic.elf
 
 USER_BINS = $(USER_INIT) $(USER_ELIZA) $(USER_LSH) $(USER_SH) $(USER_UPTIME) $(USER_DATE) $(USER_SETDATE) $(USER_PS) $(USER_TOP) $(USER_NEOFETCH) $(USER_FONT) $(USER_JSON) $(USER_IMG) $(USER_LOGIN) $(USER_VED) $(USER_S3LCUBE) $(USER_OLIVEDEMO) $(USER_NE) $(USER_BASIC) $(USER_ZORK) $(USER_TCC) \
-            $(SBASE_CAT) $(SBASE_ECHO) $(SBASE_BASENAME) $(SBASE_DIRNAME) $(SBASE_HEAD) $(SBASE_WC) $(SBASE_GREP) $(SBASE_YES) $(SBASE_TRUE) $(SBASE_FALSE)
+            $(SBASE_TOOL_BINS)
 
 # QEMU defaults
 QEMU_XRES ?= 1920
@@ -432,42 +418,25 @@ $(USER_IMG): $(USER_RUNTIME_OBJECTS) $(USER_IMG_OBJ) $(USER_RUNTIME_LIBS)
 # Compile sbase sources
 $(SBASE_BUILD_DIR)/%.o: $(SBASE_DIR)/%.c | $(USER_BUILD_DIR)
 	mkdir -p $(dir $@)
-	$(CC) -ffreestanding -fno-stack-protector -fno-pie -Wall -Wextra -O2 -D_POSIX_C_SOURCE=200809L -I$(USER_DIR) -c $< -o $@
+	$(CC) -ffreestanding -fno-stack-protector -fno-pie -Wall -Wextra -O2 -D_POSIX_C_SOURCE=200809L -DPATH_MAX=256 -DNAME_MAX=255 -DSSIZE_MAX=2147483647 -I$(USER_DIR) -c $< -o $@
 
 # Compile newlib POSIX regex sources (for sbase grep)
 $(NEWLIB_POSIX_BUILD_DIR)/%.o: $(NEWLIB_POSIX_DIR)/%.c | $(USER_BUILD_DIR)
 	mkdir -p $(dir $@)
 	$(CC) -ffreestanding -fno-stack-protector -fno-pie -Wall -Wextra -O2 -D_POSIX2_RE_DUP_MAX=255 -I$(NEWLIB_POSIX_DIR) -c $< -o $@
 
-# Link sbase tools (minimal subset)
-$(SBASE_CAT): $(USER_RUNTIME_OBJECTS) $(SBASE_CAT_OBJ) $(SBASE_EPRINTF_OBJ) $(SBASE_CONCAT_OBJ) $(SBASE_WRITEALL_OBJ) $(USER_RUNTIME_LIBS)
-	$(USER_LINK_CMD)
+# Archive sbase support libraries (libutil + libutf).
+$(SBASE_LIBUTIL): $(SBASE_LIBUTIL_OBJECTS) | $(USER_BUILD_DIR)
+	mkdir -p $(dir $@)
+	$(AR) rcs $@ $^
 
-$(SBASE_ECHO): $(USER_RUNTIME_OBJECTS) $(SBASE_ECHO_OBJ) $(SBASE_EPRINTF_OBJ) $(SBASE_PUTWORD_OBJ) $(SBASE_FSHUT_OBJ) $(USER_RUNTIME_LIBS)
-	$(USER_LINK_CMD)
+$(SBASE_LIBUTF): $(SBASE_LIBUTF_OBJECTS) | $(USER_BUILD_DIR)
+	mkdir -p $(dir $@)
+	$(AR) rcs $@ $^
 
-$(SBASE_BASENAME): $(USER_RUNTIME_OBJECTS) $(SBASE_BASENAME_OBJ) $(SBASE_EPRINTF_OBJ) $(SBASE_FSHUT_OBJ) $(USER_RUNTIME_LIBS)
-	$(USER_LINK_CMD)
-
-$(SBASE_DIRNAME): $(USER_RUNTIME_OBJECTS) $(SBASE_DIRNAME_OBJ) $(SBASE_EPRINTF_OBJ) $(SBASE_FSHUT_OBJ) $(USER_RUNTIME_LIBS)
-	$(USER_LINK_CMD)
-
-$(SBASE_HEAD): $(USER_RUNTIME_OBJECTS) $(SBASE_HEAD_OBJ) $(SBASE_EPRINTF_OBJ) $(SBASE_FSHUT_OBJ) $(SBASE_STRTONUM_OBJ) $(USER_RUNTIME_LIBS)
-	$(USER_LINK_CMD)
-
-$(SBASE_WC): $(USER_RUNTIME_OBJECTS) $(SBASE_WC_OBJ) $(SBASE_EPRINTF_OBJ) $(SBASE_FSHUT_OBJ) $(SBASE_RUNE_OBJ) $(SBASE_UTF_OBJ) $(SBASE_RUNETYPE_OBJ) $(SBASE_ISSPACERUNE_OBJ) $(SBASE_FGETRUNE_OBJ) $(USER_RUNTIME_LIBS)
-	$(USER_LINK_CMD)
-
-$(SBASE_GREP): $(USER_RUNTIME_OBJECTS) $(SBASE_GREP_OBJ) $(SBASE_EPRINTF_OBJ) $(SBASE_FSHUT_OBJ) $(SBASE_EALLOC_OBJ) $(SBASE_STRCASESTR_OBJ) $(SBASE_EREGCOMP_OBJ) $(USER_RUNTIME_LIBS)
-	$(USER_LINK_CMD)
-
-$(SBASE_YES): $(USER_RUNTIME_OBJECTS) $(SBASE_YES_OBJ) $(SBASE_EPRINTF_OBJ) $(USER_RUNTIME_LIBS)
-	$(USER_LINK_CMD)
-
-$(SBASE_TRUE): $(USER_RUNTIME_OBJECTS) $(SBASE_TRUE_OBJ) $(USER_RUNTIME_LIBS)
-	$(USER_LINK_CMD)
-
-$(SBASE_FALSE): $(USER_RUNTIME_OBJECTS) $(SBASE_FALSE_OBJ) $(USER_RUNTIME_LIBS)
+# Link sbase tools.
+$(SBASE_TOOL_BINS): $(SBASE_BIN_DIR)/%.elf: $(USER_RUNTIME_OBJECTS) $(SBASE_BUILD_DIR)/%.o $(SBASE_LIBS) $(USER_RUNTIME_LIBS)
+	mkdir -p $(dir $@)
 	$(USER_LINK_CMD)
 
 # Link userland BASIC interpreter
@@ -531,16 +500,7 @@ $(ISO): $(KERNEL) $(USER_BINS) $(FAT_IMG) $(INITRAMFS_FILES) $(INITRAMFS_DIRS)
 	cp $(USER_BASIC) $(INITRAMFS_ROOT)/bin/basic
 	cp $(USER_ZORK) $(INITRAMFS_ROOT)/bin/zork
 	cp $(USER_TCC) $(INITRAMFS_ROOT)/bin/tcc
-	cp $(SBASE_CAT) $(INITRAMFS_ROOT)/bin/cat
-	cp $(SBASE_ECHO) $(INITRAMFS_ROOT)/bin/echo
-	cp $(SBASE_BASENAME) $(INITRAMFS_ROOT)/bin/basename
-	cp $(SBASE_DIRNAME) $(INITRAMFS_ROOT)/bin/dirname
-	cp $(SBASE_HEAD) $(INITRAMFS_ROOT)/bin/head
-	cp $(SBASE_WC) $(INITRAMFS_ROOT)/bin/wc
-	cp $(SBASE_GREP) $(INITRAMFS_ROOT)/bin/grep
-	cp $(SBASE_YES) $(INITRAMFS_ROOT)/bin/yes
-	cp $(SBASE_TRUE) $(INITRAMFS_ROOT)/bin/true
-	cp $(SBASE_FALSE) $(INITRAMFS_ROOT)/bin/false
+	for b in $(SBASE_TOOLS); do cp $(SBASE_BIN_DIR)/$$b.elf $(INITRAMFS_ROOT)/bin/$$b; done
 	tar -C $(INITRAMFS_ROOT) -cf $(INITRAMFS_TAR) .
 	echo 'set timeout=0' > $(ISO_DIR)/boot/grub/grub.cfg
 	echo 'set default=0' >> $(ISO_DIR)/boot/grub/grub.cfg

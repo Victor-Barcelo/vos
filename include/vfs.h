@@ -29,7 +29,9 @@ bool vfs_read_file(const char* path, const uint8_t** out_data, uint32_t* out_siz
 
 typedef struct vfs_stat {
     uint8_t is_dir;
-    uint8_t _pad[3];
+    uint8_t is_symlink;
+    // POSIX permission bits (07777).
+    uint16_t mode;
     uint32_t size;
     // FAT-style "last write" timestamp (raw on-disk format). 0 means unknown/unset.
     uint16_t wtime;
@@ -39,7 +41,9 @@ typedef struct vfs_stat {
 typedef struct vfs_dirent {
     char name[VFS_NAME_MAX];
     uint8_t is_dir;
-    uint8_t _pad[3];
+    uint8_t is_symlink;
+    // POSIX permission bits (07777).
+    uint16_t mode;
     uint32_t size;
     // FAT-style "last write" timestamp (raw on-disk format). 0 means unknown/unset.
     uint16_t wtime;
@@ -54,7 +58,11 @@ int32_t vfs_path_resolve(const char* cwd, const char* path, char out_abs[VFS_PAT
 
 // Path-based helpers (cwd + path). Returns 0 on success, or -errno.
 int32_t vfs_stat_path(const char* cwd, const char* path, vfs_stat_t* out);
+int32_t vfs_lstat_path(const char* cwd, const char* path, vfs_stat_t* out);
 int32_t vfs_mkdir_path(const char* cwd, const char* path);
+int32_t vfs_symlink_path(const char* cwd, const char* target, const char* linkpath);
+int32_t vfs_readlink_path(const char* cwd, const char* path, char* out, uint32_t cap);
+int32_t vfs_chmod_path(const char* cwd, const char* path, uint16_t mode);
 
 // Open/close/read/write/lseek on a VFS handle. Returns 0 on success, or -errno.
 int32_t vfs_open_path(const char* cwd, const char* path, uint32_t flags, vfs_handle_t** out);
@@ -76,5 +84,10 @@ int32_t vfs_rename_path(const char* cwd, const char* old_path, const char* new_p
 int32_t vfs_truncate_path(const char* cwd, const char* path, uint32_t new_size);
 int32_t vfs_ftruncate(vfs_handle_t* h, uint32_t new_size);
 int32_t vfs_fsync(vfs_handle_t* h);
+int32_t vfs_fchmod(vfs_handle_t* h, uint16_t mode);
+
+// Query or update the open flags stored on a VFS handle (used by fcntl()).
+uint32_t vfs_handle_flags(vfs_handle_t* h);
+int32_t vfs_handle_set_flags(vfs_handle_t* h, uint32_t flags);
 
 #endif

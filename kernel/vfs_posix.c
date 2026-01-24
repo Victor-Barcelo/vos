@@ -58,6 +58,8 @@ struct vfs_handle {
     uint32_t ent_index;
 };
 
+static void abs_dirname(const char* abs, char out[VFS_PATH_MAX]);
+
 static bool ci_eq(const char* a, const char* b) {
     if (!a || !b) {
         return false;
@@ -380,6 +382,8 @@ static int32_t initramfs_stat_abs(const char* abs_path, vfs_stat_t* out) {
 
     if (ci_eq(abs_path, "/")) {
         out->is_dir = 1;
+        out->is_symlink = 0;
+        out->mode = 0755;
         out->size = 0;
         out->wtime = 0;
         out->wdate = 0;
@@ -390,6 +394,8 @@ static int32_t initramfs_stat_abs(const char* abs_path, vfs_stat_t* out) {
     uint32_t size = 0;
     if (vfs_read_file(abs_path, &data, &size) && data) {
         out->is_dir = 0;
+        out->is_symlink = 0;
+        out->mode = 0644;
         out->size = size;
         (void)initramfs_lookup_mtime_abs(abs_path, &out->wtime, &out->wdate);
         return 0;
@@ -400,6 +406,8 @@ static int32_t initramfs_stat_abs(const char* abs_path, vfs_stat_t* out) {
     while (*rel == '/') rel++;
     if (*rel == '\0') {
         out->is_dir = 1;
+        out->is_symlink = 0;
+        out->mode = 0755;
         out->size = 0;
         out->wtime = 0;
         out->wdate = 0;
@@ -414,6 +422,8 @@ static int32_t initramfs_stat_abs(const char* abs_path, vfs_stat_t* out) {
         while (*name == '/') name++;
         if (ci_starts_with(name, rel) && name[rel_len] == '/') {
             out->is_dir = 1;
+            out->is_symlink = 0;
+            out->mode = 0755;
             out->size = 0;
             (void)initramfs_max_mtime_under_abs(abs_path, &out->wtime, &out->wdate);
             return 0;
@@ -423,6 +433,8 @@ static int32_t initramfs_stat_abs(const char* abs_path, vfs_stat_t* out) {
     // Mountpoints exposed at root even if initramfs doesn't have them.
     if (ci_eq(abs_path, "/ram")) {
         out->is_dir = 1;
+        out->is_symlink = 0;
+        out->mode = 0755;
         out->size = 0;
         out->wtime = 0;
         out->wdate = 0;
@@ -430,6 +442,8 @@ static int32_t initramfs_stat_abs(const char* abs_path, vfs_stat_t* out) {
     }
     if (ci_eq(abs_path, "/disk")) {
         out->is_dir = 1;
+        out->is_symlink = 0;
+        out->mode = 0755;
         out->size = 0;
         out->wtime = 0;
         out->wdate = 0;
@@ -449,6 +463,7 @@ static uint32_t add_unique_dirent(vfs_dirent_t* out, uint32_t count, uint32_t ma
             if (is_dir) {
                 out[i].is_dir = 1;
                 out[i].size = 0;
+                out[i].mode = 0755;
             }
             if (wdate != 0) {
                 fat_ts_max_update(&out[i].wtime, &out[i].wdate, wtime, wdate);
@@ -462,6 +477,8 @@ static uint32_t add_unique_dirent(vfs_dirent_t* out, uint32_t count, uint32_t ma
     strncpy(out[count].name, name, VFS_NAME_MAX - 1u);
     out[count].name[VFS_NAME_MAX - 1u] = '\0';
     out[count].is_dir = is_dir ? 1u : 0u;
+    out[count].is_symlink = 0;
+    out[count].mode = is_dir ? 0755 : 0644;
     out[count].size = is_dir ? 0 : size;
     out[count].wtime = wtime;
     out[count].wdate = wdate;
@@ -563,10 +580,284 @@ static uint32_t initramfs_list_dir_abs(const char* abs_path, vfs_dirent_t* out, 
     return count;
 }
 
-int32_t vfs_stat_path(const char* cwd, const char* path, vfs_stat_t* out) {
+enum {
+    VFS_SYMLINK_MAX_DEPTH = 8,
+};
+
+static int32_t vfs_lstat_abs(const char* abs_path, vfs_stat_t* out) {
+    if (!abs_path || abs_path[0] != '/' || !out) {
+        return -EINVAL;
+    }
+    memset(out, 0, sizeof(*out));
+
+    if (abs_is_mount(abs_path, "/disk")) {
+        if (!fatdisk_is_ready()) {
+            return -EIO;
+        }
+        bool is_dir = false;
+        uint32_t size = 0;
+        uint16_t wtime = 0;
+        uint16_t wdate = 0;
+        if (!fatdisk_stat_ex(abs_path, &is_dir, &size, &wtime, &wdate)) {
+            return -ENOENT;
+        }
+        out->is_dir = is_dir ? 1u : 0u;
+        out->size = size;
+        out->wtime = wtime;
+        out->wdate = wdate;
+
+        bool is_symlink = false;
+        uint16_t mode = is_dir ? 0755u : 0644u;
+        (void)fatdisk_get_meta(abs_path, &is_symlink, &mode);
+        out->is_symlink = is_symlink ? 1u : 0u;
+        out->mode = (uint16_t)(mode & 07777u);
+        if (out->is_symlink) {
+            out->is_dir = 0;
+        }
+        return 0;
+    }
+
+    if (abs_is_mount(abs_path, "/ram")) {
+        bool is_dir = false;
+        uint32_t size = 0;
+        uint16_t wtime = 0;
+        uint16_t wdate = 0;
+        if (!ramfs_stat_ex(abs_path, &is_dir, &size, &wtime, &wdate)) {
+            return -ENOENT;
+        }
+        out->is_dir = is_dir ? 1u : 0u;
+        out->size = size;
+        out->wtime = wtime;
+        out->wdate = wdate;
+
+        bool is_symlink = false;
+        uint16_t mode = is_dir ? 0755u : 0644u;
+        (void)ramfs_get_meta(abs_path, &is_symlink, &mode);
+        out->is_symlink = is_symlink ? 1u : 0u;
+        out->mode = (uint16_t)(mode & 07777u);
+        if (out->is_symlink) {
+            out->is_dir = 0;
+        }
+        return 0;
+    }
+
+    return initramfs_stat_abs(abs_path, out);
+}
+
+static int32_t vfs_readlink_abs(const char* abs_path, char* out, uint32_t cap, uint32_t* out_len) {
+    if (out_len) {
+        *out_len = 0;
+    }
+    if (!abs_path || abs_path[0] != '/' || (cap != 0 && !out)) {
+        return -EINVAL;
+    }
+
+    vfs_stat_t st;
+    int32_t rc = vfs_lstat_abs(abs_path, &st);
+    if (rc < 0) {
+        return rc;
+    }
+    if (!st.is_symlink) {
+        return -EINVAL;
+    }
+
+    if (cap == 0) {
+        return 0;
+    }
+
+    if (abs_is_mount(abs_path, "/disk")) {
+        uint8_t* data = NULL;
+        uint32_t size = 0;
+        if (!fatdisk_read_file_alloc(abs_path, &data, &size) || !data) {
+            return -EIO;
+        }
+
+        uint32_t n = size;
+        if (n > cap) {
+            n = cap;
+        }
+        if (n != 0) {
+            memcpy(out, data, n);
+        }
+        if (out_len) {
+            *out_len = size;
+        }
+        kfree(data);
+        return (int32_t)n;
+    }
+
+    if (abs_is_mount(abs_path, "/ram")) {
+        const uint8_t* data = NULL;
+        uint32_t size = 0;
+        if (!ramfs_read_file(abs_path, &data, &size)) {
+            return -ENOENT;
+        }
+        uint32_t n = size;
+        if (n > cap) {
+            n = cap;
+        }
+        if (n != 0 && data) {
+            memcpy(out, data, n);
+        }
+        if (out_len) {
+            *out_len = size;
+        }
+        return (int32_t)n;
+    }
+
+    return -EINVAL;
+}
+
+static int32_t vfs_expand_symlink_target(const char* link_abs, const char* target, const char* rest, char out[VFS_PATH_MAX]) {
     if (!out) {
         return -EINVAL;
     }
+    out[0] = '\0';
+    if (!link_abs || link_abs[0] != '/' || !target || !rest) {
+        return -EINVAL;
+    }
+
+    char combined[VFS_PATH_MAX];
+    combined[0] = '\0';
+
+    if (target[0] == '/') {
+        size_t tlen = strlen(target);
+        size_t rlen = strlen(rest);
+        if (tlen + rlen + 1u > sizeof(combined)) {
+            return -ENAMETOOLONG;
+        }
+        memcpy(combined, target, tlen);
+        memcpy(combined + tlen, rest, rlen);
+        combined[tlen + rlen] = '\0';
+    } else {
+        char dir[VFS_PATH_MAX];
+        abs_dirname(link_abs, dir);
+        size_t dlen = strlen(dir);
+        size_t tlen = strlen(target);
+        size_t rlen = strlen(rest);
+
+        // dir + '/' + target + rest
+        size_t need = dlen + ((dlen > 1u) ? 1u : 0u) + tlen + rlen + 1u;
+        if (need > sizeof(combined)) {
+            return -ENAMETOOLONG;
+        }
+        size_t pos = 0;
+        memcpy(combined + pos, dir, dlen);
+        pos += dlen;
+        if (dlen > 1u) {
+            combined[pos++] = '/';
+        }
+        memcpy(combined + pos, target, tlen);
+        pos += tlen;
+        memcpy(combined + pos, rest, rlen);
+        pos += rlen;
+        combined[pos] = '\0';
+    }
+
+    char canon[VFS_PATH_MAX];
+    int32_t rc = vfs_path_resolve("/", combined, canon);
+    if (rc < 0) {
+        return rc;
+    }
+    char canon_usr[VFS_PATH_MAX];
+    const char* eff = abs_apply_posix_aliases(canon, canon_usr);
+    strncpy(out, eff, VFS_PATH_MAX - 1u);
+    out[VFS_PATH_MAX - 1u] = '\0';
+    return 0;
+}
+
+static int32_t vfs_resolve_symlinks_abs(const char* abs_in, bool follow_final, char out[VFS_PATH_MAX]) {
+    if (!out) {
+        return -EINVAL;
+    }
+    out[0] = '\0';
+    if (!abs_in || abs_in[0] != '/') {
+        return -EINVAL;
+    }
+
+    char cur[VFS_PATH_MAX];
+    strncpy(cur, abs_in, sizeof(cur) - 1u);
+    cur[sizeof(cur) - 1u] = '\0';
+
+    for (int depth = 0; depth < VFS_SYMLINK_MAX_DEPTH; depth++) {
+        bool changed = false;
+
+        // Scan segments left-to-right and expand the first symlink we see.
+        uint32_t i = 1; // skip leading '/'
+        while (cur[i] != '\0') {
+            // Find end of this segment.
+            uint32_t seg_start = i;
+            while (cur[i] != '\0' && cur[i] != '/') {
+                i++;
+            }
+            uint32_t seg_end = i;
+
+            bool last = cur[i] == '\0';
+            if (!last) {
+                // Skip '/' for the next iteration.
+                i++;
+            }
+
+            char prefix[VFS_PATH_MAX];
+            if (seg_end >= sizeof(prefix)) {
+                return -ENAMETOOLONG;
+            }
+            memcpy(prefix, cur, seg_end);
+            prefix[seg_end] = '\0';
+
+            // Avoid lstat'ing a partial mountpoint token.
+            if (ci_eq(prefix, "")) {
+                continue;
+            }
+
+            vfs_stat_t st;
+            int32_t rc = vfs_lstat_abs(prefix, &st);
+            if (rc < 0) {
+                return rc;
+            }
+
+            if (st.is_symlink && (follow_final || !last)) {
+                char target[VFS_PATH_MAX];
+                uint32_t target_len = 0;
+                rc = vfs_readlink_abs(prefix, target, sizeof(target) - 1u, &target_len);
+                if (rc < 0) {
+                    return rc;
+                }
+                // We need the full link target to resolve paths correctly.
+                if (target_len >= sizeof(target) || (uint32_t)rc != target_len) {
+                    return -ENAMETOOLONG;
+                }
+                target[target_len] = '\0';
+
+                const char* rest = cur + seg_end;
+                char next[VFS_PATH_MAX];
+                rc = vfs_expand_symlink_target(prefix, target, rest, next);
+                if (rc < 0) {
+                    return rc;
+                }
+
+                strncpy(cur, next, sizeof(cur) - 1u);
+                cur[sizeof(cur) - 1u] = '\0';
+                changed = true;
+                break;
+            }
+        }
+
+        if (!changed) {
+            strncpy(out, cur, VFS_PATH_MAX - 1u);
+            out[VFS_PATH_MAX - 1u] = '\0';
+            return 0;
+        }
+    }
+
+    return -ELOOP;
+}
+
+static int32_t vfs_prepare_existing_path(const char* cwd, const char* path, bool follow_final, char out[VFS_PATH_MAX]) {
+    if (!out) {
+        return -EINVAL;
+    }
+    out[0] = '\0';
 
     char abs[VFS_PATH_MAX];
     int32_t rc = vfs_path_resolve(cwd, path, abs);
@@ -576,41 +867,87 @@ int32_t vfs_stat_path(const char* cwd, const char* path, vfs_stat_t* out) {
 
     char abs_usr[VFS_PATH_MAX];
     const char* eff = abs_apply_posix_aliases(abs, abs_usr);
+    return vfs_resolve_symlinks_abs(eff, follow_final, out);
+}
 
-    if (abs_is_mount(eff, "/disk")) {
-        if (!fatdisk_is_ready()) {
-            return -EIO;
-        }
-        bool is_dir = false;
-        uint32_t size = 0;
-        uint16_t wtime = 0;
-        uint16_t wdate = 0;
-        if (!fatdisk_stat_ex(eff, &is_dir, &size, &wtime, &wdate)) {
-            return -ENOENT;
-        }
-        out->is_dir = is_dir ? 1u : 0u;
-        out->size = size;
-        out->wtime = wtime;
-        out->wdate = wdate;
-        return 0;
+static int32_t vfs_prepare_create_path(const char* cwd, const char* path, char out[VFS_PATH_MAX]) {
+    if (!out) {
+        return -EINVAL;
+    }
+    out[0] = '\0';
+
+    char abs[VFS_PATH_MAX];
+    int32_t rc = vfs_path_resolve(cwd, path, abs);
+    if (rc < 0) {
+        return rc;
     }
 
-    if (abs_is_mount(eff, "/ram")) {
-        bool is_dir = false;
-        uint32_t size = 0;
-        uint16_t wtime = 0;
-        uint16_t wdate = 0;
-        if (!ramfs_stat_ex(eff, &is_dir, &size, &wtime, &wdate)) {
-            return -ENOENT;
-        }
-        out->is_dir = is_dir ? 1u : 0u;
-        out->size = size;
-        out->wtime = wtime;
-        out->wdate = wdate;
-        return 0;
+    char abs_usr[VFS_PATH_MAX];
+    const char* eff = abs_apply_posix_aliases(abs, abs_usr);
+    const char* base = strrchr(eff, '/');
+    base = base ? base + 1 : eff;
+    if (!base || base[0] == '\0') {
+        return -EINVAL;
     }
 
-    return initramfs_stat_abs(eff, out);
+    char parent[VFS_PATH_MAX];
+    abs_dirname(eff, parent);
+
+    char parent_res[VFS_PATH_MAX];
+    rc = vfs_resolve_symlinks_abs(parent, true, parent_res);
+    if (rc < 0) {
+        return rc;
+    }
+
+    vfs_stat_t st;
+    rc = vfs_lstat_abs(parent_res, &st);
+    if (rc < 0) {
+        return rc;
+    }
+    if (!st.is_dir) {
+        return -ENOTDIR;
+    }
+
+    size_t plen = strlen(parent_res);
+    size_t blen = strlen(base);
+    size_t need = plen + ((plen > 1u) ? 1u : 0u) + blen + 1u;
+    if (need > VFS_PATH_MAX) {
+        return -ENAMETOOLONG;
+    }
+    size_t pos = 0;
+    memcpy(out + pos, parent_res, plen);
+    pos += plen;
+    if (plen > 1u) {
+        out[pos++] = '/';
+    }
+    memcpy(out + pos, base, blen);
+    pos += blen;
+    out[pos] = '\0';
+    return 0;
+}
+
+int32_t vfs_lstat_path(const char* cwd, const char* path, vfs_stat_t* out) {
+    if (!out) {
+        return -EINVAL;
+    }
+    char eff[VFS_PATH_MAX];
+    int32_t rc = vfs_prepare_existing_path(cwd, path, false, eff);
+    if (rc < 0) {
+        return rc;
+    }
+    return vfs_lstat_abs(eff, out);
+}
+
+int32_t vfs_stat_path(const char* cwd, const char* path, vfs_stat_t* out) {
+    if (!out) {
+        return -EINVAL;
+    }
+    char eff[VFS_PATH_MAX];
+    int32_t rc = vfs_prepare_existing_path(cwd, path, true, eff);
+    if (rc < 0) {
+        return rc;
+    }
+    return vfs_lstat_abs(eff, out);
 }
 
 int32_t vfs_mkdir_path(const char* cwd, const char* path) {
@@ -624,8 +961,11 @@ int32_t vfs_mkdir_path(const char* cwd, const char* path) {
         return -EEXIST;
     }
 
-    char abs_usr[VFS_PATH_MAX];
-    const char* eff = abs_apply_posix_aliases(abs, abs_usr);
+    char eff[VFS_PATH_MAX];
+    rc = vfs_prepare_create_path(cwd, path, eff);
+    if (rc < 0) {
+        return rc;
+    }
 
     if (abs_is_mount(eff, "/disk")) {
         if (!fatdisk_is_ready()) {
@@ -653,6 +993,111 @@ int32_t vfs_mkdir_path(const char* cwd, const char* path) {
     }
 
     // initramfs is read-only.
+    return -EROFS;
+}
+
+int32_t vfs_symlink_path(const char* cwd, const char* target, const char* linkpath) {
+    if (!target || !linkpath) {
+        return -EINVAL;
+    }
+
+    char abs[VFS_PATH_MAX];
+    int32_t rc = vfs_path_resolve(cwd, linkpath, abs);
+    if (rc < 0) {
+        return rc;
+    }
+    if (ci_eq(abs, "/") || ci_eq(abs, "/ram") || ci_eq(abs, "/disk") || ci_eq(abs, "/usr")) {
+        return -EPERM;
+    }
+
+    char eff[VFS_PATH_MAX];
+    rc = vfs_prepare_create_path(cwd, linkpath, eff);
+    if (rc < 0) {
+        return rc;
+    }
+
+    uint32_t len = (uint32_t)strlen(target);
+
+    if (abs_is_mount(eff, "/disk")) {
+        if (!fatdisk_is_ready()) {
+            return -EIO;
+        }
+        bool is_dir = false;
+        uint32_t size = 0;
+        if (fatdisk_stat(eff, &is_dir, &size)) {
+            return -EEXIST;
+        }
+        if (!fatdisk_write_file(eff, (const uint8_t*)target, len, false)) {
+            return -EIO;
+        }
+        if (!fatdisk_set_meta(eff, true, 0777u)) {
+            (void)fatdisk_unlink(eff);
+            return -EIO;
+        }
+        return 0;
+    }
+
+    if (abs_is_mount(eff, "/ram")) {
+        if (ramfs_is_dir(eff) || ramfs_is_file(eff)) {
+            return -EEXIST;
+        }
+        if (!ramfs_write_file(eff, (const uint8_t*)target, len, false)) {
+            return -EIO;
+        }
+        if (!ramfs_set_meta(eff, true, 0777u)) {
+            (void)ramfs_unlink(eff);
+            return -EIO;
+        }
+        return 0;
+    }
+
+    return -EROFS;
+}
+
+int32_t vfs_readlink_path(const char* cwd, const char* path, char* out, uint32_t cap) {
+    char eff[VFS_PATH_MAX];
+    int32_t rc = vfs_prepare_existing_path(cwd, path, false, eff);
+    if (rc < 0) {
+        return rc;
+    }
+    return vfs_readlink_abs(eff, out, cap, NULL);
+}
+
+int32_t vfs_chmod_path(const char* cwd, const char* path, uint16_t mode) {
+    char eff[VFS_PATH_MAX];
+    int32_t rc = vfs_prepare_existing_path(cwd, path, true, eff);
+    if (rc < 0) {
+        return rc;
+    }
+
+    mode &= 07777u;
+
+    vfs_stat_t st;
+    rc = vfs_lstat_abs(eff, &st);
+    if (rc < 0) {
+        return rc;
+    }
+    if (st.is_symlink) {
+        return -EINVAL;
+    }
+
+    if (abs_is_mount(eff, "/disk")) {
+        if (!fatdisk_is_ready()) {
+            return -EIO;
+        }
+        if (!fatdisk_set_meta(eff, false, mode)) {
+            return -EIO;
+        }
+        return 0;
+    }
+
+    if (abs_is_mount(eff, "/ram")) {
+        if (!ramfs_set_meta(eff, false, mode)) {
+            return -EIO;
+        }
+        return 0;
+    }
+
     return -EROFS;
 }
 
@@ -705,6 +1150,8 @@ static int32_t open_dir_handle(vfs_backend_t backend, const char* abs_path, uint
                 strncpy(h->ents[i].name, dents[i].name, VFS_NAME_MAX - 1u);
                 h->ents[i].name[VFS_NAME_MAX - 1u] = '\0';
                 h->ents[i].is_dir = dents[i].is_dir ? 1u : 0u;
+                h->ents[i].is_symlink = dents[i].is_symlink ? 1u : 0u;
+                h->ents[i].mode = (uint16_t)(dents[i].mode & 07777u);
                 h->ents[i].size = dents[i].size;
                 h->ents[i].wtime = dents[i].wtime;
                 h->ents[i].wdate = dents[i].wdate;
@@ -729,6 +1176,8 @@ static int32_t open_dir_handle(vfs_backend_t backend, const char* abs_path, uint
                 strncpy(h->ents[i].name, dents[i].name, VFS_NAME_MAX - 1u);
                 h->ents[i].name[VFS_NAME_MAX - 1u] = '\0';
                 h->ents[i].is_dir = dents[i].is_dir ? 1u : 0u;
+                h->ents[i].is_symlink = dents[i].is_symlink ? 1u : 0u;
+                h->ents[i].mode = (uint16_t)(dents[i].mode & 07777u);
                 h->ents[i].size = dents[i].size;
                 h->ents[i].wtime = dents[i].wtime;
                 h->ents[i].wdate = dents[i].wdate;
@@ -862,6 +1311,10 @@ int32_t vfs_open_path(const char* cwd, const char* path, uint32_t flags, vfs_han
         return -EINVAL;
     }
 
+    uint32_t acc = flags & VFS_O_ACCMODE;
+    bool want_write = (acc == VFS_O_WRONLY || acc == VFS_O_RDWR);
+    bool want_dir = (flags & VFS_O_DIRECTORY) != 0;
+
     char abs[VFS_PATH_MAX];
     int32_t rc = vfs_path_resolve(cwd, path, abs);
     if (rc < 0) {
@@ -869,11 +1322,99 @@ int32_t vfs_open_path(const char* cwd, const char* path, uint32_t flags, vfs_han
     }
 
     char abs_usr[VFS_PATH_MAX];
-    const char* eff = abs_apply_posix_aliases(abs, abs_usr);
+    const char* aliased = abs_apply_posix_aliases(abs, abs_usr);
 
-    uint32_t acc = flags & VFS_O_ACCMODE;
-    bool want_write = (acc == VFS_O_WRONLY || acc == VFS_O_RDWR);
-    bool want_dir = (flags & VFS_O_DIRECTORY) != 0;
+    // Resolve intermediate symlinks, but do not follow the final segment yet.
+    // This lets us:
+    // - decide whether the pathname itself exists (O_EXCL semantics),
+    // - detect and follow a final symlink explicitly,
+    // - create a missing target of a final symlink when O_CREAT is set.
+    char eff[VFS_PATH_MAX];
+    rc = vfs_resolve_symlinks_abs(aliased, false, eff);
+    if (rc == 0) {
+        vfs_stat_t st;
+        rc = vfs_lstat_abs(eff, &st);
+        if (rc < 0) {
+            return rc;
+        }
+
+        if ((flags & VFS_O_CREAT) && (flags & VFS_O_EXCL)) {
+            return -EEXIST;
+        }
+
+        if (st.is_symlink) {
+            char target[VFS_PATH_MAX];
+            uint32_t target_len = 0;
+            int32_t n = vfs_readlink_abs(eff, target, sizeof(target) - 1u, &target_len);
+            if (n < 0) {
+                return n;
+            }
+            // Need the full target path for correct resolution.
+            if (target_len >= sizeof(target) || (uint32_t)n != target_len) {
+                return -ENAMETOOLONG;
+            }
+            target[target_len] = '\0';
+
+            char target_abs[VFS_PATH_MAX];
+            rc = vfs_expand_symlink_target(eff, target, "", target_abs);
+            if (rc < 0) {
+                return rc;
+            }
+
+            // Follow the link and open (creating the target if requested).
+            return vfs_open_path("/", target_abs, flags, out);
+        }
+    } else if (rc == -ENOENT) {
+        if ((flags & VFS_O_CREAT) == 0) {
+            return -ENOENT;
+        }
+        if (want_dir) {
+            return -ENOENT;
+        }
+
+        const char* base = strrchr(aliased, '/');
+        base = base ? base + 1 : aliased;
+        if (!base || base[0] == '\0') {
+            return -EINVAL;
+        }
+
+        char parent[VFS_PATH_MAX];
+        abs_dirname(aliased, parent);
+
+        char parent_res[VFS_PATH_MAX];
+        rc = vfs_resolve_symlinks_abs(parent, true, parent_res);
+        if (rc < 0) {
+            return rc;
+        }
+
+        vfs_stat_t pst;
+        rc = vfs_lstat_abs(parent_res, &pst);
+        if (rc < 0) {
+            return rc;
+        }
+        if (!pst.is_dir) {
+            return -ENOTDIR;
+        }
+
+        size_t plen = strlen(parent_res);
+        size_t blen = strlen(base);
+        size_t need = plen + ((plen > 1u) ? 1u : 0u) + blen + 1u;
+        if (need > VFS_PATH_MAX) {
+            return -ENAMETOOLONG;
+        }
+
+        size_t pos = 0;
+        memcpy(eff + pos, parent_res, plen);
+        pos += plen;
+        if (plen > 1u) {
+            eff[pos++] = '/';
+        }
+        memcpy(eff + pos, base, blen);
+        pos += blen;
+        eff[pos] = '\0';
+    } else if (rc < 0) {
+        return rc;
+    }
 
     // /disk
     if (abs_is_mount(eff, "/disk")) {
@@ -1203,6 +1744,8 @@ int32_t vfs_fstat(vfs_handle_t* h, vfs_stat_t* out) {
     }
     memset(out, 0, sizeof(*out));
     out->is_dir = (h->kind == VFS_HANDLE_DIR) ? 1u : 0u;
+    out->is_symlink = 0;
+    out->mode = out->is_dir ? 0755 : 0644;
     out->size = (h->kind == VFS_HANDLE_FILE) ? h->size : 0;
 
     uint16_t wtime = 0;
@@ -1285,7 +1828,13 @@ int32_t vfs_unlink_path(const char* cwd, const char* path) {
     }
 
     char abs_usr[VFS_PATH_MAX];
-    const char* eff = abs_apply_posix_aliases(abs, abs_usr);
+    const char* aliased = abs_apply_posix_aliases(abs, abs_usr);
+
+    char eff[VFS_PATH_MAX];
+    rc = vfs_resolve_symlinks_abs(aliased, false, eff);
+    if (rc < 0) {
+        return rc;
+    }
 
     if (abs_is_mount(eff, "/disk")) {
         if (!fatdisk_is_ready()) {
@@ -1332,7 +1881,13 @@ int32_t vfs_rmdir_path(const char* cwd, const char* path) {
     }
 
     char abs_usr[VFS_PATH_MAX];
-    const char* eff = abs_apply_posix_aliases(abs, abs_usr);
+    const char* aliased = abs_apply_posix_aliases(abs, abs_usr);
+
+    char eff[VFS_PATH_MAX];
+    rc = vfs_resolve_symlinks_abs(aliased, false, eff);
+    if (rc < 0) {
+        return rc;
+    }
 
     if (abs_is_mount(eff, "/disk")) {
         if (!fatdisk_is_ready()) {
@@ -1413,14 +1968,19 @@ int32_t vfs_rename_path(const char* cwd, const char* old_path, const char* new_p
         return -EPERM;
     }
 
-    vfs_stat_t st_old;
-    rc = vfs_stat_path("/", abs_old, &st_old);
+    char abs_old_usr[VFS_PATH_MAX];
+    char abs_new_usr[VFS_PATH_MAX];
+    const char* old_alias = abs_apply_posix_aliases(abs_old, abs_old_usr);
+    const char* new_alias = abs_apply_posix_aliases(abs_new, abs_new_usr);
+
+    char old_eff[VFS_PATH_MAX];
+    rc = vfs_resolve_symlinks_abs(old_alias, false, old_eff);
     if (rc < 0) {
         return rc;
     }
 
-    vfs_stat_t st_new;
-    rc = vfs_stat_path("/", abs_new, &st_new);
+    char new_eff_check[VFS_PATH_MAX];
+    rc = vfs_resolve_symlinks_abs(new_alias, false, new_eff_check);
     if (rc == 0) {
         return -EEXIST;
     }
@@ -1428,10 +1988,46 @@ int32_t vfs_rename_path(const char* cwd, const char* old_path, const char* new_p
         return rc;
     }
 
-    char abs_old_usr[VFS_PATH_MAX];
-    char abs_new_usr[VFS_PATH_MAX];
-    const char* old_eff = abs_apply_posix_aliases(abs_old, abs_old_usr);
-    const char* new_eff = abs_apply_posix_aliases(abs_new, abs_new_usr);
+    const char* base = strrchr(new_alias, '/');
+    base = base ? base + 1 : new_alias;
+    if (!base || base[0] == '\0') {
+        return -EINVAL;
+    }
+
+    char parent[VFS_PATH_MAX];
+    abs_dirname(new_alias, parent);
+
+    char parent_res[VFS_PATH_MAX];
+    rc = vfs_resolve_symlinks_abs(parent, true, parent_res);
+    if (rc < 0) {
+        return rc;
+    }
+
+    vfs_stat_t pst;
+    rc = vfs_lstat_abs(parent_res, &pst);
+    if (rc < 0) {
+        return rc;
+    }
+    if (!pst.is_dir) {
+        return -ENOTDIR;
+    }
+
+    char new_eff[VFS_PATH_MAX];
+    size_t plen = strlen(parent_res);
+    size_t blen = strlen(base);
+    size_t need = plen + ((plen > 1u) ? 1u : 0u) + blen + 1u;
+    if (need > VFS_PATH_MAX) {
+        return -ENAMETOOLONG;
+    }
+    size_t pos = 0;
+    memcpy(new_eff + pos, parent_res, plen);
+    pos += plen;
+    if (plen > 1u) {
+        new_eff[pos++] = '/';
+    }
+    memcpy(new_eff + pos, base, blen);
+    pos += blen;
+    new_eff[pos] = '\0';
 
     bool old_disk = abs_is_mount(old_eff, "/disk");
     bool old_ram = abs_is_mount(old_eff, "/ram");
@@ -1543,6 +2139,42 @@ int32_t vfs_fsync(vfs_handle_t* h) {
     return rc;
 }
 
+int32_t vfs_fchmod(vfs_handle_t* h, uint16_t mode) {
+    if (!h) {
+        return -EINVAL;
+    }
+    if (h->backend == VFS_BACKEND_INITRAMFS) {
+        return -EROFS;
+    }
+
+    vfs_stat_t st;
+    int32_t rc = vfs_lstat_abs(h->abs_path, &st);
+    if (rc < 0) {
+        return rc;
+    }
+
+    mode &= 07777u;
+
+    if (h->backend == VFS_BACKEND_FATDISK) {
+        if (!fatdisk_is_ready()) {
+            return -EIO;
+        }
+        if (!fatdisk_set_meta(h->abs_path, false, mode)) {
+            return -EIO;
+        }
+        return 0;
+    }
+
+    if (h->backend == VFS_BACKEND_RAMFS) {
+        if (!ramfs_set_meta(h->abs_path, false, mode)) {
+            return -EIO;
+        }
+        return 0;
+    }
+
+    return -EROFS;
+}
+
 int32_t vfs_truncate_path(const char* cwd, const char* path, uint32_t new_size) {
     if (!path) {
         return -EINVAL;
@@ -1563,4 +2195,19 @@ int32_t vfs_truncate_path(const char* cwd, const char* path, uint32_t new_size) 
         rc = rc_close;
     }
     return rc;
+}
+
+uint32_t vfs_handle_flags(vfs_handle_t* h) {
+    if (!h) {
+        return 0;
+    }
+    return h->flags;
+}
+
+int32_t vfs_handle_set_flags(vfs_handle_t* h, uint32_t flags) {
+    if (!h) {
+        return -EINVAL;
+    }
+    h->flags = flags;
+    return 0;
 }

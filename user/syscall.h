@@ -90,6 +90,19 @@ enum {
     SYS_SIGNAL = 55,
     SYS_SIGRETURN = 56,
     SYS_SIGPROCMASK = 57,
+    SYS_GETPPID = 58,
+    SYS_GETPGRP = 59,
+    SYS_SETPGID = 60,
+    SYS_FCNTL = 61,
+    SYS_ALARM = 62,
+    SYS_LSTAT = 63,
+    SYS_SYMLINK = 64,
+    SYS_READLINK = 65,
+    SYS_CHMOD = 66,
+    SYS_FCHMOD = 67,
+    SYS_FORK = 68,
+    SYS_EXECVE = 69,
+    SYS_WAITPID = 70,
 };
 
 static inline int sys_write(int fd, const char* buf, uint32_t len) {
@@ -134,12 +147,56 @@ static inline int sys_wait(uint32_t pid) {
     return ret;
 }
 
-static inline int sys_kill(uint32_t pid, int code) {
+static inline int sys_waitpid(int pid, int* status, int options) {
+    int ret;
+    __asm__ volatile (
+        "int $0x80"
+        : "=a"(ret)
+        : "a"(SYS_WAITPID), "b"(pid), "c"(status), "d"(options)
+        : "memory"
+    );
+    return ret;
+}
+
+static inline int sys_kill(int pid, int code) {
     int ret;
     __asm__ volatile (
         "int $0x80"
         : "=a"(ret)
         : "a"(SYS_KILL), "b"(pid), "c"(code)
+        : "memory"
+    );
+    return ret;
+}
+
+static inline int sys_getppid(void) {
+    int ret;
+    __asm__ volatile (
+        "int $0x80"
+        : "=a"(ret)
+        : "a"(SYS_GETPPID)
+        : "memory"
+    );
+    return ret;
+}
+
+static inline int sys_getpgrp(void) {
+    int ret;
+    __asm__ volatile (
+        "int $0x80"
+        : "=a"(ret)
+        : "a"(SYS_GETPGRP)
+        : "memory"
+    );
+    return ret;
+}
+
+static inline int sys_setpgid(int pid, int pgid) {
+    int ret;
+    __asm__ volatile (
+        "int $0x80"
+        : "=a"(ret)
+        : "a"(SYS_SETPGID), "b"(pid), "c"(pgid)
         : "memory"
     );
     return ret;
@@ -210,6 +267,28 @@ __attribute__((noreturn)) static inline void sys_exit(int code) {
     for (;;) {
         __asm__ volatile ("pause");
     }
+}
+
+static inline int sys_fork(void) {
+    int ret;
+    __asm__ volatile (
+        "int $0x80"
+        : "=a"(ret)
+        : "a"(SYS_FORK)
+        : "memory"
+    );
+    return ret;
+}
+
+static inline int sys_execve(const char* path, const char* const* argv, uint32_t argc) {
+    int ret;
+    __asm__ volatile (
+        "int $0x80"
+        : "=a"(ret)
+        : "a"(SYS_EXECVE), "b"(path), "c"(argv), "d"(argc)
+        : "memory"
+    );
+    return ret;
 }
 
 static inline int sys_spawn(const char* path, const char* const* argv, uint32_t argc) {

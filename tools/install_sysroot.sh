@@ -37,6 +37,8 @@ VTCC_INC="$ROOT_DIR/third_party/tcc/include"
 VSYSCALL_H="$ROOT_DIR/user/syscall.h"
 VTERMIOS_H="$ROOT_DIR/user/sys/termios.h"
 VIOCTL_H="$ROOT_DIR/user/sys/ioctl.h"
+VUTSNAME_H="$ROOT_DIR/user/sys/utsname.h"
+VSYSMACROS_H="$ROOT_DIR/user/sys/sysmacros.h"
 
 VOLIVE="$ROOT_DIR/build/user/libolive.a"
 VOLIVE_H="$ROOT_DIR/third_party/olive/olive.h"
@@ -109,6 +111,14 @@ if [[ ! -f "$VTERMIOS_H" ]]; then
 fi
 if [[ ! -f "$VIOCTL_H" ]]; then
   echo "error: VOS ioctl header not found: $VIOCTL_H" >&2
+  exit 1
+fi
+if [[ ! -f "$VUTSNAME_H" ]]; then
+  echo "error: VOS utsname header not found: $VUTSNAME_H" >&2
+  exit 1
+fi
+if [[ ! -f "$VSYSMACROS_H" ]]; then
+  echo "error: VOS sysmacros header not found: $VSYSMACROS_H" >&2
   exit 1
 fi
 if [[ ! -f "$VOLIVE" ]]; then
@@ -235,9 +245,22 @@ copy_one "$VTCC" ::/usr/bin/tcc
 copy_one "$VTCC1" ::/usr/lib/tcc/libtcc1.a
 copy_tree "$VTCC_INC" ::/usr/lib/tcc/include
 
+# Install sbase tools (portable Unix userland utilities).
+SBASE_BIN_DIR="$ROOT_DIR/build/user/sbase_bin"
+if [[ -d "$SBASE_BIN_DIR" ]]; then
+  for f in "$SBASE_BIN_DIR"/*.elf; do
+    if [[ -f "$f" ]]; then
+      b="$(basename "$f" .elf)"
+      copy_one "$f" "::/usr/bin/$b"
+    fi
+  done
+fi
+
 copy_one "$VSYSCALL_H" ::/usr/include/syscall.h
 copy_one "$VTERMIOS_H" ::/usr/include/sys/termios.h
 copy_one "$VIOCTL_H" ::/usr/include/sys/ioctl.h
+copy_one "$VUTSNAME_H" ::/usr/include/sys/utsname.h
+copy_one "$VSYSMACROS_H" ::/usr/include/sys/sysmacros.h
 
 copy_one "$VOLIVE" ::/usr/lib/libolive.a
 copy_one "$VOLIVE_H" ::/usr/include/olive.h

@@ -17,7 +17,8 @@
 typedef struct vos_dirent {
     char name[64];
     unsigned char is_dir;
-    unsigned char _pad[3];
+    unsigned char is_symlink;
+    unsigned short mode;
     unsigned int size;
     unsigned short wtime;
     unsigned short wdate;
@@ -25,7 +26,8 @@ typedef struct vos_dirent {
 
 typedef struct vos_stat {
     unsigned char is_dir;
-    unsigned char _pad[3];
+    unsigned char is_symlink;
+    unsigned short mode;
     unsigned int size;
     unsigned short wtime;
     unsigned short wdate;

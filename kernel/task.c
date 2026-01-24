@@ -5,6 +5,7 @@
 #include "timer.h"
 #include "io.h"
 #include "paging.h"
+#include "early_alloc.h"
 #include "pmm.h"
 #include "elf.h"
 #include "usercopy.h"
@@ -27,9 +28,30 @@
 #define VOS_SIG_DFL 0u
 #define VOS_SIG_IGN 1u
 #define VOS_SIGKILL 9
+#define VOS_SIGALRM 14
 #define VOS_SIGSTOP 17
 #define VOS_SIGWINCH 28
 #define VOS_SIGCHLD 20
+
+// Keep in sync with newlib's <sys/_default_fcntl.h>.
+enum {
+    VOS_F_DUPFD = 0,
+    VOS_F_GETFD = 1,
+    VOS_F_SETFD = 2,
+    VOS_F_GETFL = 3,
+    VOS_F_SETFL = 4,
+    VOS_F_DUPFD_CLOEXEC = 14,
+};
+
+enum {
+    VOS_FD_CLOEXEC = 1,
+};
+
+enum {
+    VOS_O_ACCMODE = 3,
+    VOS_O_APPEND = 0x0008u,
+    VOS_O_NONBLOCK = 0x4000u,
+};
 
 // User virtual address layout (must match kernel/elf.c and kernel/paging.c).
 #define USER_BASE  0x02000000u
@@ -111,6 +133,8 @@ typedef struct pipe_obj pipe_obj_t;
 
 typedef struct fd_entry {
     fd_kind_t kind;
+    uint32_t fd_flags;   // FD_CLOEXEC etc (F_GETFD/F_SETFD)
+    uint32_t fl_flags;   // O_* status flags (F_GETFL/F_SETFL; subset)
     vfs_handle_t* handle;
     pipe_obj_t* pipe;
     bool pipe_write_end;
@@ -139,6 +163,8 @@ typedef struct vos_sigframe {
 
 typedef struct task {
     uint32_t id;
+    uint32_t ppid;
+    uint32_t pgid;
     uint32_t esp;            // saved stack pointer (points to interrupt frame)
     uint32_t kstack_top;     // top of kernel stack (for TSS.esp0)
     uint32_t* page_directory;
@@ -162,9 +188,13 @@ typedef struct task {
     task_state_t state;
     uint32_t wake_tick;
     uint32_t wait_pid;
+    void* wait_status_user; // waitpid-style status output (optional)
+    bool wait_return_pid;   // true for waitpid-style return (pid), false for legacy wait (exit code)
     int32_t exit_code;
+    bool waited;            // set once exit status has been delivered to a waiter; safe to reap
     bool kill_pending;
     int32_t kill_exit_code;
+    uint32_t alarm_tick; // 0 = disabled; timer_get_ticks() deadline for SIGALRM
     uint32_t cpu_ticks;
     char name[TASK_NAME_LEN + 1];
     struct task* next;
@@ -177,7 +207,188 @@ static bool enabled = false;
 static uint32_t next_id = 1;
 static uint32_t tick_div = 0;
 static uint32_t next_kstack_region = KSTACK_REGION_BASE;
-static uint32_t tty_foreground_pid = 0;
+static uint32_t tty_foreground_pgid = 0;
+static bool reap_pending = false;
+
+// Sentinel value used to wait for "any child" in waitpid-style syscalls.
+#define WAIT_ANY_PID 0xFFFFFFFFu
+#define FORK_COPY_VA 0xE0000000u
+
+static void task_close_fds(task_t* t);
+
+static void task_free_vm_areas(vm_area_t* head) {
+    vm_area_t* cur = head;
+    while (cur) {
+        vm_area_t* next = cur->next;
+        kfree(cur);
+        cur = next;
+    }
+}
+
+static vm_area_t* vm_clone_areas(const vm_area_t* head) {
+    vm_area_t* out_head = NULL;
+    vm_area_t** tail = &out_head;
+
+    const vm_area_t* cur = head;
+    while (cur) {
+        vm_area_t* node = (vm_area_t*)kmalloc(sizeof(*node));
+        if (!node) {
+            task_free_vm_areas(out_head);
+            return NULL;
+        }
+        memset(node, 0, sizeof(*node));
+        node->start = cur->start;
+        node->size = cur->size;
+        node->prot = cur->prot;
+        node->next = NULL;
+        *tail = node;
+        tail = &node->next;
+        cur = cur->next;
+    }
+    return out_head;
+}
+
+static void free_user_pages_in_directory(uint32_t* dir) {
+    if (!dir) {
+        return;
+    }
+
+    uint32_t start_pde = USER_BASE >> 22;
+    uint32_t end_pde = USER_LIMIT >> 22;
+
+    for (uint32_t dir_index = start_pde; dir_index < end_pde; dir_index++) {
+        uint32_t pde = dir[dir_index];
+        if ((pde & PAGE_PRESENT) == 0 || (pde & PAGE_USER) == 0) {
+            continue;
+        }
+
+        uint32_t* table = (uint32_t*)(pde & 0xFFFFF000u);
+        for (uint32_t tbl_index = 0; tbl_index < 1024u; tbl_index++) {
+            uint32_t pte = table[tbl_index];
+            if ((pte & PAGE_PRESENT) == 0 || (pte & PAGE_USER) == 0) {
+                continue;
+            }
+
+            uint32_t paddr = pte & 0xFFFFF000u;
+            table[tbl_index] = 0;
+            if (paddr) {
+                pmm_free_frame(paddr);
+            }
+        }
+    }
+}
+
+static void task_free_user_pages(task_t* t) {
+    if (!t || !t->user || !t->page_directory) {
+        return;
+    }
+    free_user_pages_in_directory(t->page_directory);
+}
+
+static void task_free_kstack(task_t* t) {
+    if (!t) {
+        return;
+    }
+
+    // Only stacks allocated via kstack_alloc() live in the dedicated region.
+    if (t->kstack_top < (KSTACK_REGION_BASE + PAGE_SIZE + KSTACK_SIZE)) {
+        return;
+    }
+
+    uint32_t bottom = t->kstack_top - KSTACK_SIZE;
+    for (uint32_t va = bottom; va < t->kstack_top; va += PAGE_SIZE) {
+        uint32_t paddr = 0;
+        if (paging_unmap_page(va, &paddr) && paddr) {
+            pmm_free_frame(paddr);
+        }
+    }
+}
+
+static task_t* task_find_prev(task_t* target) {
+    if (!current_task || !target) {
+        return NULL;
+    }
+
+    task_t* t = current_task;
+    for (uint32_t i = 0; i < TASK_MAX_SCAN; i++) {
+        if (!t || !t->next) {
+            return NULL;
+        }
+        if (t->next == target) {
+            return t;
+        }
+        t = t->next;
+        if (t == current_task) {
+            break;
+        }
+    }
+    return NULL;
+}
+
+static bool task_detach(task_t* target) {
+    if (!current_task || !target) {
+        return false;
+    }
+    if (target == current_task) {
+        return false;
+    }
+
+    task_t* prev = task_find_prev(target);
+    if (!prev) {
+        return false;
+    }
+
+    prev->next = target->next;
+    target->next = NULL;
+    return true;
+}
+
+static void task_reap_detached(task_t* t) {
+    if (!t) {
+        return;
+    }
+
+    task_close_fds(t);
+    task_free_vm_areas(t->vm_areas);
+    t->vm_areas = NULL;
+    task_free_user_pages(t);
+    task_free_kstack(t);
+    kfree(t);
+}
+
+static void task_reap_waited_zombies(void) {
+    if (!current_task || !reap_pending) {
+        return;
+    }
+
+    uint32_t irq_flags = irq_save();
+
+    task_t* prev = current_task;
+    task_t* t = current_task->next;
+
+    for (uint32_t i = 0; i < TASK_MAX_SCAN; i++) {
+        if (!t || t == current_task) {
+            break;
+        }
+
+        if (t->state == TASK_STATE_ZOMBIE && t->waited) {
+            prev->next = t->next;
+            task_t* victim = t;
+            t = prev->next;
+            victim->next = NULL;
+            task_reap_detached(victim);
+            continue;
+        }
+
+        prev = t;
+        t = t->next;
+    }
+
+    // Best-effort: waited zombies should be fully drained in one scan on small
+    // systems. Clear the hint flag; it will be raised again if needed.
+    reap_pending = false;
+    irq_restore(irq_flags);
+}
 
 static bool frame_from_user(const interrupt_frame_t* frame) {
     return frame && ((frame->cs & 0x3u) == 0x3u);
@@ -222,6 +433,55 @@ static task_t* task_find_by_pid(uint32_t pid) {
         }
     }
     return NULL;
+}
+
+static task_t* task_find_any_by_pgid(uint32_t pgid) {
+    if (!current_task || pgid == 0) {
+        return NULL;
+    }
+    task_t* t = current_task;
+    for (uint32_t i = 0; i < TASK_MAX_SCAN; i++) {
+        if (!t) {
+            break;
+        }
+        if (t->pgid == pgid) {
+            return t;
+        }
+        t = t->next;
+        if (t == current_task) {
+            break;
+        }
+    }
+    return NULL;
+}
+
+static void task_queue_signal(task_t* t, int32_t sig) {
+    if (!t) {
+        return;
+    }
+    if (t->state == TASK_STATE_ZOMBIE) {
+        return;
+    }
+
+    // Uncatchable signals become deferred kills to avoid tearing down resources
+    // while the target is executing in-kernel.
+    if (sig == VOS_SIGKILL) {
+        t->kill_pending = true;
+        t->kill_exit_code = 128 + sig;
+    } else {
+        t->sig_pending |= (1u << (uint32_t)sig);
+    }
+
+    bool wake = (sig == VOS_SIGKILL);
+    if (!wake) {
+        wake = (t->sig_mask & (1u << (uint32_t)sig)) == 0;
+    }
+
+    if (wake && t->state != TASK_STATE_RUNNABLE) {
+        t->state = TASK_STATE_RUNNABLE;
+        t->wake_tick = 0;
+        t->wait_pid = 0;
+    }
 }
 
 static uint32_t* push32(uint32_t* sp, uint32_t v) {
@@ -372,9 +632,18 @@ static void fd_init(task_t* t) {
         return;
     }
     memset(t->fds, 0, sizeof(t->fds));
-    if (TASK_MAX_FDS > 0) t->fds[0].kind = FD_KIND_STDIN;
-    if (TASK_MAX_FDS > 1) t->fds[1].kind = FD_KIND_STDOUT;
-    if (TASK_MAX_FDS > 2) t->fds[2].kind = FD_KIND_STDERR;
+    if (TASK_MAX_FDS > 0) {
+        t->fds[0].kind = FD_KIND_STDIN;
+        t->fds[0].fl_flags = 0; // O_RDONLY
+    }
+    if (TASK_MAX_FDS > 1) {
+        t->fds[1].kind = FD_KIND_STDOUT;
+        t->fds[1].fl_flags = 1; // O_WRONLY
+    }
+    if (TASK_MAX_FDS > 2) {
+        t->fds[2].kind = FD_KIND_STDERR;
+        t->fds[2].fl_flags = 1; // O_WRONLY
+    }
 }
 
 static void fd_inherit(task_t* child, const task_t* parent) {
@@ -386,9 +655,70 @@ static void fd_inherit(task_t* child, const task_t* parent) {
         const fd_entry_t* src = &parent->fds[fd];
         fd_entry_t* dst = &child->fds[fd];
 
-        dst->kind = src->kind;
         dst->pending_len = 0;
         dst->pending_off = 0;
+
+        if (src->kind == FD_KIND_FREE || (src->fd_flags & VOS_FD_CLOEXEC) != 0) {
+            dst->kind = FD_KIND_FREE;
+            dst->fd_flags = 0;
+            dst->fl_flags = 0;
+            dst->handle = NULL;
+            dst->pipe = NULL;
+            dst->pipe_write_end = false;
+            continue;
+        }
+
+        dst->kind = src->kind;
+        dst->fd_flags = 0; // CLOEXEC semantics: descriptors that survive exec have FD flags cleared
+        dst->fl_flags = src->fl_flags;
+
+        if (src->kind == FD_KIND_VFS && src->handle) {
+            dst->handle = src->handle;
+            dst->pipe = NULL;
+            dst->pipe_write_end = false;
+            vfs_ref(dst->handle);
+            continue;
+        }
+
+        if (src->kind == FD_KIND_PIPE && src->pipe) {
+            dst->handle = NULL;
+            dst->pipe = src->pipe;
+            dst->pipe_write_end = src->pipe_write_end;
+            pipe_ref(dst->pipe, dst->pipe_write_end);
+            continue;
+        }
+
+        dst->handle = NULL;
+        dst->pipe = NULL;
+        dst->pipe_write_end = false;
+    }
+}
+
+static void fd_clone(task_t* child, const task_t* parent) {
+    if (!child || !parent) {
+        return;
+    }
+
+    for (int32_t fd = 0; fd < (int32_t)TASK_MAX_FDS; fd++) {
+        const fd_entry_t* src = &parent->fds[fd];
+        fd_entry_t* dst = &child->fds[fd];
+
+        dst->pending_len = 0;
+        dst->pending_off = 0;
+
+        if (src->kind == FD_KIND_FREE) {
+            dst->kind = FD_KIND_FREE;
+            dst->fd_flags = 0;
+            dst->fl_flags = 0;
+            dst->handle = NULL;
+            dst->pipe = NULL;
+            dst->pipe_write_end = false;
+            continue;
+        }
+
+        dst->kind = src->kind;
+        dst->fd_flags = src->fd_flags;
+        dst->fl_flags = src->fl_flags;
 
         if (src->kind == FD_KIND_VFS && src->handle) {
             dst->handle = src->handle;
@@ -519,9 +849,18 @@ static bool kstack_alloc(uint32_t* out_stack_top) {
 
     paging_prepare_range(stack_bottom, KSTACK_SIZE, PAGE_PRESENT | PAGE_RW);
 
-    for (uint32_t va = stack_bottom; va < stack_top; va += PAGE_SIZE) {
+    uint32_t va = stack_bottom;
+    for (; va < stack_top; va += PAGE_SIZE) {
         uint32_t frame = pmm_alloc_frame();
         if (frame == 0) {
+            // Roll back partial allocation.
+            for (uint32_t un = stack_bottom; un < va; un += PAGE_SIZE) {
+                uint32_t paddr = 0;
+                if (paging_unmap_page(un, &paddr) && paddr) {
+                    pmm_free_frame(paddr);
+                }
+            }
+            next_kstack_region = region_base;
             return false;
         }
         paging_map_page(va, frame, PAGE_PRESENT | PAGE_RW);
@@ -571,6 +910,8 @@ static task_t* task_create_kernel(void (*entry)(void), const char* name) {
     }
     memset(t, 0, sizeof(*t));
     t->id = ++next_id;
+    t->ppid = 0;
+    t->pgid = 0;
     t->esp = (uint32_t)sp;
     t->kstack_top = stack_top_addr;
     t->page_directory = paging_kernel_directory();
@@ -584,6 +925,7 @@ static task_t* task_create_kernel(void (*entry)(void), const char* name) {
     t->wake_tick = 0;
     t->wait_pid = 0;
     t->exit_code = 0;
+    t->alarm_tick = 0;
     t->cpu_ticks = 0;
     task_set_name(t, name);
     t->next = NULL;
@@ -631,6 +973,8 @@ static task_t* task_create_user(uint32_t entry, uint32_t user_esp, uint32_t* pag
     }
     memset(t, 0, sizeof(*t));
     t->id = ++next_id;
+    t->ppid = 0;
+    t->pgid = t->id;
     t->esp = (uint32_t)sp;
     t->kstack_top = stack_top_addr;
     t->page_directory = page_directory;
@@ -646,6 +990,7 @@ static task_t* task_create_user(uint32_t entry, uint32_t user_esp, uint32_t* pag
     t->wake_tick = 0;
     t->wait_pid = 0;
     t->exit_code = 0;
+    t->alarm_tick = 0;
     t->cpu_ticks = 0;
     task_set_name(t, name);
     t->next = NULL;
@@ -664,8 +1009,144 @@ static void task_append(task_t* t) {
     current_task->next = t;
 }
 
+static uint32_t* fork_ensure_child_table(uint32_t* dir, uint32_t dir_index) {
+    if (!dir) {
+        return NULL;
+    }
+
+    uint32_t entry = dir[dir_index];
+    if (entry & PAGE_PRESENT) {
+        return (uint32_t*)(entry & 0xFFFFF000u);
+    }
+
+    uint32_t* table = (uint32_t*)early_alloc(PAGE_SIZE, PAGE_SIZE);
+    memset(table, 0, PAGE_SIZE);
+    dir[dir_index] = ((uint32_t)table & 0xFFFFF000u) | (PAGE_PRESENT | PAGE_RW | PAGE_USER);
+    return table;
+}
+
+static uint32_t* fork_clone_user_directory(const task_t* parent) {
+    if (!parent || !parent->user || !parent->page_directory) {
+        return NULL;
+    }
+
+    uint32_t* child_dir = paging_create_user_directory();
+    if (!child_dir) {
+        return NULL;
+    }
+
+    // Ensure the scratch mapping is backed by a page table in the kernel directory.
+    paging_prepare_range(FORK_COPY_VA, PAGE_SIZE, PAGE_PRESENT | PAGE_RW);
+
+    uint32_t start_pde = USER_BASE >> 22;
+    uint32_t end_pde = USER_LIMIT >> 22;
+
+    for (uint32_t dir_index = start_pde; dir_index < end_pde; dir_index++) {
+        uint32_t pde = parent->page_directory[dir_index];
+        if ((pde & PAGE_PRESENT) == 0 || (pde & PAGE_USER) == 0) {
+            continue;
+        }
+
+        uint32_t* src_table = (uint32_t*)(pde & 0xFFFFF000u);
+        uint32_t* dst_table = NULL;
+
+        for (uint32_t tbl_index = 0; tbl_index < 1024u; tbl_index++) {
+            uint32_t pte = src_table[tbl_index];
+            if ((pte & PAGE_PRESENT) == 0 || (pte & PAGE_USER) == 0) {
+                continue;
+            }
+
+            if (!dst_table) {
+                dst_table = fork_ensure_child_table(child_dir, dir_index);
+                if (!dst_table) {
+                    free_user_pages_in_directory(child_dir);
+                    return NULL;
+                }
+            }
+
+            uint32_t va = (dir_index << 22) | (tbl_index << 12);
+
+            uint32_t dst_paddr = pmm_alloc_frame();
+            if (dst_paddr == 0) {
+                free_user_pages_in_directory(child_dir);
+                return NULL;
+            }
+
+            uint32_t map_flags = PAGE_PRESENT | PAGE_USER;
+            if (pte & PAGE_RW) {
+                map_flags |= PAGE_RW;
+            }
+            dst_table[tbl_index] = (dst_paddr & 0xFFFFF000u) | (map_flags & 0xFFFu);
+
+            // Copy the source page into the new physical frame using a temporary
+            // kernel mapping.
+            paging_map_page(FORK_COPY_VA, dst_paddr, PAGE_PRESENT | PAGE_RW);
+            memcpy((void*)FORK_COPY_VA, (const void*)va, PAGE_SIZE);
+            (void)paging_unmap_page(FORK_COPY_VA, NULL);
+        }
+    }
+
+    return child_dir;
+}
+
 uint32_t tasking_current_pid(void) {
     return current_task ? current_task->id : 0;
+}
+
+uint32_t tasking_current_ppid(void) {
+    uint32_t irq_flags = irq_save();
+    uint32_t ppid = current_task ? current_task->ppid : 0u;
+    irq_restore(irq_flags);
+    return ppid;
+}
+
+uint32_t tasking_getpgrp(void) {
+    uint32_t irq_flags = irq_save();
+    uint32_t pgid = current_task ? current_task->pgid : 0u;
+    irq_restore(irq_flags);
+    return pgid;
+}
+
+int32_t tasking_alarm(uint32_t seconds) {
+    if (!enabled || !current_task) {
+        return -EINVAL;
+    }
+
+    uint32_t hz = timer_get_hz();
+    if (hz == 0) {
+        return -EINVAL;
+    }
+
+    uint32_t now = timer_get_ticks();
+
+    uint32_t irq_flags = irq_save();
+    uint32_t prev_tick = current_task->alarm_tick;
+
+    uint32_t prev_remaining = 0;
+    if (prev_tick != 0 && (int32_t)(prev_tick - now) > 0) {
+        uint32_t rem_ticks = prev_tick - now;
+        prev_remaining = (rem_ticks + hz - 1u) / hz;
+    }
+
+    if (seconds == 0) {
+        current_task->alarm_tick = 0;
+        irq_restore(irq_flags);
+        return (int32_t)prev_remaining;
+    }
+
+    uint64_t add = (uint64_t)seconds * (uint64_t)hz;
+    if (add > 0xFFFFFFFFu) {
+        add = 0xFFFFFFFFu;
+    }
+
+    uint32_t deadline = now + (uint32_t)add;
+    if (deadline == 0) {
+        deadline = 0xFFFFFFFFu;
+    }
+    current_task->alarm_tick = deadline;
+
+    irq_restore(irq_flags);
+    return (int32_t)prev_remaining;
 }
 
 uint32_t tasking_getuid(void) {
@@ -833,7 +1314,7 @@ static void wake_sleepers(uint32_t now_ticks) {
     }
 }
 
-static void wake_waiters(uint32_t pid, int32_t exit_code) {
+static void check_alarms(uint32_t now_ticks) {
     if (!current_task) {
         return;
     }
@@ -843,19 +1324,107 @@ static void wake_waiters(uint32_t pid, int32_t exit_code) {
         if (!t) {
             break;
         }
-        if (t->state == TASK_STATE_WAITING && t->wait_pid == pid) {
-            t->state = TASK_STATE_RUNNABLE;
-            t->wait_pid = 0;
-            if (t->esp) {
-                interrupt_frame_t* f = (interrupt_frame_t*)t->esp;
-                f->eax = (uint32_t)exit_code;
+
+        if (t->user && t->alarm_tick != 0) {
+            if ((int32_t)(now_ticks - t->alarm_tick) >= 0) {
+                t->alarm_tick = 0;
+                task_queue_signal(t, VOS_SIGALRM);
             }
         }
+
         t = t->next;
         if (t == current_task) {
             break;
         }
     }
+}
+
+static int32_t wait_encode_status(int32_t exit_code) {
+    // Best-effort POSIX encoding: store exit status in the high byte.
+    // This matches WEXITSTATUS(status) on typical systems.
+    uint32_t code = (exit_code < 0) ? 255u : ((uint32_t)exit_code & 0xFFu);
+    return (int32_t)(code << 8);
+}
+
+static void wake_waiters(task_t* dead) {
+    if (!current_task || !dead) {
+        return;
+    }
+
+    uint32_t pid = dead->id;
+    int32_t exit_code = dead->exit_code;
+    uint32_t dead_ppid = dead->ppid;
+    bool any_woken = false;
+    bool any_delivered = false;
+
+    uint32_t irq_flags = irq_save();
+    uint32_t* dead_dir = current_task->page_directory ? current_task->page_directory : paging_kernel_directory();
+
+    task_t* t = current_task;
+    for (uint32_t i = 0; i < TASK_MAX_SCAN; i++) {
+        if (!t) {
+            break;
+        }
+
+        bool match = false;
+        if (t->state == TASK_STATE_WAITING) {
+            if (t->wait_pid == pid) {
+                match = true;
+            } else if (t->wait_pid == WAIT_ANY_PID && dead_ppid != 0 && t->id == dead_ppid) {
+                match = true;
+            }
+        }
+
+        if (match) {
+            t->state = TASK_STATE_RUNNABLE;
+            t->wait_pid = 0;
+
+            if (t->esp) {
+                interrupt_frame_t* f = (interrupt_frame_t*)t->esp;
+                if (t->wait_return_pid) {
+                    bool delivered = true;
+                    if (t->wait_status_user) {
+                        int32_t status = wait_encode_status(exit_code);
+
+                        uint32_t* waiter_dir = t->page_directory ? t->page_directory : paging_kernel_directory();
+                        if (waiter_dir != dead_dir) {
+                            paging_switch_directory(waiter_dir);
+                        }
+                        delivered = copy_to_user(t->wait_status_user, &status, (uint32_t)sizeof(status));
+                        if (waiter_dir != dead_dir) {
+                            paging_switch_directory(dead_dir);
+                        }
+                    }
+
+                    if (delivered) {
+                        f->eax = pid;
+                        any_delivered = true;
+                    } else {
+                        f->eax = (uint32_t)-EFAULT;
+                    }
+                } else {
+                    f->eax = (uint32_t)exit_code;
+                    any_delivered = true;
+                }
+            }
+
+            t->wait_status_user = NULL;
+            t->wait_return_pid = false;
+            any_woken = true;
+        }
+
+        t = t->next;
+        if (t == current_task) {
+            break;
+        }
+    }
+
+    if (any_woken && any_delivered) {
+        dead->waited = true;
+        reap_pending = true;
+    }
+
+    irq_restore(irq_flags);
 }
 
 static task_t* pick_next_runnable(task_t* start, const task_t* stop) {
@@ -920,6 +1489,8 @@ interrupt_frame_t* tasking_on_timer_tick(interrupt_frame_t* frame) {
         return frame;
     }
 
+    task_reap_waited_zombies();
+
     // Only terminate a task at safe points (when the interrupt happened in ring3).
     if ((frame->cs & 3u) == 3u && current_task->kill_pending) {
         return tasking_exit(frame, current_task->kill_exit_code);
@@ -929,6 +1500,7 @@ interrupt_frame_t* tasking_on_timer_tick(interrupt_frame_t* frame) {
 
     uint32_t now = timer_get_ticks();
     wake_sleepers(now);
+    check_alarms(now);
 
     tick_div++;
     if (tick_div < 10u) {
@@ -956,6 +1528,8 @@ interrupt_frame_t* tasking_yield(interrupt_frame_t* frame) {
         return frame;
     }
 
+    task_reap_waited_zombies();
+
     current_task->esp = (uint32_t)frame;
     task_t* next = pick_next_runnable(current_task->next, current_task);
     if (!next) {
@@ -976,8 +1550,9 @@ interrupt_frame_t* tasking_exit(interrupt_frame_t* frame, int32_t exit_code) {
     task_close_fds(current_task);
     current_task->state = TASK_STATE_ZOMBIE;
     current_task->exit_code = exit_code;
+    current_task->waited = false;
     current_task->esp = (uint32_t)frame;
-    wake_waiters(current_task->id, exit_code);
+    wake_waiters(current_task);
     return tasking_yield(frame);
 }
 
@@ -1021,23 +1596,175 @@ interrupt_frame_t* tasking_wait(interrupt_frame_t* frame, uint32_t pid) {
         return frame;
     }
 
+    // POSIX-ish: only allow waiting on direct children.
+    if (target->ppid != current_task->id) {
+        frame->eax = (uint32_t)-1;
+        return frame;
+    }
+
     if (target->state == TASK_STATE_ZOMBIE) {
-        frame->eax = (uint32_t)target->exit_code;
+        if (target->waited) {
+            frame->eax = (uint32_t)-1;
+            return frame;
+        }
+
+        int32_t code = target->exit_code;
+
+        uint32_t irq_flags = irq_save();
+        if (task_detach(target)) {
+            task_reap_detached(target);
+        }
+        irq_restore(irq_flags);
+
+        frame->eax = (uint32_t)code;
         return frame;
     }
 
     current_task->state = TASK_STATE_WAITING;
     current_task->wait_pid = pid;
+    current_task->wait_status_user = NULL;
+    current_task->wait_return_pid = false;
     current_task->esp = (uint32_t)frame;
     return tasking_yield(frame);
 }
 
-int32_t tasking_kill(uint32_t pid, int32_t sig) {
+interrupt_frame_t* tasking_waitpid(interrupt_frame_t* frame, int32_t pid, void* status_user, int32_t options) {
+    if (!enabled || !current_task || !frame) {
+        return frame;
+    }
+    if (!current_task->user) {
+        frame->eax = (uint32_t)-EINVAL;
+        return frame;
+    }
+
+    bool nohang = (options & 0x1) != 0; // WNOHANG (POSIX/LINUX value)
+
+    if (pid == 0 || pid < -1) {
+        frame->eax = (uint32_t)-EINVAL;
+        return frame;
+    }
+
+    if (pid > 0) {
+        task_t* target = task_find_by_pid((uint32_t)pid);
+        if (!target || target->ppid != current_task->id || !target->user) {
+            frame->eax = (uint32_t)-ECHILD;
+            return frame;
+        }
+
+        if (target->state == TASK_STATE_ZOMBIE) {
+            if (target->waited) {
+                frame->eax = (uint32_t)-ECHILD;
+                return frame;
+            }
+
+            if (status_user) {
+                int32_t status = wait_encode_status(target->exit_code);
+                if (!copy_to_user(status_user, &status, (uint32_t)sizeof(status))) {
+                    frame->eax = (uint32_t)-EFAULT;
+                    return frame;
+                }
+            }
+
+            uint32_t irq_flags = irq_save();
+            if (task_detach(target)) {
+                task_reap_detached(target);
+            }
+            irq_restore(irq_flags);
+
+            frame->eax = (uint32_t)pid;
+            return frame;
+        }
+
+        if (nohang) {
+            frame->eax = 0;
+            return frame;
+        }
+
+        current_task->state = TASK_STATE_WAITING;
+        current_task->wait_pid = (uint32_t)pid;
+        current_task->wait_status_user = status_user;
+        current_task->wait_return_pid = true;
+        current_task->esp = (uint32_t)frame;
+        return tasking_yield(frame);
+    }
+
+    // pid == -1: wait for any child.
+    bool any_child = false;
+    task_t* zombie = NULL;
+    task_t* t = current_task->next;
+    for (uint32_t i = 0; i < TASK_MAX_SCAN; i++) {
+        if (!t || t == current_task) {
+            break;
+        }
+        if (t->user && t->ppid == current_task->id && !t->waited) {
+            any_child = true;
+            if (t->state == TASK_STATE_ZOMBIE) {
+                zombie = t;
+                break;
+            }
+        }
+        t = t->next;
+    }
+
+    if (zombie) {
+        int32_t status = wait_encode_status(zombie->exit_code);
+        if (status_user) {
+            if (!copy_to_user(status_user, &status, (uint32_t)sizeof(status))) {
+                frame->eax = (uint32_t)-EFAULT;
+                return frame;
+            }
+        }
+
+        uint32_t child_pid = zombie->id;
+        uint32_t irq_flags = irq_save();
+        if (task_detach(zombie)) {
+            task_reap_detached(zombie);
+        }
+        irq_restore(irq_flags);
+
+        frame->eax = child_pid;
+        return frame;
+    }
+
+    if (!any_child) {
+        frame->eax = (uint32_t)-ECHILD;
+        return frame;
+    }
+
+    if (nohang) {
+        frame->eax = 0;
+        return frame;
+    }
+
+    current_task->state = TASK_STATE_WAITING;
+    current_task->wait_pid = WAIT_ANY_PID;
+    current_task->wait_status_user = status_user;
+    current_task->wait_return_pid = true;
+    current_task->esp = (uint32_t)frame;
+    return tasking_yield(frame);
+}
+
+int32_t tasking_kill(int32_t pid, int32_t sig) {
     if (!enabled || !current_task) {
         return -EINVAL;
     }
+    // pid > 0: target process
+    // pid == 0: target caller's process group
+    // pid < 0: target process group (-pid)
+    bool target_group = false;
+    uint32_t target_pgid = 0;
+    uint32_t target_pid = 0;
     if (pid == 0) {
-        pid = current_task->id;
+        target_group = true;
+        target_pgid = current_task->pgid;
+    } else if (pid < 0) {
+        if ((uint32_t)pid == 0x80000000u) { // INT32_MIN
+            return -EINVAL;
+        }
+        target_group = true;
+        target_pgid = (uint32_t)(-pid);
+    } else {
+        target_pid = (uint32_t)pid;
     }
     if (sig < 0 || sig >= (int32_t)VOS_SIG_MAX) {
         return -EINVAL;
@@ -1046,36 +1773,38 @@ int32_t tasking_kill(uint32_t pid, int32_t sig) {
     uint32_t flags = irq_save();
 
     task_t* t = current_task;
+    bool any_match = false;
+    bool any_signaled = false;
+    bool any_perm_denied = false;
     for (uint32_t i = 0; i < TASK_MAX_SCAN; i++) {
         if (!t) {
             break;
         }
-        if (t->id == pid) {
+        bool match = false;
+        if (target_group) {
+            match = (target_pgid != 0 && t->pgid == target_pgid);
+        } else {
+            match = (t->id == target_pid);
+        }
+
+        if (match) {
+            any_match = true;
             if (!t->user) {
-                irq_restore(flags);
-                return -EPERM;
-            }
-            if (sig == 0) {
-                irq_restore(flags);
-                return 0;
-            }
-            if (t->state != TASK_STATE_ZOMBIE) {
-                // Uncatchable signals become deferred kills to avoid tearing down resources
-                // while the target is executing in-kernel.
-                if (sig == VOS_SIGKILL) {
-                    t->kill_pending = true;
-                    t->kill_exit_code = 128 + sig;
-                } else {
-                    t->sig_pending |= (1u << (uint32_t)sig);
+                any_perm_denied = true;
+            } else if (current_task->uid != 0u && t->uid != current_task->uid) {
+                any_perm_denied = true;
+            } else if (sig != 0) {
+                task_queue_signal(t, sig);
+                any_signaled = true;
+                if (!target_group) {
+                    break;
                 }
-                if (t->state != TASK_STATE_RUNNABLE) {
-                    t->state = TASK_STATE_RUNNABLE;
-                    t->wake_tick = 0;
-                    t->wait_pid = 0;
+            } else {
+                any_signaled = true;
+                if (!target_group) {
+                    break;
                 }
             }
-            irq_restore(flags);
-            return 0;
         }
         t = t->next;
         if (t == current_task) {
@@ -1084,7 +1813,69 @@ int32_t tasking_kill(uint32_t pid, int32_t sig) {
     }
 
     irq_restore(flags);
+    if (!any_match) {
+        return -ESRCH;
+    }
+    if (any_signaled) {
+        return 0;
+    }
+    if (any_perm_denied) {
+        return -EPERM;
+    }
     return -ESRCH;
+}
+
+int32_t tasking_setpgid(int32_t pid, int32_t pgid) {
+    if (!enabled || !current_task) {
+        return -EINVAL;
+    }
+
+    if (pid == 0) {
+        pid = (int32_t)current_task->id;
+    }
+    if (pgid == 0) {
+        pgid = pid;
+    }
+    if (pid < 0 || pgid < 0) {
+        return -EINVAL;
+    }
+
+    uint32_t upid = (uint32_t)pid;
+    uint32_t upgid = (uint32_t)pgid;
+
+    uint32_t flags = irq_save();
+
+    task_t* target = task_find_by_pid(upid);
+    if (!target) {
+        irq_restore(flags);
+        return -ESRCH;
+    }
+    if (!target->user) {
+        irq_restore(flags);
+        return -EPERM;
+    }
+
+    if (current_task->uid != 0u && target->uid != current_task->uid) {
+        irq_restore(flags);
+        return -EPERM;
+    }
+
+    // Only allow changing our own pgid or that of a direct child.
+    if (target != current_task && target->ppid != current_task->id) {
+        irq_restore(flags);
+        return -EPERM;
+    }
+
+    // POSIX: pgid must refer to an existing process group, or create a new one
+    // whose ID equals pid.
+    if (upgid != upid && !task_find_any_by_pgid(upgid)) {
+        irq_restore(flags);
+        return -ESRCH;
+    }
+
+    target->pgid = upgid;
+    irq_restore(flags);
+    return 0;
 }
 
 static bool sig_default_ignore(int32_t sig) {
@@ -1837,6 +2628,8 @@ uint32_t tasking_spawn_user_pid(uint32_t entry, uint32_t user_esp, uint32_t* pag
         return 0;
     }
 
+    t->ppid = current_task->id;
+
     // Inherit the caller's current working directory and terminal settings
     // so userland behaves like a normal process tree.
     strncpy(t->cwd, current_task->cwd, sizeof(t->cwd) - 1u);
@@ -1852,6 +2645,257 @@ uint32_t tasking_spawn_user_pid(uint32_t entry, uint32_t user_esp, uint32_t* pag
 
 bool tasking_spawn_user(uint32_t entry, uint32_t user_esp, uint32_t* page_directory, uint32_t user_brk) {
     return tasking_spawn_user_pid(entry, user_esp, page_directory, user_brk) != 0;
+}
+
+int32_t tasking_fork(interrupt_frame_t* frame) {
+    if (!enabled || !current_task || !frame) {
+        return -EINVAL;
+    }
+    if (!current_task->user || !frame_from_user(frame)) {
+        return -EPERM;
+    }
+
+    uint32_t irq_flags = irq_save();
+
+    uint32_t* child_dir = fork_clone_user_directory(current_task);
+    if (!child_dir) {
+        irq_restore(irq_flags);
+        return -ENOMEM;
+    }
+
+    vm_area_t* vm_clone = NULL;
+    if (current_task->vm_areas) {
+        vm_clone = vm_clone_areas(current_task->vm_areas);
+        if (!vm_clone) {
+            free_user_pages_in_directory(child_dir);
+            irq_restore(irq_flags);
+            return -ENOMEM;
+        }
+    }
+
+    uint32_t stack_top_addr = 0;
+    if (!kstack_alloc(&stack_top_addr)) {
+        task_free_vm_areas(vm_clone);
+        free_user_pages_in_directory(child_dir);
+        irq_restore(irq_flags);
+        return -ENOMEM;
+    }
+
+    // Copy the current user context into the child, adjusting EAX so the
+    // fork() return value is 0 in the child.
+    uint32_t frame_bytes = (uint32_t)sizeof(interrupt_frame_t) + 8u; // user esp + ss
+    uint32_t child_sp_addr = stack_top_addr - frame_bytes;
+    memcpy((void*)child_sp_addr, frame, frame_bytes);
+    interrupt_frame_t* child_frame = (interrupt_frame_t*)child_sp_addr;
+    child_frame->eax = 0;
+
+    task_t* child = (task_t*)kmalloc(sizeof(task_t));
+    if (!child) {
+        task_t tmp;
+        memset(&tmp, 0, sizeof(tmp));
+        tmp.kstack_top = stack_top_addr;
+        task_free_kstack(&tmp);
+        task_free_vm_areas(vm_clone);
+        free_user_pages_in_directory(child_dir);
+        irq_restore(irq_flags);
+        return -ENOMEM;
+    }
+
+    memset(child, 0, sizeof(*child));
+    child->id = ++next_id;
+    child->ppid = current_task->id;
+    child->pgid = current_task->pgid;
+    child->esp = child_sp_addr;
+    child->kstack_top = stack_top_addr;
+    child->page_directory = child_dir;
+    child->user = true;
+    child->uid = current_task->uid;
+    child->gid = current_task->gid;
+    child->user_brk = current_task->user_brk;
+    child->user_brk_min = current_task->user_brk_min;
+    child->vm_areas = vm_clone;
+    child->mmap_top = current_task->mmap_top;
+    strncpy(child->cwd, current_task->cwd, sizeof(child->cwd) - 1u);
+    child->cwd[sizeof(child->cwd) - 1u] = '\0';
+    child->tty = current_task->tty;
+    child->tty_line_len = 0;
+    child->tty_line_off = 0;
+    child->tty_line_ready = false;
+    child->sig_pending = 0;
+    child->sig_mask = current_task->sig_mask;
+    memcpy(child->sig_handlers, current_task->sig_handlers, sizeof(child->sig_handlers));
+    child->state = TASK_STATE_RUNNABLE;
+    child->wake_tick = 0;
+    child->wait_pid = 0;
+    child->wait_status_user = NULL;
+    child->wait_return_pid = false;
+    child->exit_code = 0;
+    child->waited = false;
+    child->kill_pending = false;
+    child->kill_exit_code = 0;
+    child->alarm_tick = current_task->alarm_tick;
+    child->cpu_ticks = 0;
+    task_set_name(child, current_task->name);
+    fd_clone(child, current_task);
+    child->next = NULL;
+
+    task_append(child);
+    int32_t pid = (int32_t)child->id;
+    irq_restore(irq_flags);
+    return pid;
+}
+
+static void task_close_cloexec_fds(void) {
+    if (!current_task) {
+        return;
+    }
+
+    for (int32_t fd = 0; fd < (int32_t)TASK_MAX_FDS; fd++) {
+        uint32_t flags = current_task->fds[fd].fd_flags;
+        if ((flags & VOS_FD_CLOEXEC) != 0) {
+            (void)tasking_fd_close(fd);
+        }
+    }
+}
+
+int32_t tasking_execve(interrupt_frame_t* frame, const char* path, const char* const* argv, uint32_t argc) {
+    if (!enabled || !current_task || !frame) {
+        return -EINVAL;
+    }
+    if (!current_task->user || !frame_from_user(frame)) {
+        return -EPERM;
+    }
+    if (!path) {
+        return -EINVAL;
+    }
+    if (argc > 32u) {
+        return -EINVAL;
+    }
+
+    vfs_handle_t* h = NULL;
+    int32_t rc = vfs_open_path(current_task->cwd, path, 0, &h);
+    if (rc < 0) {
+        return rc;
+    }
+
+    vfs_stat_t st;
+    rc = vfs_fstat(h, &st);
+    if (rc < 0) {
+        (void)vfs_close(h);
+        return rc;
+    }
+    if (st.is_dir) {
+        (void)vfs_close(h);
+        return -EISDIR;
+    }
+    if (st.size == 0) {
+        (void)vfs_close(h);
+        return -ENOEXEC;
+    }
+
+    uint8_t* image = (uint8_t*)kmalloc(st.size);
+    if (!image) {
+        (void)vfs_close(h);
+        return -ENOMEM;
+    }
+
+    uint32_t total = 0;
+    while (total < st.size) {
+        uint32_t got = 0;
+        rc = vfs_read(h, image + total, st.size - total, &got);
+        if (rc < 0) {
+            kfree(image);
+            (void)vfs_close(h);
+            return rc;
+        }
+        if (got == 0) {
+            break;
+        }
+        total += got;
+    }
+    (void)vfs_close(h);
+
+    if (total != st.size) {
+        kfree(image);
+        return -EIO;
+    }
+
+    char abs[VFS_PATH_MAX];
+    rc = vfs_path_resolve(current_task->cwd, path, abs);
+    if (rc < 0) {
+        kfree(image);
+        return rc;
+    }
+
+    const char* kargv[32];
+    uint32_t kargc = 0;
+    if (argc == 0 || !argv) {
+        kargv[kargc++] = abs;
+    } else {
+        for (uint32_t i = 0; i < argc && kargc < 32u; i++) {
+            kargv[kargc++] = argv[i] ? argv[i] : "";
+        }
+        if (kargc == 0) {
+            kargv[kargc++] = abs;
+        }
+    }
+
+    uint32_t entry = 0;
+    uint32_t user_esp = 0;
+    uint32_t brk = 0;
+    uint32_t* user_dir = paging_create_user_directory();
+    if (!user_dir) {
+        kfree(image);
+        return -ENOMEM;
+    }
+
+    uint32_t irq_flags = irq_save();
+    uint32_t* prev_dir = current_task->page_directory ? current_task->page_directory : paging_kernel_directory();
+    paging_switch_directory(user_dir);
+    bool ok = elf_load_user_image(image, st.size, &entry, &user_esp, &brk);
+    if (ok) {
+        ok = elf_setup_user_stack(&user_esp, kargv, kargc);
+    }
+    paging_switch_directory(prev_dir);
+    irq_restore(irq_flags);
+
+    kfree(image);
+
+    if (!ok) {
+        return -ENOEXEC;
+    }
+
+    // Close file descriptors flagged close-on-exec.
+    task_close_cloexec_fds();
+
+    // Tear down the previous user image.
+    uint32_t* old_dir = current_task->page_directory;
+    vm_area_t* old_areas = current_task->vm_areas;
+    current_task->vm_areas = NULL;
+
+    current_task->page_directory = user_dir;
+    current_task->user_brk = brk;
+    current_task->user_brk_min = brk;
+    current_task->mmap_top = USER_STACK_TOP - (USER_STACK_PAGES + 1u) * PAGE_SIZE;
+    current_task->sig_pending = 0;
+    current_task->kill_pending = false;
+    current_task->kill_exit_code = 0;
+    current_task->wait_pid = 0;
+    current_task->wait_status_user = NULL;
+    current_task->wait_return_pid = false;
+
+    // Switch to the new address space and update the user context to start
+    // executing the new program.
+    paging_switch_directory(user_dir);
+    frame->eax = 0;
+    frame->eip = entry;
+    frame_set_user_esp(frame, user_esp);
+
+    // Free user pages from the old address space and any mmap metadata.
+    free_user_pages_in_directory(old_dir);
+    task_free_vm_areas(old_areas);
+
+    return 0;
 }
 
 int32_t tasking_spawn_exec(const char* path, const char* const* argv, uint32_t argc) {
@@ -1978,9 +3022,13 @@ int32_t tasking_fd_open(const char* path, uint32_t flags) {
     for (int32_t fd = 0; fd < (int32_t)TASK_MAX_FDS; fd++) {
         if (current_task->fds[fd].kind == FD_KIND_FREE) {
             current_task->fds[fd].kind = FD_KIND_VFS;
+            current_task->fds[fd].fd_flags = 0;
+            current_task->fds[fd].fl_flags = flags;
             current_task->fds[fd].handle = h;
             current_task->fds[fd].pipe = NULL;
             current_task->fds[fd].pipe_write_end = false;
+            current_task->fds[fd].pending_len = 0;
+            current_task->fds[fd].pending_off = 0;
             irq_restore(irq_flags);
             return fd;
         }
@@ -2018,6 +3066,8 @@ int32_t tasking_fd_close(int32_t fd) {
     }
 
     ent->kind = FD_KIND_FREE;
+    ent->fd_flags = 0;
+    ent->fl_flags = 0;
     ent->handle = NULL;
     ent->pipe = NULL;
     ent->pipe_write_end = false;
@@ -2039,11 +3089,11 @@ bool tasking_tty_handle_input_char(uint8_t c) {
     if (!enabled || !current_task) {
         return false;
     }
-    if (tty_foreground_pid == 0) {
+    if (tty_foreground_pgid == 0) {
         return false;
     }
 
-    task_t* fg = task_find_by_pid(tty_foreground_pid);
+    task_t* fg = task_find_any_by_pgid(tty_foreground_pgid);
     if (!fg || !fg->user || fg->state == TASK_STATE_ZOMBIE) {
         return false;
     }
@@ -2061,8 +3111,8 @@ bool tasking_tty_handle_input_char(uint8_t c) {
         return false;
     }
 
-    // Deliver SIGINT to the foreground process.
-    (void)tasking_kill(tty_foreground_pid, 2);
+    // Deliver SIGINT to the foreground process group.
+    (void)tasking_kill(-(int32_t)tty_foreground_pgid, 2);
     return true;
 }
 
@@ -2200,7 +3250,7 @@ static int32_t tty_deliver_canon_line(void* dst_user, uint32_t len) {
     return (int32_t)to_copy;
 }
 
-static int32_t tty_read_canonical(void* dst_user, uint32_t len) {
+static int32_t tty_read_canonical(void* dst_user, uint32_t len, bool nonblock) {
     if (!current_task || !dst_user) {
         return -EFAULT;
     }
@@ -2213,6 +3263,10 @@ static int32_t tty_read_canonical(void* dst_user, uint32_t len) {
     // If a line is already buffered, deliver it.
     if (current_task->tty_line_ready) {
         return tty_deliver_canon_line(dst_user, len);
+    }
+
+    if (nonblock) {
+        return -EAGAIN;
     }
 
     // Start a fresh line.
@@ -2370,11 +3424,13 @@ int32_t tasking_fd_read(int32_t fd, void* dst_user, uint32_t len) {
     fd_entry_t* ent = &current_task->fds[fd];
 
     if (ent->kind == FD_KIND_STDIN) {
+        uint32_t fl_flags = ent->fl_flags;
         irq_restore(irq_flags);
 
+        bool nonblock = (fl_flags & VOS_O_NONBLOCK) != 0;
         bool canon = (current_task->tty.c_lflag & VOS_ICANON) != 0;
         if (canon) {
-            return tty_read_canonical(dst_user, len);
+            return tty_read_canonical(dst_user, len, nonblock);
         }
 
         bool echo = (current_task->tty.c_lflag & VOS_ECHO) != 0;
@@ -2417,6 +3473,10 @@ int32_t tasking_fd_read(int32_t fd, void* dst_user, uint32_t len) {
         // Non-canonical timeout semantics (partial, but enough for ports like ne):
         // - VMIN=0, VTIME=0: non-blocking poll
         // - VMIN=0, VTIME>0: wait up to VTIME*0.1s for the first byte, then return
+        if (nonblock) {
+            vmin = 0;
+            vtime = 0;
+        }
         const bool poll_mode = (vmin == 0 && vtime == 0);
         const bool first_byte_timeout = (vmin == 0 && vtime != 0);
         bool block = (read == 0) && !poll_mode && !first_byte_timeout;
@@ -2502,11 +3562,15 @@ int32_t tasking_fd_read(int32_t fd, void* dst_user, uint32_t len) {
             }
         }
 
+        if (nonblock && read == 0) {
+            return -EAGAIN;
+        }
         return (int32_t)read;
     }
 
     if (ent->kind == FD_KIND_PIPE && ent->pipe) {
         pipe_obj_t* p = ent->pipe;
+        uint32_t fl_flags = ent->fl_flags;
         irq_restore(irq_flags);
 
         uint32_t total = 0;
@@ -2538,6 +3602,9 @@ int32_t tasking_fd_read(int32_t fd, void* dst_user, uint32_t len) {
             }
             if (total != 0) {
                 break;
+            }
+            if ((fl_flags & VOS_O_NONBLOCK) != 0) {
+                return -EAGAIN;
             }
             wait_for_event();
         }
@@ -2593,6 +3660,7 @@ int32_t tasking_fd_write(int32_t fd, const void* src_user, uint32_t len) {
     fd_entry_t* ent = &current_task->fds[fd];
     fd_kind_t kind = ent->kind;
     vfs_handle_t* h = ent->handle;
+    uint32_t fl_flags = ent->fl_flags;
     irq_restore(irq_flags);
 
     uint32_t total = 0;
@@ -2644,6 +3712,9 @@ int32_t tasking_fd_write(int32_t fd, const void* src_user, uint32_t len) {
             // Full: block unless we already wrote something.
             if (total != 0) {
                 break;
+            }
+            if ((fl_flags & VOS_O_NONBLOCK) != 0) {
+                return -EAGAIN;
             }
             wait_for_event();
         }
@@ -2745,6 +3816,22 @@ int32_t tasking_stat(const char* path, void* st_user) {
 
     vfs_stat_t st;
     int32_t rc = vfs_stat_path(current_task->cwd, path, &st);
+    if (rc < 0) {
+        return rc;
+    }
+    if (!copy_to_user(st_user, &st, (uint32_t)sizeof(st))) {
+        return -EFAULT;
+    }
+    return 0;
+}
+
+int32_t tasking_lstat(const char* path, void* st_user) {
+    if (!current_task || !path || !st_user) {
+        return -EINVAL;
+    }
+
+    vfs_stat_t st;
+    int32_t rc = vfs_lstat_path(current_task->cwd, path, &st);
     if (rc < 0) {
         return rc;
     }
@@ -2859,6 +3946,73 @@ int32_t tasking_truncate(const char* path, uint32_t new_size) {
     return vfs_truncate_path(current_task->cwd, path, new_size);
 }
 
+int32_t tasking_symlink(const char* target, const char* linkpath) {
+    if (!current_task || !target || !linkpath) {
+        return -EINVAL;
+    }
+    return vfs_symlink_path(current_task->cwd, target, linkpath);
+}
+
+int32_t tasking_readlink(const char* path, void* dst_user, uint32_t cap) {
+    if (!current_task || !path) {
+        return -EINVAL;
+    }
+    if (cap != 0 && !dst_user) {
+        return -EFAULT;
+    }
+
+    uint32_t kcap = cap;
+    if (kcap > 4096u) {
+        kcap = 4096u;
+    }
+
+    char* tmp = (char*)kmalloc(kcap ? kcap : 1u);
+    if (!tmp) {
+        return -ENOMEM;
+    }
+
+    int32_t n = vfs_readlink_path(current_task->cwd, path, tmp, kcap);
+    if (n < 0) {
+        kfree(tmp);
+        return n;
+    }
+
+    if (n != 0 && !copy_to_user(dst_user, tmp, (uint32_t)n)) {
+        kfree(tmp);
+        return -EFAULT;
+    }
+
+    kfree(tmp);
+    return n;
+}
+
+int32_t tasking_chmod(const char* path, uint16_t mode) {
+    if (!current_task || !path) {
+        return -EINVAL;
+    }
+    return vfs_chmod_path(current_task->cwd, path, mode);
+}
+
+int32_t tasking_fd_fchmod(int32_t fd, uint16_t mode) {
+    if (!current_task) {
+        return -EINVAL;
+    }
+    if (fd < 0 || fd >= (int32_t)TASK_MAX_FDS) {
+        return -EBADF;
+    }
+
+    uint32_t irq_flags = irq_save();
+    fd_entry_t* ent = &current_task->fds[fd];
+    vfs_handle_t* h = ent->handle;
+    fd_kind_t kind = ent->kind;
+    irq_restore(irq_flags);
+
+    if (kind != FD_KIND_VFS || !h) {
+        return -EBADF;
+    }
+    return vfs_fchmod(h, mode);
+}
+
 int32_t tasking_fd_ftruncate(int32_t fd, uint32_t new_size) {
     if (!current_task) {
         return -EINVAL;
@@ -2932,6 +4086,8 @@ int32_t tasking_fd_dup(int32_t oldfd) {
 
     fd_entry_t* dst = &current_task->fds[newfd];
     dst->kind = src->kind;
+    dst->fd_flags = 0; // dup() clears close-on-exec
+    dst->fl_flags = src->fl_flags;
     dst->handle = src->handle;
     dst->pipe = src->pipe;
     dst->pipe_write_end = src->pipe_write_end;
@@ -2998,6 +4154,8 @@ int32_t tasking_fd_dup2(int32_t oldfd, int32_t newfd) {
 
     fd_entry_t* dst = &current_task->fds[newfd];
     dst->kind = src->kind;
+    dst->fd_flags = 0; // dup2() clears close-on-exec
+    dst->fl_flags = src->fl_flags;
     dst->handle = src->handle;
     dst->pipe = src->pipe;
     dst->pipe_write_end = src->pipe_write_end;
@@ -3021,6 +4179,123 @@ int32_t tasking_fd_dup2(int32_t oldfd, int32_t newfd) {
     }
 
     return newfd;
+}
+
+int32_t tasking_fd_fcntl(int32_t fd, int32_t cmd, int32_t arg) {
+    if (!current_task) {
+        return -EINVAL;
+    }
+    if (fd < 0 || fd >= (int32_t)TASK_MAX_FDS) {
+        return -EBADF;
+    }
+
+    if (cmd == VOS_F_DUPFD || cmd == VOS_F_DUPFD_CLOEXEC) {
+        int32_t minfd = arg;
+        if (minfd < 0) {
+            minfd = 0;
+        }
+        if (minfd >= (int32_t)TASK_MAX_FDS) {
+            return -EINVAL;
+        }
+
+        vfs_handle_t* h = NULL;
+        pipe_obj_t* p = NULL;
+        bool pipe_we = false;
+
+        uint32_t irq_flags = irq_save();
+        fd_entry_t* src = &current_task->fds[fd];
+        if (src->kind == FD_KIND_FREE) {
+            irq_restore(irq_flags);
+            return -EBADF;
+        }
+
+        int32_t newfd = -1;
+        for (int32_t cand = minfd; cand < (int32_t)TASK_MAX_FDS; cand++) {
+            if (current_task->fds[cand].kind == FD_KIND_FREE) {
+                newfd = cand;
+                break;
+            }
+        }
+        if (newfd < 0) {
+            irq_restore(irq_flags);
+            return -EMFILE;
+        }
+
+        fd_entry_t* dst = &current_task->fds[newfd];
+        dst->kind = src->kind;
+        dst->fd_flags = (cmd == VOS_F_DUPFD_CLOEXEC) ? VOS_FD_CLOEXEC : 0;
+        dst->fl_flags = src->fl_flags;
+        dst->handle = src->handle;
+        dst->pipe = src->pipe;
+        dst->pipe_write_end = src->pipe_write_end;
+        dst->pending_len = 0;
+        dst->pending_off = 0;
+
+        if (src->kind == FD_KIND_VFS && src->handle) {
+            h = src->handle;
+        } else if (src->kind == FD_KIND_PIPE && src->pipe) {
+            p = src->pipe;
+            pipe_we = src->pipe_write_end;
+        }
+
+        irq_restore(irq_flags);
+
+        if (h) {
+            vfs_ref(h);
+        }
+        if (p) {
+            pipe_ref(p, pipe_we);
+        }
+        return newfd;
+    }
+
+    uint32_t irq_flags = irq_save();
+    fd_entry_t* ent = &current_task->fds[fd];
+    if (ent->kind == FD_KIND_FREE) {
+        irq_restore(irq_flags);
+        return -EBADF;
+    }
+
+    switch (cmd) {
+        case VOS_F_GETFD: {
+            int32_t v = (int32_t)ent->fd_flags;
+            irq_restore(irq_flags);
+            return v;
+        }
+        case VOS_F_SETFD:
+            ent->fd_flags = (uint32_t)arg & VOS_FD_CLOEXEC;
+            irq_restore(irq_flags);
+            return 0;
+        case VOS_F_GETFL: {
+            if (ent->kind == FD_KIND_VFS && ent->handle) {
+                uint32_t v = vfs_handle_flags(ent->handle);
+                irq_restore(irq_flags);
+                return (int32_t)v;
+            }
+            int32_t v = (int32_t)ent->fl_flags;
+            irq_restore(irq_flags);
+            return v;
+        }
+        case VOS_F_SETFL: {
+            uint32_t mask = VOS_O_APPEND | VOS_O_NONBLOCK;
+            if (ent->kind == FD_KIND_VFS && ent->handle) {
+                uint32_t old = vfs_handle_flags(ent->handle);
+                uint32_t next = (old & ~mask) | ((uint32_t)arg & mask);
+                (void)vfs_handle_set_flags(ent->handle, next);
+                ent->fl_flags = next;
+                irq_restore(irq_flags);
+                return 0;
+            }
+
+            uint32_t old = ent->fl_flags;
+            ent->fl_flags = (old & ~mask) | ((uint32_t)arg & mask);
+            irq_restore(irq_flags);
+            return 0;
+        }
+        default:
+            irq_restore(irq_flags);
+            return -EINVAL;
+    }
 }
 
 int32_t tasking_pipe(void* pipefds_user) {
@@ -3057,6 +4332,8 @@ int32_t tasking_pipe(void* pipefds_user) {
 
     fd_entry_t* r = &current_task->fds[rfd];
     r->kind = FD_KIND_PIPE;
+    r->fd_flags = 0;
+    r->fl_flags = 0; // O_RDONLY
     r->handle = NULL;
     r->pipe = p;
     r->pipe_write_end = false;
@@ -3065,6 +4342,8 @@ int32_t tasking_pipe(void* pipefds_user) {
 
     fd_entry_t* w = &current_task->fds[wfd];
     w->kind = FD_KIND_PIPE;
+    w->fd_flags = 0;
+    w->fl_flags = 1; // O_WRONLY
     w->handle = NULL;
     w->pipe = p;
     w->pipe_write_end = true;
@@ -3107,29 +4386,32 @@ int32_t tasking_fd_ioctl(int32_t fd, uint32_t req, void* argp_user) {
 
     switch (req) {
         case VOS_TIOCGPGRP: {
-            uint32_t pid = tty_foreground_pid;
-            if (!copy_to_user(argp_user, &pid, (uint32_t)sizeof(pid))) {
+            uint32_t pgid = tty_foreground_pgid;
+            if (!copy_to_user(argp_user, &pgid, (uint32_t)sizeof(pgid))) {
                 return -EFAULT;
             }
             return 0;
         }
         case VOS_TIOCSPGRP: {
-            uint32_t pid = 0;
-            if (!copy_from_user(&pid, argp_user, (uint32_t)sizeof(pid))) {
+            uint32_t pgid = 0;
+            if (!copy_from_user(&pgid, argp_user, (uint32_t)sizeof(pgid))) {
                 return -EFAULT;
             }
-            if (pid == 0) {
-                tty_foreground_pid = 0;
+            if (pgid == 0) {
+                tty_foreground_pgid = 0;
                 return 0;
             }
-            task_t* fg = task_find_by_pid(pid);
+            task_t* fg = task_find_any_by_pgid(pgid);
             if (!fg) {
                 return -ESRCH;
             }
             if (!fg->user) {
                 return -EPERM;
             }
-            tty_foreground_pid = pid;
+            if (current_task->uid != 0u && fg->uid != current_task->uid) {
+                return -EPERM;
+            }
+            tty_foreground_pgid = pgid;
             return 0;
         }
         case VOS_TIOCGWINSZ: {

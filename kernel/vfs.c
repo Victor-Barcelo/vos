@@ -1,6 +1,7 @@
 #include "vfs.h"
 #include "kheap.h"
 #include "ctype.h"
+#include "paging.h"
 #include "string.h"
 #include "serial.h"
 #include "ramfs.h"
@@ -36,6 +37,50 @@ typedef struct vfs_file {
 static vfs_file_t* files = NULL;
 static uint32_t file_count = 0;
 static bool ready = false;
+
+// When the initramfs grows large, GRUB/multiboot may place the TAR module above
+// USER_BASE. User address spaces do not map that mid-range region, so syscalls
+// running on a user CR3 would fault when reading initramfs-backed files.
+//
+// Map the TAR module into high kernel virtual memory (shared across all CR3s)
+// and store initramfs file pointers using that mapping.
+static const uint32_t INITRAMFS_TAR_VBASE = 0xC4000000u;
+static const uint32_t KHEAP_BASE = 0xD0000000u;
+
+static const uint8_t* map_tar_module_high(const multiboot_module_t* mod, uint32_t* out_len) {
+    if (out_len) {
+        *out_len = 0;
+    }
+    if (!mod || mod->mod_end <= mod->mod_start) {
+        return NULL;
+    }
+
+    uint32_t len = mod->mod_end - mod->mod_start;
+
+    uint32_t paddr_page = mod->mod_start & ~(PAGE_SIZE - 1u);
+    uint32_t off = mod->mod_start - paddr_page;
+    uint32_t map_size = len + off;
+
+    // Keep the mapping below the kernel heap region. If the initramfs is huge,
+    // fall back to copying into the heap instead of overlapping mappings.
+    if (INITRAMFS_TAR_VBASE + map_size >= KHEAP_BASE) {
+        uint8_t* copy = (uint8_t*)kmalloc(len);
+        if (!copy) {
+            return NULL;
+        }
+        memcpy(copy, (const void*)mod->mod_start, len);
+        if (out_len) {
+            *out_len = len;
+        }
+        return copy;
+    }
+
+    paging_map_range(INITRAMFS_TAR_VBASE, paddr_page, map_size, PAGE_PRESENT | PAGE_RW);
+    if (out_len) {
+        *out_len = len;
+    }
+    return (const uint8_t*)(INITRAMFS_TAR_VBASE + off);
+}
 
 static bool is_leap_year_u32(uint32_t year) {
     return (year % 4u == 0u && year % 100u != 0u) || (year % 400u == 0u);
@@ -822,10 +867,7 @@ void vfs_init(const multiboot_info_t* mbi) {
     const multiboot_module_t* mods = (const multiboot_module_t*)mbi->mods_addr;
     const uint8_t* tar = NULL;
     uint32_t tar_len = 0;
-    if (mods[0].mod_end > mods[0].mod_start) {
-        tar = (const uint8_t*)mods[0].mod_start;
-        tar_len = mods[0].mod_end - mods[0].mod_start;
-    }
+    tar = map_tar_module_high(&mods[0], &tar_len);
 
     fat_view_t fat = {0};
     bool fat_ok = false;

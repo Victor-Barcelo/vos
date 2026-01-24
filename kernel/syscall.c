@@ -83,6 +83,7 @@ enum {
     SYS_FORK = 68,
     SYS_EXECVE = 69,
     SYS_WAITPID = 70,
+    SYS_STATFS = 71,
 };
 
 typedef struct vos_task_info_user {
@@ -345,6 +346,20 @@ interrupt_frame_t* syscall_handle(interrupt_frame_t* frame) {
             }
 
             int32_t rc = tasking_lstat(path, st_user);
+            frame->eax = (uint32_t)rc;
+            return frame;
+        }
+        case SYS_STATFS: {
+            const char* path_user = (const char*)frame->ebx;
+            void* st_user = (void*)frame->ecx;
+
+            char path[128];
+            if (!copy_user_cstring(path, sizeof(path), path_user)) {
+                frame->eax = (uint32_t)-EINVAL;
+                return frame;
+            }
+
+            int32_t rc = tasking_statfs(path, st_user);
             frame->eax = (uint32_t)rc;
             return frame;
         }

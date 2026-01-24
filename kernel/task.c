@@ -3841,6 +3841,22 @@ int32_t tasking_lstat(const char* path, void* st_user) {
     return 0;
 }
 
+int32_t tasking_statfs(const char* path, void* st_user) {
+    if (!current_task || !path || !st_user) {
+        return -EINVAL;
+    }
+
+    vfs_statfs_t st;
+    int32_t rc = vfs_statfs_path(current_task->cwd, path, &st);
+    if (rc < 0) {
+        return rc;
+    }
+    if (!copy_to_user(st_user, &st, (uint32_t)sizeof(st))) {
+        return -EFAULT;
+    }
+    return 0;
+}
+
 int32_t tasking_mkdir(const char* path) {
     if (!current_task || !path) {
         return -EINVAL;

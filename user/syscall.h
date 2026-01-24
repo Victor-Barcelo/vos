@@ -31,6 +31,13 @@ typedef struct vos_font_info {
     uint32_t height;
 } vos_font_info_t;
 
+typedef struct vos_statfs {
+    uint32_t bsize;
+    uint32_t blocks;
+    uint32_t bfree;
+    uint32_t bavail;
+} vos_statfs_t;
+
 enum {
     SYS_WRITE = 0,
     SYS_EXIT = 1,
@@ -103,6 +110,7 @@ enum {
     SYS_FORK = 68,
     SYS_EXECVE = 69,
     SYS_WAITPID = 70,
+    SYS_STATFS = 71,
 };
 
 static inline int sys_write(int fd, const char* buf, uint32_t len) {
@@ -153,6 +161,17 @@ static inline int sys_waitpid(int pid, int* status, int options) {
         "int $0x80"
         : "=a"(ret)
         : "a"(SYS_WAITPID), "b"(pid), "c"(status), "d"(options)
+        : "memory"
+    );
+    return ret;
+}
+
+static inline int sys_statfs(const char* path, vos_statfs_t* out) {
+    int ret;
+    __asm__ volatile (
+        "int $0x80"
+        : "=a"(ret)
+        : "a"(SYS_STATFS), "b"(path), "c"(out)
         : "memory"
     );
     return ret;

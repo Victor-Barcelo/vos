@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <sys/wait.h>
 #include <unistd.h>
 
 #include "syscall.h"
@@ -244,18 +245,34 @@ int main(int argc, char** argv) {
 
     // Keep init (PID 1) alive and supervise the user shell.
     for (;;) {
-        const char* const login_argv[] = {"/bin/login"};
-        int pid = sys_spawn("/bin/login", login_argv, 1u);
+        pid_t pid = fork();
         if (pid < 0) {
-            errno = -pid;
             tag("[init] ", CLR_CYAN);
             tag("error: ", CLR_RED);
-            printf("spawn /bin/login failed: %s\n", strerror(errno));
+            printf("fork() for /bin/login failed: %s\n", strerror(errno));
             (void)sys_sleep(1000u);
             continue;
         }
 
-        int code = sys_wait((uint32_t)pid);
+        if (pid == 0) {
+            char* const argv[] = {"/bin/login", NULL};
+            execve("/bin/login", argv, NULL);
+            tag("[init] ", CLR_CYAN);
+            tag("error: ", CLR_RED);
+            printf("execve(/bin/login) failed: %s\n", strerror(errno));
+            _exit(127);
+        }
+
+        int status = 0;
+        pid_t got = waitpid(pid, &status, 0);
+        int code = 0;
+        if (got < 0) {
+            tag("[init] ", CLR_CYAN);
+            tag("error: ", CLR_RED);
+            printf("waitpid(%d) failed: %s\n", (int)pid, strerror(errno));
+        } else {
+            code = (status >> 8) & 0xFF;
+        }
         tag("[init] ", CLR_CYAN);
         tag("warn: ", CLR_YELLOW);
         printf("/bin/login exited (%d), restarting...\n", code);

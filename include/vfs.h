@@ -50,6 +50,13 @@ typedef struct vfs_dirent {
     uint16_t wdate;
 } vfs_dirent_t;
 
+typedef struct vfs_statfs {
+    uint32_t bsize;
+    uint32_t blocks;
+    uint32_t bfree;
+    uint32_t bavail;
+} vfs_statfs_t;
+
 typedef struct vfs_handle vfs_handle_t;
 
 // Resolve `path` relative to `cwd` into a canonical absolute path.
@@ -63,6 +70,7 @@ int32_t vfs_mkdir_path(const char* cwd, const char* path);
 int32_t vfs_symlink_path(const char* cwd, const char* target, const char* linkpath);
 int32_t vfs_readlink_path(const char* cwd, const char* path, char* out, uint32_t cap);
 int32_t vfs_chmod_path(const char* cwd, const char* path, uint16_t mode);
+int32_t vfs_statfs_path(const char* cwd, const char* path, vfs_statfs_t* out);
 
 // Open/close/read/write/lseek on a VFS handle. Returns 0 on success, or -errno.
 int32_t vfs_open_path(const char* cwd, const char* path, uint32_t flags, vfs_handle_t** out);

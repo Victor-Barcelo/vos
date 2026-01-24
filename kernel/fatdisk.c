@@ -1367,6 +1367,61 @@ const char* fatdisk_label(void) {
     return g_fs.label;
 }
 
+bool fatdisk_statfs(uint32_t* out_bsize, uint32_t* out_blocks, uint32_t* out_bfree) {
+    if (out_bsize) {
+        *out_bsize = 0;
+    }
+    if (out_blocks) {
+        *out_blocks = 0;
+    }
+    if (out_bfree) {
+        *out_bfree = 0;
+    }
+    if (!g_fs.ready) {
+        return false;
+    }
+
+    uint32_t bsize = (uint32_t)g_fs.bytes_per_sector;
+    uint32_t blocks = g_fs.cluster_count * (uint32_t)g_fs.sectors_per_cluster; // usable data blocks (sectors)
+
+    uint32_t free_clusters = 0;
+    uint16_t max_cluster = (uint16_t)(g_fs.cluster_count + 1u);
+
+    uint8_t sec[SECTOR_SIZE];
+    uint32_t cached_lba = 0xFFFFFFFFu;
+
+    for (uint16_t c = 2u; c <= max_cluster; c++) {
+        uint32_t off = (uint32_t)c * 2u;
+        uint32_t lba = g_fs.fat_start_lba + (off / SECTOR_SIZE);
+        uint32_t in_off = off % SECTOR_SIZE;
+
+        if (lba != cached_lba) {
+            if (!disk_read(lba, sec)) {
+                return false;
+            }
+            cached_lba = lba;
+        }
+
+        uint16_t v = (uint16_t)sec[in_off] | (uint16_t)((uint16_t)sec[in_off + 1u] << 8);
+        if (v == 0u) {
+            free_clusters++;
+        }
+    }
+
+    uint32_t bfree = free_clusters * (uint32_t)g_fs.sectors_per_cluster;
+
+    if (out_bsize) {
+        *out_bsize = bsize;
+    }
+    if (out_blocks) {
+        *out_blocks = blocks;
+    }
+    if (out_bfree) {
+        *out_bfree = bfree;
+    }
+    return true;
+}
+
 bool fatdisk_is_dir(const char* abs_path) {
     if (!g_fs.ready) {
         return false;

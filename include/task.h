@@ -107,6 +107,7 @@ int32_t tasking_fd_lseek(int32_t fd, int32_t offset, int32_t whence);
 int32_t tasking_fd_fstat(int32_t fd, void* st_user);
 int32_t tasking_stat(const char* path, void* st_user);
 int32_t tasking_lstat(const char* path, void* st_user);
+int32_t tasking_statfs(const char* path, void* st_user);
 int32_t tasking_mkdir(const char* path);
 int32_t tasking_readdir(int32_t fd, void* dirent_user);
 int32_t tasking_chdir(const char* path);

@@ -19,6 +19,7 @@ typedef struct fatdisk_dirent {
 bool fatdisk_init(void);
 bool fatdisk_is_ready(void);
 const char* fatdisk_label(void);
+bool fatdisk_statfs(uint32_t* out_bsize, uint32_t* out_blocks, uint32_t* out_bfree);
 
 bool fatdisk_is_dir(const char* abs_path);
 bool fatdisk_is_file(const char* abs_path);

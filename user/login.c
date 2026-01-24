@@ -248,14 +248,13 @@ int main(int argc, char** argv) {
         (void)setgid((gid_t)user.gid);
         (void)setuid((uid_t)user.uid);
 
-        const char* const sh_argv[] = {user.shell};
-        int pid = sys_spawn(user.shell, sh_argv, 1u);
-        if (pid < 0) {
-            errno = -pid;
-            printf("login: spawn %s failed: %s\n", user.shell, strerror(errno));
-            return 1;
-        }
-        (void)sys_wait((uint32_t)pid);
-        return 0;
+        // Put the session into its own process group (so job-control style
+        // features can work later).
+        (void)setpgid(0, 0);
+
+        char* const sh_argv[] = {user.shell, NULL};
+        execve(user.shell, sh_argv, NULL);
+        printf("login: exec %s failed: %s\n", user.shell, strerror(errno));
+        return 1;
     }
 }

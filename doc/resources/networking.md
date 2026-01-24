@@ -431,7 +431,53 @@ void tftp_get(const char* server, const char* filename, uint8_t* buffer) {
 
 ---
 
+## VOS Implementation Prerequisites
+
+Before implementing networking, VOS should have:
+
+1. **I/O Multiplexing** - See [io_multiplexing.md](io_multiplexing.md)
+   - `select()` / `poll()` for async I/O
+   - Non-blocking sockets
+
+2. **Timers**
+   - Already supported via `clock_gettime()`
+   - Needed for TCP timeouts and retransmission
+
+3. **Memory**
+   - Already have `mmap()` for DMA buffers
+   - Need physically contiguous memory for some NICs
+
+4. **Interrupts**
+   - Already working via PIC
+   - Needed for efficient packet reception
+
+## VOS Network Architecture (Proposed)
+
+```
+┌─────────────────────────────────────────┐
+│           User Applications             │
+│         (http, tftp, ping, etc.)        │
+├─────────────────────────────────────────┤
+│        BSD Socket API (future)          │
+│   socket(), connect(), send(), recv()   │
+├─────────────────────────────────────────┤
+│            TCP/IP Stack                 │
+│         (uIP or lwIP core)              │
+├─────────────────────────────────────────┤
+│         Network Interface               │
+│   /dev/eth0, /dev/slip0, etc.           │
+├─────────────────────────────────────────┤
+│           Device Drivers                │
+│   SLIP (serial), virtio-net, NE2000     │
+└─────────────────────────────────────────┘
+```
+
+---
+
 ## See Also
 
+- [io_multiplexing.md](io_multiplexing.md) - Required for async networking
+- [threading_roadmap.md](threading_roadmap.md) - Useful for network services
 - [system_libraries.md](system_libraries.md) - System utilities
+- [Chapter 32: Future Enhancements](../book/32_future.md) - VOS roadmap
 - VOS serial driver: `kernel/serial.c`

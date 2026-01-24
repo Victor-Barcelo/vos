@@ -4,6 +4,8 @@
 #include "fatdisk.h"
 #include "kerrno.h"
 #include "kheap.h"
+#include "paging.h"
+#include "pmm.h"
 #include "ramfs.h"
 #include "string.h"
 
@@ -1099,6 +1101,57 @@ int32_t vfs_chmod_path(const char* cwd, const char* path, uint16_t mode) {
     }
 
     return -EROFS;
+}
+
+int32_t vfs_statfs_path(const char* cwd, const char* path, vfs_statfs_t* out) {
+    if (!out) {
+        return -EINVAL;
+    }
+    memset(out, 0, sizeof(*out));
+
+    char eff[VFS_PATH_MAX];
+    int32_t rc = vfs_prepare_existing_path(cwd, path, true, eff);
+    if (rc < 0) {
+        return rc;
+    }
+
+    if (abs_is_mount(eff, "/disk")) {
+        uint32_t bsize = 0;
+        uint32_t blocks = 0;
+        uint32_t bfree = 0;
+        if (!fatdisk_statfs(&bsize, &blocks, &bfree)) {
+            return -EIO;
+        }
+        out->bsize = bsize;
+        out->blocks = blocks;
+        out->bfree = bfree;
+        out->bavail = bfree;
+        return 0;
+    }
+
+    if (abs_is_mount(eff, "/ram")) {
+        uint32_t bsize = PAGE_SIZE;
+        uint32_t blocks = pmm_total_frames();
+        uint32_t bfree = pmm_free_frames();
+        out->bsize = bsize;
+        out->blocks = blocks;
+        out->bfree = bfree;
+        out->bavail = bfree;
+        return 0;
+    }
+
+    // initramfs: read-only; report total packed bytes and no free space.
+    uint32_t total = 0;
+    uint32_t n = vfs_file_count();
+    for (uint32_t i = 0; i < n; i++) {
+        total += vfs_file_size(i);
+    }
+
+    out->bsize = 512u;
+    out->blocks = (total + out->bsize - 1u) / out->bsize;
+    out->bfree = 0;
+    out->bavail = 0;
+    return 0;
 }
 
 static int32_t handle_alloc(vfs_handle_t** out) {

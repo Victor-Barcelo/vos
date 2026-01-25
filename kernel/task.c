@@ -2768,7 +2768,7 @@ int32_t tasking_execve(interrupt_frame_t* frame, const char* path, const char* c
     if (!path) {
         return -EINVAL;
     }
-    if (argc > 32u) {
+    if (argc > VOS_EXEC_MAX_ARGS) {
         return -EINVAL;
     }
 
@@ -2827,17 +2827,12 @@ int32_t tasking_execve(interrupt_frame_t* frame, const char* path, const char* c
         return rc;
     }
 
-    const char* kargv[32];
-    uint32_t kargc = 0;
+    const char* argv0 = abs;
+    const char* const* kargv = argv;
+    uint32_t kargc = argc;
     if (argc == 0 || !argv) {
-        kargv[kargc++] = abs;
-    } else {
-        for (uint32_t i = 0; i < argc && kargc < 32u; i++) {
-            kargv[kargc++] = argv[i] ? argv[i] : "";
-        }
-        if (kargc == 0) {
-            kargv[kargc++] = abs;
-        }
+        kargv = &argv0;
+        kargc = 1u;
     }
 
     uint32_t entry = 0;
@@ -2902,7 +2897,7 @@ int32_t tasking_spawn_exec(const char* path, const char* const* argv, uint32_t a
     if (!current_task || !path) {
         return -EINVAL;
     }
-    if (argc > 32u) {
+    if (argc > VOS_EXEC_MAX_ARGS) {
         return -EINVAL;
     }
 
@@ -2971,17 +2966,12 @@ int32_t tasking_spawn_exec(const char* path, const char* const* argv, uint32_t a
         return -ENOMEM;
     }
 
-    const char* kargv[32];
-    uint32_t kargc = 0;
+    const char* argv0 = abs;
+    const char* const* kargv = argv;
+    uint32_t kargc = argc;
     if (argc == 0 || !argv) {
-        kargv[kargc++] = abs;
-    } else {
-        for (uint32_t i = 0; i < argc && kargc < 32u; i++) {
-            kargv[kargc++] = argv[i] ? argv[i] : "";
-        }
-        if (kargc == 0) {
-            kargv[kargc++] = abs;
-        }
+        kargv = &argv0;
+        kargc = 1u;
     }
 
     uint32_t irq_flags = irq_save();

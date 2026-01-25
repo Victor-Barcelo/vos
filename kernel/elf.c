@@ -1,8 +1,10 @@
 #include "elf.h"
+#include "kheap.h"
 #include "paging.h"
 #include "pmm.h"
 #include "serial.h"
 #include "string.h"
+#include "task.h"
 #include "usercopy.h"
 
 #define EI_NIDENT 16
@@ -29,7 +31,7 @@
 #define USER_STACK_TOP 0xBFF00000u
 #define USER_STACK_PAGES 64u
 
-#define ELF_ARG_MAX 32u
+#define ELF_ARG_MAX VOS_EXEC_MAX_ARGS
 
 typedef struct elf32_ehdr {
     uint8_t e_ident[EI_NIDENT];
@@ -158,9 +160,15 @@ bool elf_setup_user_stack(uint32_t* inout_user_esp, const char* const* argv, uin
         return false;
     }
 
-    uint32_t argv_ptrs[ELF_ARG_MAX];
-    for (uint32_t i = 0; i < argc; i++) {
-        argv_ptrs[i] = 0;
+    uint32_t* argv_ptrs = NULL;
+    if (argc != 0) {
+        argv_ptrs = (uint32_t*)kmalloc(argc * (uint32_t)sizeof(*argv_ptrs));
+        if (!argv_ptrs) {
+            return false;
+        }
+        for (uint32_t i = 0; i < argc; i++) {
+            argv_ptrs[i] = 0;
+        }
     }
 
     // Copy argument strings onto the stack (in reverse order).
@@ -174,11 +182,11 @@ bool elf_setup_user_stack(uint32_t* inout_user_esp, const char* const* argv, uin
             len = 1u;
         }
         if (sp < len || sp - len < stack_bot) {
-            return false;
+            goto fail;
         }
         sp -= len;
         if (!copy_to_user((void*)sp, s, len)) {
-            return false;
+            goto fail;
         }
         argv_ptrs[argc - 1u - i] = sp;
     }
@@ -186,46 +194,55 @@ bool elf_setup_user_stack(uint32_t* inout_user_esp, const char* const* argv, uin
     // Align to 4 bytes.
     sp &= ~3u;
     if (sp < stack_bot) {
-        return false;
+        goto fail;
     }
 
     // Ensure final SP is 16-byte aligned after pushing argc/argv/envp.
     uint32_t ptr_bytes = (argc + 3u) * 4u; // argc + argv[argc] + envp[0] + argv pointers
     if (sp < ptr_bytes || sp - ptr_bytes < stack_bot) {
-        return false;
+        goto fail;
     }
     uint32_t sp_final = sp - ptr_bytes;
     uint32_t sp_aligned = sp_final & ~0xFu;
     uint32_t padding = sp_final - sp_aligned;
     if (padding) {
         if (sp < padding || sp - padding < stack_bot) {
-            return false;
+            goto fail;
         }
         sp -= padding;
     }
 
     // envp terminator (no environment)
     if (!push_u32(&sp, 0u)) {
-        return false;
+        goto fail;
     }
     // argv terminator
     if (!push_u32(&sp, 0u)) {
-        return false;
+        goto fail;
     }
     // argv pointers
     for (uint32_t i = 0; i < argc; i++) {
         uint32_t idx = argc - 1u - i;
         if (!push_u32(&sp, argv_ptrs[idx])) {
-            return false;
+            goto fail;
         }
     }
     // argc
     if (!push_u32(&sp, argc)) {
-        return false;
+        goto fail;
     }
 
     *inout_user_esp = sp;
+    if (argv_ptrs) {
+        kfree(argv_ptrs);
+    }
     return true;
+
+fail:
+    if (argv_ptrs) {
+        kfree(argv_ptrs);
+    }
+    return false;
 }
 
 bool elf_load_user_image(const uint8_t* image, uint32_t size, uint32_t* out_entry, uint32_t* out_user_esp, uint32_t* out_brk) {

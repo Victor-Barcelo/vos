@@ -20,19 +20,20 @@ static void print_one(const char* path) {
         return;
     }
 
-    unsigned long long total = (unsigned long long)st.blocks * (unsigned long long)st.bsize;
-    unsigned long long freeb = (unsigned long long)st.bfree * (unsigned long long)st.bsize;
-    unsigned long long avail = (unsigned long long)st.bavail * (unsigned long long)st.bsize;
-    unsigned long long used = (total >= freeb) ? (total - freeb) : 0;
-    unsigned int usep = (total == 0) ? 0u : (unsigned int)((used * 100ull) / total);
+    uint32_t bsize = st.bsize ? st.bsize : 1024u;
+    uint64_t total = (uint64_t)st.blocks * (uint64_t)bsize;
+    uint64_t freeb = (uint64_t)st.bfree * (uint64_t)bsize;
+    uint64_t avail = (uint64_t)st.bavail * (uint64_t)bsize;
+    uint64_t used = (total >= freeb) ? (total - freeb) : 0;
+    unsigned int usep = (total == 0) ? 0u : (unsigned int)((used * 100u) / total);
 
     // Match common df output: 1K blocks.
-    unsigned long long total_k = total / 1024ull;
-    unsigned long long used_k = used / 1024ull;
-    unsigned long long avail_k = avail / 1024ull;
+    unsigned long total_k = (unsigned long)(total / 1024u);
+    unsigned long used_k = (unsigned long)(used / 1024u);
+    unsigned long avail_k = (unsigned long)(avail / 1024u);
 
-    printf("%-12s %10llu %10llu %10llu %3u%% %s\n",
-           path, total_k, used_k, avail_k, usep, path);
+    printf("%-12s %10lu %10lu %10lu %3u%% %s\n",
+           path ? path : "(null)", total_k, used_k, avail_k, usep, path ? path : "(null)");
 }
 
 int main(int argc, char** argv) {

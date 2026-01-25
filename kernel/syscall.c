@@ -11,6 +11,11 @@
 #include "kheap.h"
 #include "string.h"
 
+// Keep syscall argv marshalling bounded (argv strings are copied into
+// kernel memory before switching address spaces for exec/spawn).
+#define VOS_EXEC_ARG_STR_MAX 4096u
+#define VOS_EXEC_ARG_MAXBYTES (128u * 1024u)
+
 enum {
     SYS_WRITE = 0,
     SYS_EXIT = 1,
@@ -152,6 +157,62 @@ static bool copy_user_cstring(char* dst, uint32_t dst_cap, const char* src_user)
 
     dst[dst_cap - 1u] = '\0';
     return false; // unterminated / too long
+}
+
+static int32_t dup_user_cstring(const char* src_user, uint32_t max_len, char** out_str, uint32_t* out_bytes) {
+    if (!out_str || max_len == 0) {
+        return -EINVAL;
+    }
+    *out_str = NULL;
+    if (out_bytes) {
+        *out_bytes = 0;
+    }
+
+    // Treat NULL as empty string for robustness.
+    if (!src_user) {
+        char* s = (char*)kmalloc(1u);
+        if (!s) {
+            return -ENOMEM;
+        }
+        s[0] = '\0';
+        *out_str = s;
+        if (out_bytes) {
+            *out_bytes = 1u;
+        }
+        return 0;
+    }
+
+    bool found = false;
+    uint32_t len = 0;
+    for (; len < max_len; len++) {
+        char c = 0;
+        if (!copy_from_user(&c, src_user + len, 1u)) {
+            return -EFAULT;
+        }
+        if (c == '\0') {
+            found = true;
+            len++; // include terminator
+            break;
+        }
+    }
+    if (!found) {
+        return -ENAMETOOLONG;
+    }
+
+    char* s = (char*)kmalloc(len);
+    if (!s) {
+        return -ENOMEM;
+    }
+    if (!copy_from_user(s, src_user, len)) {
+        kfree(s);
+        return -EFAULT;
+    }
+
+    *out_str = s;
+    if (out_bytes) {
+        *out_bytes = len;
+    }
+    return 0;
 }
 
 interrupt_frame_t* syscall_handle(interrupt_frame_t* frame) {
@@ -578,43 +639,70 @@ interrupt_frame_t* syscall_handle(interrupt_frame_t* frame) {
             const char* const* argv_user = (const char* const*)frame->ecx;
             uint32_t argc = frame->edx;
 
-            if (argc > 32u) {
-                frame->eax = (uint32_t)-EINVAL;
-                return frame;
+            int32_t rc = 0;
+            const char** kargv = NULL;
+            uint32_t argv_bytes = 0;
+
+            if (argc > VOS_EXEC_MAX_ARGS) {
+                rc = -EINVAL;
+                goto out_execve;
+            }
+            if (argc != 0 && !argv_user) {
+                rc = -EFAULT;
+                goto out_execve;
             }
 
             char path[128];
             if (!copy_user_cstring(path, sizeof(path), path_user)) {
-                frame->eax = (uint32_t)-EFAULT;
-                return frame;
+                rc = -EFAULT;
+                goto out_execve;
             }
 
-            const char* kargv[32];
-            char argv_buf[32][128];
+            if (argc != 0) {
+                kargv = (const char**)kmalloc(argc * (uint32_t)sizeof(*kargv));
+                if (!kargv) {
+                    rc = -ENOMEM;
+                    goto out_execve;
+                }
 
-            if (argc != 0 && argv_user) {
+                for (uint32_t i = 0; i < argc; i++) {
+                    kargv[i] = NULL;
+                }
+
                 for (uint32_t i = 0; i < argc; i++) {
                     const char* argp_user = NULL;
                     if (!copy_from_user(&argp_user, argv_user + i, (uint32_t)sizeof(argp_user))) {
-                        frame->eax = (uint32_t)-EFAULT;
-                        return frame;
+                        rc = -EFAULT;
+                        goto out_execve;
                     }
 
-                    if (!argp_user) {
-                        argv_buf[i][0] = '\0';
-                        kargv[i] = argv_buf[i];
-                        continue;
+                    char* s = NULL;
+                    uint32_t bytes = 0;
+                    rc = dup_user_cstring(argp_user, VOS_EXEC_ARG_STR_MAX, &s, &bytes);
+                    if (rc < 0) {
+                        goto out_execve;
                     }
-
-                    if (!copy_user_cstring(argv_buf[i], sizeof(argv_buf[i]), argp_user)) {
-                        frame->eax = (uint32_t)-ENAMETOOLONG;
-                        return frame;
+                    if (argv_bytes + bytes > VOS_EXEC_ARG_MAXBYTES) {
+                        kfree(s);
+                        rc = -E2BIG;
+                        goto out_execve;
                     }
-                    kargv[i] = argv_buf[i];
+                    argv_bytes += bytes;
+                    kargv[i] = s;
                 }
             }
 
-            int32_t rc = tasking_execve(frame, path, (argc != 0 && argv_user) ? kargv : NULL, argc);
+            rc = tasking_execve(frame, path, (argc != 0) ? kargv : NULL, argc);
+
+        out_execve:
+            if (kargv) {
+                for (uint32_t i = 0; i < argc; i++) {
+                    if (kargv[i]) {
+                        kfree((void*)kargv[i]);
+                    }
+                }
+                kfree(kargv);
+            }
             frame->eax = (uint32_t)rc;
             return frame;
         }
@@ -623,44 +711,73 @@ interrupt_frame_t* syscall_handle(interrupt_frame_t* frame) {
             const char* const* argv_user = (const char* const*)frame->ecx;
             uint32_t argc = frame->edx;
 
-            if (argc > 32u) {
-                frame->eax = (uint32_t)-EINVAL;
-                return frame;
+            int32_t pid = -1;
+            int32_t rc = 0;
+            const char** kargv = NULL;
+            uint32_t argv_bytes = 0;
+
+            if (argc > VOS_EXEC_MAX_ARGS) {
+                rc = -EINVAL;
+                goto out_spawn;
+            }
+            if (argc != 0 && !argv_user) {
+                rc = -EFAULT;
+                goto out_spawn;
             }
 
             char path[128];
             if (!copy_user_cstring(path, sizeof(path), path_user)) {
-                frame->eax = (uint32_t)-EFAULT;
-                return frame;
+                rc = -EFAULT;
+                goto out_spawn;
             }
 
-            const char* kargv[32];
-            char argv_buf[32][128];
+            if (argc != 0) {
+                kargv = (const char**)kmalloc(argc * (uint32_t)sizeof(*kargv));
+                if (!kargv) {
+                    rc = -ENOMEM;
+                    goto out_spawn;
+                }
 
-            if (argc != 0 && argv_user) {
+                for (uint32_t i = 0; i < argc; i++) {
+                    kargv[i] = NULL;
+                }
+
                 for (uint32_t i = 0; i < argc; i++) {
                     const char* argp_user = NULL;
                     if (!copy_from_user(&argp_user, argv_user + i, (uint32_t)sizeof(argp_user))) {
-                        frame->eax = (uint32_t)-EFAULT;
-                        return frame;
+                        rc = -EFAULT;
+                        goto out_spawn;
                     }
 
-                    if (!argp_user) {
-                        argv_buf[i][0] = '\0';
-                        kargv[i] = argv_buf[i];
-                        continue;
+                    char* s = NULL;
+                    uint32_t bytes = 0;
+                    rc = dup_user_cstring(argp_user, VOS_EXEC_ARG_STR_MAX, &s, &bytes);
+                    if (rc < 0) {
+                        goto out_spawn;
                     }
-
-                    if (!copy_user_cstring(argv_buf[i], sizeof(argv_buf[i]), argp_user)) {
-                        frame->eax = (uint32_t)-ENAMETOOLONG;
-                        return frame;
+                    if (argv_bytes + bytes > VOS_EXEC_ARG_MAXBYTES) {
+                        kfree(s);
+                        rc = -E2BIG;
+                        goto out_spawn;
                     }
-                    kargv[i] = argv_buf[i];
+                    argv_bytes += bytes;
+                    kargv[i] = s;
                 }
             }
 
-            int32_t pid = tasking_spawn_exec(path, (argc != 0 && argv_user) ? kargv : NULL, argc);
-            frame->eax = (uint32_t)pid;
+            pid = tasking_spawn_exec(path, (argc != 0) ? kargv : NULL, argc);
+            rc = 0;
+
+        out_spawn:
+            if (kargv) {
+                for (uint32_t i = 0; i < argc; i++) {
+                    if (kargv[i]) {
+                        kfree((void*)kargv[i]);
+                    }
+                }
+                kfree(kargv);
+            }
+            frame->eax = (uint32_t)((rc < 0) ? rc : pid);
             return frame;
         }
         case SYS_UPTIME_MS: {

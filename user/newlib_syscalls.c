@@ -45,6 +45,46 @@ ssize_t getline(char** lineptr, size_t* n, FILE* stream) {
 #define VOS_MAX_TRACK_FDS 64
 #endif
 
+#ifndef VOS_EXEC_MAX_ARGS
+#define VOS_EXEC_MAX_ARGS 4096u
+#endif
+
+// Keep these in sync with the kernel execve/spawn marshalling limits.
+#ifndef VOS_EXEC_ARG_MAXBYTES
+#define VOS_EXEC_ARG_MAXBYTES (128u * 1024u)
+#endif
+
+long sysconf(int name) {
+#ifdef _SC_ARG_MAX
+    if (name == _SC_ARG_MAX) {
+        return (long)VOS_EXEC_ARG_MAXBYTES;
+    }
+#endif
+#ifdef _SC_OPEN_MAX
+    if (name == _SC_OPEN_MAX) {
+        return 64;
+    }
+#endif
+#ifdef _SC_PAGESIZE
+    if (name == _SC_PAGESIZE) {
+        return 4096;
+    }
+#endif
+#ifdef _SC_PAGE_SIZE
+    if (name == _SC_PAGE_SIZE) {
+        return 4096;
+    }
+#endif
+#ifdef _SC_CLK_TCK
+    if (name == _SC_CLK_TCK) {
+        return 100;
+    }
+#endif
+
+    errno = EINVAL;
+    return -1;
+}
+
 static char g_fd_paths[VOS_MAX_TRACK_FDS][VOS_PATH_MAX];
 static unsigned char g_fd_path_valid[VOS_MAX_TRACK_FDS];
 
@@ -2458,9 +2498,9 @@ int execve(const char* path, char* const argv[], char* const envp[]) {
 
     unsigned int argc = 0;
     if (argv) {
-        for (; argc < 32u && argv[argc]; argc++) {
+        for (; argc < VOS_EXEC_MAX_ARGS && argv[argc]; argc++) {
         }
-        if (argc == 32u && argv[argc]) {
+        if (argc == VOS_EXEC_MAX_ARGS && argv[argc]) {
             errno = E2BIG;
             return -1;
         }
@@ -2472,6 +2512,31 @@ int execve(const char* path, char* const argv[], char* const envp[]) {
         return -1;
     }
     return rc;
+}
+
+int execvp(const char* file, char* const argv[]) {
+    if (!file || file[0] == '\0') {
+        errno = ENOENT;
+        return -1;
+    }
+
+    if (strchr(file, '/')) {
+        return execve(file, argv, NULL);
+    }
+
+    // Try as-is first.
+    execve(file, argv, NULL);
+
+    // Then try /bin and /usr/bin.
+    char path[VOS_PATH_MAX];
+
+    snprintf(path, sizeof(path), "/bin/%s", file);
+    execve(path, argv, NULL);
+
+    snprintf(path, sizeof(path), "/usr/bin/%s", file);
+    execve(path, argv, NULL);
+
+    return -1;
 }
 
 pid_t waitpid(pid_t pid, int* status, int options) {

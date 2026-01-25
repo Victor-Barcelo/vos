@@ -4,6 +4,10 @@
 #include "interrupts.h"
 #include "types.h"
 
+// Max argv entries supported by SYS_EXECVE/SYS_SPAWN and the ELF stack builder.
+// Kept intentionally finite to avoid unbounded kernel allocations.
+#define VOS_EXEC_MAX_ARGS 4096u
+
 void tasking_init(void);
 bool tasking_is_enabled(void);
 

@@ -30,7 +30,7 @@ VOS provides 71+ syscalls. Key ones for application development:
 | 1 | `exit(status)` | Terminate process |
 | 2 | `fork()` | Create child process |
 | 3 | `waitpid(pid, status, opts)` | Wait for child |
-| 6 | `execve(path, argv, envp)` | Execute program |
+| 6 | `execve(path, argv, envp)` | Execute program (max 4096 args) |
 | 7 | `getpid()` | Get process ID |
 | 8 | `getppid()` | Get parent PID |
 | 64 | `setsid()` | Create session |

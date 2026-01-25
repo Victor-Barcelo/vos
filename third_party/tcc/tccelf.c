@@ -1199,8 +1199,11 @@ ST_FUNC void tcc_add_runtime(TCCState *s1)
 #endif
         tcc_add_library_err(s1, "c");
 #ifdef TCC_ON_VOS
-        /* Second pass over libvosposix: libc references syscalls in this archive. */
+        /* libvosposix again: libc references syscalls in this archive.
+           Note: with patched libc.a (signal.o removed), this won't cause duplicates. */
         tcc_add_library_err(s1, "vosposix");
+        /* libc again: resolve cross-references within libc (printf -> __swbuf_r -> _impure_ptr) */
+        tcc_add_library_err(s1, "c");
 #endif
 #ifdef TCC_LIBGCC
         if (!s1->static_link) {

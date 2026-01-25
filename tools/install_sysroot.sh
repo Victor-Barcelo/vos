@@ -220,7 +220,14 @@ else
   fi
 fi
 
-copy_one "$NEWLIB_LIB/libc.a" ::/usr/lib/libc.a
+# Create a patched libc.a without signal-related objects (they conflict with libvosposix.a in TCC)
+PATCHED_LIBC="$ROOT_DIR/build/user/libc_patched.a"
+cp "$NEWLIB_LIB/libc.a" "$PATCHED_LIBC"
+# Remove signal-related objects that are redefined in libvosposix.a
+# Note: newlib archives use "libc_a-" prefix for object names
+"$CROSS_ROOT/bin/i686-elf-ar" d "$PATCHED_LIBC" libc_a-signal.o libc_a-signalr.o 2>/dev/null || true
+
+copy_one "$PATCHED_LIBC" ::/usr/lib/libc.a
 if [[ -f "$NEWLIB_LIB/libm.a" ]]; then
   copy_one "$NEWLIB_LIB/libm.a" ::/usr/lib/libm.a
 fi

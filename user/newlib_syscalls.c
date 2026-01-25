@@ -2392,6 +2392,9 @@ int kill(int pid, int sig) {
     return 0;
 }
 
+// Use "used" attribute to ensure these override newlib's weak stubs.
+// TCC doesn't support weak, so we rely on link order (libvosposix.a before libc.a).
+__attribute__((used))
 _sig_func_ptr signal(int sig, _sig_func_ptr handler) {
     intptr_t rc = vos_sys_signal(sig, (uintptr_t)handler);
     if (rc < 0) {
@@ -2401,35 +2404,42 @@ _sig_func_ptr signal(int sig, _sig_func_ptr handler) {
     return (_sig_func_ptr)(uintptr_t)rc;
 }
 
+__attribute__((used))
 _sig_func_ptr _signal_r(struct _reent* r, int sig, _sig_func_ptr handler) {
     (void)r;
     return signal(sig, handler);
 }
 
+__attribute__((used))
 int raise(int sig) {
     return kill(getpid(), sig);
 }
 
+__attribute__((used))
 int _raise_r(struct _reent* r, int sig) {
     (void)r;
     return raise(sig);
 }
 
+__attribute__((used))
 int _init_signal_r(struct _reent* r) {
     (void)r;
     return 0;
 }
 
+__attribute__((used))
 int _init_signal(void) {
     return 0;
 }
 
+__attribute__((used))
 int __sigtramp_r(struct _reent* r, int sig) {
     (void)r;
     (void)sig;
     return 0;
 }
 
+__attribute__((used))
 int __sigtramp(int sig) {
     (void)sig;
     return 0;
@@ -2576,6 +2586,13 @@ int setpgid(pid_t pid, pid_t pgid) {
         errno = -rc;
         return -1;
     }
+    return 0;
+}
+
+int tcsetpgrp(int fd, pid_t pgrp) {
+    (void)fd;
+    (void)pgrp;
+    // VOS doesn't support job control, but return success to not break apps
     return 0;
 }
 

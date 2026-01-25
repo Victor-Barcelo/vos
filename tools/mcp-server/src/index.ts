@@ -353,29 +353,59 @@ class VosMcpServer {
     }
 
     const content = fs.readFileSync(localPath);
-    const base64 = content.toString("base64");
+    const text = content.toString("utf-8");
 
-    // Upload via echo and base64 decode
-    // Split into chunks to avoid command line limits
-    const chunkSize = 512;
-    const chunks = [];
-    for (let i = 0; i < base64.length; i += chunkSize) {
-      chunks.push(base64.slice(i, i + chunkSize));
+    // Check if this looks like a text file (no null bytes, mostly printable)
+    const isText = !content.includes(0) &&
+                   text.split('').filter(c => c.charCodeAt(0) < 32 && c !== '\n' && c !== '\r' && c !== '\t').length < text.length * 0.01;
+
+    if (isText) {
+      // Use heredoc for text files - much cleaner!
+      // Generate a unique delimiter that doesn't appear in the content
+      let delim = "EOF";
+      let counter = 0;
+      while (text.includes(delim)) {
+        delim = `EOF${counter++}`;
+      }
+
+      // Start the heredoc command
+      await this.serial.write(`cat > ${remotePath} << '${delim}'\n`);
+      await this.sleep(100);
+
+      // Send the content line by line
+      const lines = text.split('\n');
+      for (const line of lines) {
+        await this.serial.write(line + '\n');
+        await this.sleep(10); // Small delay to avoid overwhelming serial
+      }
+
+      // End the heredoc
+      await this.serial.write(`${delim}\n`);
+      await this.sleep(200);
+
+      // Read any output
+      await this.serial.readUntilPrompt(2000);
+
+      return `Uploaded ${content.length} bytes to ${remotePath} (text mode with heredoc)`;
+    } else {
+      // Binary file - use base64 (will need manual decoding)
+      const base64 = content.toString("base64");
+      const chunkSize = 512;
+      const chunks = [];
+      for (let i = 0; i < base64.length; i += chunkSize) {
+        chunks.push(base64.slice(i, i + chunkSize));
+      }
+
+      await this.serial.execCommand(`rm -f ${remotePath}`, 2000);
+
+      for (const chunk of chunks) {
+        await this.serial.execCommand(`echo -n "${chunk}" >> ${remotePath}.b64`, 2000);
+      }
+
+      await this.serial.execCommand(`mv ${remotePath}.b64 ${remotePath}`, 2000);
+
+      return `Uploaded ${content.length} bytes to ${remotePath} (base64 encoded - needs decoding)`;
     }
-
-    // Clear any existing file
-    await this.serial.execCommand(`rm -f ${remotePath}`, 2000);
-
-    // Write chunks
-    for (const chunk of chunks) {
-      await this.serial.execCommand(`echo -n "${chunk}" >> ${remotePath}.b64`, 2000);
-    }
-
-    // Decode base64 (if VOS has base64 command, otherwise this needs adjustment)
-    // For now, just note that the file was uploaded as base64
-    await this.serial.execCommand(`mv ${remotePath}.b64 ${remotePath}`, 2000);
-
-    return `Uploaded ${content.length} bytes to ${remotePath} (base64 encoded - may need decoding)`;
   }
 
   private sleep(ms: number): Promise<void> {

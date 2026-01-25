@@ -209,6 +209,13 @@
     - Register Conventions
     - Error Codes
 
+35. [MCP Server for LLM Integration](35_mcp_server.md)
+    - Overview and Installation
+    - Available Tools (start, exec, screenshot, upload)
+    - LLM Workflow Guide
+    - Writing Code with Heredoc
+    - Architecture and Troubleshooting
+
 ---
 
 ## About This Documentation

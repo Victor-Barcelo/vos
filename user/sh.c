@@ -690,21 +690,87 @@ typedef struct sh_redir {
     const char* err_path;
     bool out_append;
     bool err_append;
+    char* heredoc_path;  // temp file for heredoc content
 } sh_redir_t;
 
-static bool sh_parse_redir_token(const char* tok, sh_redir_t* r, const char** out_path, bool* out_append) {
-    if (!tok || !r || !out_path || !out_append) {
+// Read heredoc content until delimiter is seen alone on a line.
+// Returns path to temp file containing the content, or NULL on error.
+static char* sh_read_heredoc(const char* delim) {
+    static char tmppath[64];
+    static int heredoc_counter = 0;
+
+    if (!delim || delim[0] == '\0') {
+        return NULL;
+    }
+
+    // Strip quotes from delimiter if present
+    char clean_delim[128];
+    const char* d = delim;
+    size_t dlen = strlen(delim);
+    if ((d[0] == '\'' || d[0] == '"') && dlen >= 2 && d[dlen-1] == d[0]) {
+        strncpy(clean_delim, d + 1, dlen - 2);
+        clean_delim[dlen - 2] = '\0';
+    } else {
+        strncpy(clean_delim, d, sizeof(clean_delim) - 1);
+        clean_delim[sizeof(clean_delim) - 1] = '\0';
+    }
+
+    snprintf(tmppath, sizeof(tmppath), "/tmp/.heredoc.%d", heredoc_counter++);
+
+    FILE* f = fopen(tmppath, "w");
+    if (!f) {
+        return NULL;
+    }
+
+    char line[1024];
+    while (1) {
+        // Print continuation prompt
+        fputs("> ", stdout);
+        fflush(stdout);
+
+        if (!fgets(line, sizeof(line), stdin)) {
+            break;
+        }
+
+        // Remove trailing newline for comparison
+        size_t len = strlen(line);
+        while (len > 0 && (line[len-1] == '\n' || line[len-1] == '\r')) {
+            line[--len] = '\0';
+        }
+
+        // Check if this line matches the delimiter
+        if (strcmp(line, clean_delim) == 0) {
+            break;
+        }
+
+        // Write line to temp file (with newline)
+        fprintf(f, "%s\n", line);
+    }
+
+    fclose(f);
+    return tmppath;
+}
+
+static bool sh_parse_redir_token(const char* tok, sh_redir_t* r, const char** out_path, bool* out_append, bool* is_heredoc) {
+    if (!tok || !r || !out_path || !out_append || !is_heredoc) {
         return false;
     }
 
     *out_path = NULL;
     *out_append = false;
+    *is_heredoc = false;
 
     if (tok[0] == '\0') {
         return false;
     }
 
     if (tok[0] == '<') {
+        // Check for heredoc <<
+        if (tok[1] == '<') {
+            *is_heredoc = true;
+            *out_path = tok[2] ? (tok + 2) : NULL;
+            return true;
+        }
         *out_path = tok[1] ? (tok + 1) : NULL;
         return true;
     }
@@ -867,9 +933,22 @@ static int sh_execute_line(char* line, bool print_exit) {
 
         const char* path = NULL;
         bool append = false;
-        if (sh_parse_redir_token(tok, &redir, &path, &append)) {
+        bool is_heredoc = false;
+        if (sh_parse_redir_token(tok, &redir, &path, &append, &is_heredoc)) {
             if (tok[0] == '<') {
-                if (!path) {
+                if (is_heredoc) {
+                    // Heredoc: << DELIM
+                    const char* delim = path;
+                    if (!delim && i + 1 < ac_raw) {
+                        delim = av_raw[++i];
+                    }
+                    if (delim) {
+                        redir.heredoc_path = sh_read_heredoc(delim);
+                        if (redir.heredoc_path) {
+                            redir.in_path = redir.heredoc_path;
+                        }
+                    }
+                } else if (!path) {
                     if (i + 1 < ac_raw) {
                         redir.in_path = av_raw[++i];
                     }
@@ -927,6 +1006,12 @@ static int sh_execute_line(char* line, bool print_exit) {
     int rc = sh_execute_argv(ac_exp, av_exp, print_exit);
     sh_restore_redirections(saved);
     sh_free_globs(ac_exp, av_exp, av_alloc);
+
+    // Clean up heredoc temp file
+    if (redir.heredoc_path) {
+        unlink(redir.heredoc_path);
+    }
+
     return rc;
 }
 

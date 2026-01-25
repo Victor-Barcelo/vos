@@ -75,6 +75,12 @@ int execve(const char *path, char *const argv[], char *const envp[]);
 Replaces current process with new program.
 Only returns on error.
 
+**Limits:**
+- Max arguments: 4096 (`VOS_EXEC_MAX_ARGS`)
+- Max per-argument size: 4096 bytes
+- Max total argument data: 128KB
+- Returns `E2BIG` if limits exceeded
+
 ## File Operations
 
 | # | Name | Args | Returns | Description |
@@ -328,6 +334,7 @@ int uname(struct utsname *buf);
 | 3 | ESRCH | No such process |
 | 4 | EINTR | Interrupted system call |
 | 5 | EIO | I/O error |
+| 7 | E2BIG | Argument list too long |
 | 9 | EBADF | Bad file descriptor |
 | 10 | ECHILD | No child processes |
 | 11 | EAGAIN | Try again |

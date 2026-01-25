@@ -116,7 +116,7 @@ VOS implements a subset of POSIX focused on:
 |----------|--------|-------|
 | fork() | Yes | Full copy-on-write |
 | execve() | Yes | |
-| execl/execv/etc | Yes | Via newlib |
+| execl/execv/execvp | Yes | Via newlib |
 | _exit() | Yes | |
 | wait() | Yes | |
 | waitpid() | Yes | WNOHANG supported |
@@ -206,7 +206,7 @@ VOS implements a subset of POSIX focused on:
 |----------|--------|-------|
 | uname() | Yes | |
 | gethostname() | No | |
-| sysconf() | Partial | Few values |
+| sysconf() | Partial | _SC_ARG_MAX, _SC_PAGE_SIZE |
 | pathconf() | No | |
 | fpathconf() | No | |
 

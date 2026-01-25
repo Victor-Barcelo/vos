@@ -20,3 +20,4 @@ vos-disk.img
 
 # Local cross toolchain (not checked in)
 toolchain/
+todo.txt

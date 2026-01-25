@@ -47,11 +47,11 @@ const TOOLS: Tool[] = [
         },
         memory: {
           type: "string",
-          description: "RAM size (default: 128M)",
+          description: "RAM size (default: 256M)",
         },
         resolution: {
           type: "string",
-          description: "Screen resolution WxH (default: 1024x768)",
+          description: "Screen resolution WxH (default: 1920x1080)",
         },
       },
     },
@@ -242,8 +242,8 @@ class VosMcpServer {
 
   private async handleStart(args: Record<string, unknown>): Promise<string> {
     const isoPath = (args.iso_path as string) || DEFAULT_VOS_ISO;
-    const memory = (args.memory as string) || "128M";
-    const resolution = (args.resolution as string) || "1024x768";
+    const memory = (args.memory as string) || "256M";
+    const resolution = (args.resolution as string) || "1920x1080";
 
     // Check if ISO exists
     if (!fs.existsSync(isoPath)) {

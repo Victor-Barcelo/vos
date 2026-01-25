@@ -255,7 +255,25 @@ USER_BASIC_C_SOURCES = $(USER_BASIC_DIR)/basic.c $(USER_BASIC_DIR)/ubasic.c $(US
 USER_BASIC_OBJECTS = $(patsubst $(USER_DIR)/%.c,$(USER_BUILD_DIR)/%.o,$(USER_BASIC_C_SOURCES))
 USER_BASIC = $(USER_BUILD_DIR)/basic.elf
 
-USER_BINS = $(USER_INIT) $(USER_ELIZA) $(USER_LSH) $(USER_SH) $(USER_DF) $(USER_TREE) $(USER_UPTIME) $(USER_DATE) $(USER_SETDATE) $(USER_PS) $(USER_TOP) $(USER_NEOFETCH) $(USER_FONT) $(USER_JSON) $(USER_IMG) $(USER_LOGIN) $(USER_VED) $(USER_S3LCUBE) $(USER_S3LFLY) $(USER_OLIVEDEMO) $(USER_NEXTVI) $(USER_NE) $(USER_BASIC) $(USER_ZORK) $(USER_TCC) \
+# Peanut-GB (Game Boy emulator - single header library)
+PEANUT_GB_DIR = $(THIRD_PARTY_DIR)/peanut-gb
+USER_GBEMU_OBJ = $(USER_BUILD_DIR)/gbemu.o
+USER_GBEMU = $(USER_BUILD_DIR)/gbemu.elf
+
+# Nofrendo (NES emulator)
+NOFRENDO_DIR = $(THIRD_PARTY_DIR)/nofrendo
+NOFRENDO_BUILD_DIR = $(USER_BUILD_DIR)/nofrendo
+NOFRENDO_NES_C_SOURCES = $(NOFRENDO_DIR)/nes/apu.c $(NOFRENDO_DIR)/nes/cpu.c $(NOFRENDO_DIR)/nes/dis.c \
+                         $(NOFRENDO_DIR)/nes/input.c $(NOFRENDO_DIR)/nes/mem.c $(NOFRENDO_DIR)/nes/mmc.c \
+                         $(NOFRENDO_DIR)/nes/nes.c $(NOFRENDO_DIR)/nes/ppu.c $(NOFRENDO_DIR)/nes/rom.c \
+                         $(NOFRENDO_DIR)/nes/state.c
+NOFRENDO_MAPPER_C_SOURCES = $(wildcard $(NOFRENDO_DIR)/mappers/*.c)
+NOFRENDO_C_SOURCES = $(NOFRENDO_NES_C_SOURCES) $(NOFRENDO_MAPPER_C_SOURCES)
+NOFRENDO_OBJECTS = $(patsubst $(NOFRENDO_DIR)/%.c,$(NOFRENDO_BUILD_DIR)/%.o,$(NOFRENDO_C_SOURCES))
+USER_NESEMU_OBJ = $(USER_BUILD_DIR)/nesemu.o
+USER_NESEMU = $(USER_BUILD_DIR)/nesemu.elf
+
+USER_BINS = $(USER_INIT) $(USER_ELIZA) $(USER_LSH) $(USER_SH) $(USER_DF) $(USER_TREE) $(USER_UPTIME) $(USER_DATE) $(USER_SETDATE) $(USER_PS) $(USER_TOP) $(USER_NEOFETCH) $(USER_FONT) $(USER_JSON) $(USER_IMG) $(USER_LOGIN) $(USER_VED) $(USER_S3LCUBE) $(USER_S3LFLY) $(USER_OLIVEDEMO) $(USER_NEXTVI) $(USER_NE) $(USER_BASIC) $(USER_ZORK) $(USER_TCC) $(USER_GBEMU) $(USER_NESEMU) \
             $(SBASE_TOOL_BINS)
 
 # QEMU defaults
@@ -488,6 +506,35 @@ $(USER_NEXTVI_OBJ): $(USER_DIR)/nextvi/vi.c | $(USER_BUILD_DIR)
 $(USER_NEXTVI): $(USER_RUNTIME_OBJECTS) $(USER_NEXTVI_OBJ) $(USER_RUNTIME_LIBS)
 	$(USER_LINK_CMD)
 
+# Compile Game Boy emulator (uses Peanut-GB single-header library)
+$(USER_GBEMU_OBJ): $(USER_DIR)/gbemu.c $(PEANUT_GB_DIR)/peanut_gb.h | $(USER_BUILD_DIR)
+	$(CC) -ffreestanding -fno-stack-protector -fno-pie -Wall -Wextra -O2 -I$(THIRD_PARTY_DIR) -I$(USER_DIR) -c $< -o $@
+
+# Link Game Boy emulator
+$(USER_GBEMU): $(USER_RUNTIME_OBJECTS) $(USER_GBEMU_OBJ) $(USER_RUNTIME_LIBS)
+	$(USER_LINK_CMD)
+
+# Compile nofrendo NES core files
+$(NOFRENDO_BUILD_DIR)/nes/%.o: $(NOFRENDO_DIR)/nes/%.c | $(NOFRENDO_BUILD_DIR)
+	mkdir -p $(dir $@)
+	$(CC) -ffreestanding -fno-stack-protector -fno-pie -Wall -Wextra -Wno-unused-parameter -O2 -I$(NOFRENDO_DIR) -c $< -o $@
+
+# Compile nofrendo mappers
+$(NOFRENDO_BUILD_DIR)/mappers/%.o: $(NOFRENDO_DIR)/mappers/%.c | $(NOFRENDO_BUILD_DIR)
+	mkdir -p $(dir $@)
+	$(CC) -ffreestanding -fno-stack-protector -fno-pie -Wall -Wextra -Wno-unused-parameter -O2 -I$(NOFRENDO_DIR) -c $< -o $@
+
+# Compile NES emulator frontend
+$(USER_NESEMU_OBJ): $(USER_DIR)/nesemu.c | $(USER_BUILD_DIR)
+	$(CC) -ffreestanding -fno-stack-protector -fno-pie -Wall -Wextra -Wno-unused-parameter -O2 -I$(THIRD_PARTY_DIR) -I$(NOFRENDO_DIR) -I$(USER_DIR) -c $< -o $@
+
+# Link NES emulator
+$(USER_NESEMU): $(USER_RUNTIME_OBJECTS) $(USER_NESEMU_OBJ) $(NOFRENDO_OBJECTS) $(USER_RUNTIME_LIBS)
+	$(USER_LINK_CMD)
+
+$(NOFRENDO_BUILD_DIR):
+	mkdir -p $(NOFRENDO_BUILD_DIR)/nes $(NOFRENDO_BUILD_DIR)/mappers
+
 # Compile C files
 $(BUILD_DIR)/%.o: $(KERNEL_DIR)/%.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) $< -o $@
@@ -533,6 +580,8 @@ $(ISO): $(KERNEL) $(USER_BINS) $(FAT_IMG) $(INITRAMFS_FILES) $(INITRAMFS_DIRS)
 	cp $(USER_BASIC) $(INITRAMFS_ROOT)/bin/basic
 	cp $(USER_ZORK) $(INITRAMFS_ROOT)/bin/zork
 	cp $(USER_TCC) $(INITRAMFS_ROOT)/bin/tcc
+	cp $(USER_GBEMU) $(INITRAMFS_ROOT)/bin/gbemu
+	cp $(USER_NESEMU) $(INITRAMFS_ROOT)/bin/nesemu
 	for b in $(SBASE_TOOLS); do cp $(SBASE_BIN_DIR)/$$b.elf $(INITRAMFS_ROOT)/bin/$$b; done
 	tar -C $(INITRAMFS_ROOT) -cf $(INITRAMFS_TAR) .
 	echo 'set timeout=0' > $(ISO_DIR)/boot/grub/grub.cfg

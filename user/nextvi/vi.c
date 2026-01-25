@@ -26,7 +26,7 @@
 int vi_hidch;		/* show hidden chars */
 int vi_lncol;		/* line numbers cursor offset */
 char vi_msg[512];	/* current message */
-static int vi_lnnum;	/* line numbers */
+static int vi_lnnum = 1;	/* line numbers (1 = enabled by default) */
 static int vi_mod;	/* screen should be redrawn -
 			bit 1: whole screen, bit 2: current line, bit 3: update vi_col) */
 static char vi_word_m[] = "\0leEwW";	/* line word navigation */

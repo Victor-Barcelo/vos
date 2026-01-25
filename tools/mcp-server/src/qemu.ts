@@ -164,7 +164,7 @@ export class QemuManager {
     return new Promise((resolve, reject) => {
       const command = JSON.stringify({
         execute: "screendump",
-        arguments: { filename: filepath },
+        arguments: { filename: filepath, format: "png" },
       });
 
       let buffer = "";

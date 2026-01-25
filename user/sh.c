@@ -989,7 +989,7 @@ int main(int argc, char** argv) {
         char buf[SHELL_MAX_LINE];
         strncpy(buf, s, sizeof(buf) - 1u);
         buf[sizeof(buf) - 1u] = '\0';
-        if (sh_execute_line(buf, true)) {
+        if (sh_execute_line(buf, false)) {
             free(line);
             break;
         }

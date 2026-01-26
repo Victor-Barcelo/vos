@@ -51,7 +51,17 @@ EXTRA_FONT_PSF = \
 	$(FONTS_DIR)/spleen/spleen-32x64.psf \
 	$(FONTS_DIR)/terminus/Uni3-Terminus28x14.psf \
 	$(FONTS_DIR)/terminus/Uni3-TerminusBold32x16.psf \
-	$(FONTS_DIR)/tamzen/Tamzen10x20.psf
+	$(FONTS_DIR)/tamzen/Tamzen10x20.psf \
+	$(FONTS_DIR)/terminus-powerline/ter-powerline-v16b.psf \
+	$(FONTS_DIR)/terminus-powerline/ter-powerline-v18b.psf \
+	$(FONTS_DIR)/terminus-powerline/ter-powerline-v20b.psf \
+	$(FONTS_DIR)/terminus-powerline/ter-powerline-v20n.psf \
+	$(FONTS_DIR)/terminus-powerline/ter-powerline-v22b.psf \
+	$(FONTS_DIR)/terminus-powerline/ter-powerline-v24b.psf \
+	$(FONTS_DIR)/terminus-powerline/ter-powerline-v28b.psf \
+	$(FONTS_DIR)/terminus-powerline/ter-powerline-v32b.psf \
+	$(FONTS_DIR)/gohufont/gohufont-uni-11.psf \
+	$(FONTS_DIR)/gohufont/gohufont-uni-11b.psf
 
 EXTRA_FONT_OBJS = $(patsubst $(FONTS_DIR)/%.psf,$(FONTS_BUILD_DIR)/%.o,$(EXTRA_FONT_PSF))
 

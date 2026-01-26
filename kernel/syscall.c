@@ -103,7 +103,11 @@ enum {
     SYS_DESCRIPTOR_INFO = 77,
     SYS_SYSCALL_STATS = 78,
     SYS_SELECT = 79,
-    SYS_MAX = 80,
+    SYS_THEME_COUNT = 80,
+    SYS_THEME_GET = 81,
+    SYS_THEME_INFO = 82,
+    SYS_THEME_SET = 83,
+    SYS_MAX = 84,
 };
 
 // Syscall counters - track how many times each syscall is invoked
@@ -191,6 +195,10 @@ static const char* syscall_names[SYS_MAX] = {
     [SYS_DESCRIPTOR_INFO] = "desc_info",
     [SYS_SYSCALL_STATS] = "syscall_stats",
     [SYS_SELECT] = "select",
+    [SYS_THEME_COUNT] = "theme_count",
+    [SYS_THEME_GET] = "theme_get",
+    [SYS_THEME_INFO] = "theme_info",
+    [SYS_THEME_SET] = "theme_set",
 };
 
 typedef struct vos_task_info_user {

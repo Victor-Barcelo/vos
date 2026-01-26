@@ -127,6 +127,7 @@ typedef enum {
     FD_KIND_STDERR = 3,
     FD_KIND_VFS = 4,
     FD_KIND_PIPE = 5,
+    FD_KIND_TTY = 6,  // /dev/tty - reads from stdin, writes to stdout
 } fd_kind_t;
 
 typedef struct pipe_obj pipe_obj_t;
@@ -3045,6 +3046,27 @@ int32_t tasking_fd_open(const char* path, uint32_t flags) {
         return -EINVAL;
     }
 
+    // Handle /dev/tty as a special pseudo-device (controlling terminal)
+    if (strcmp(path, "/dev/tty") == 0) {
+        uint32_t irq_flags = irq_save();
+        for (int32_t fd = 0; fd < (int32_t)TASK_MAX_FDS; fd++) {
+            if (current_task->fds[fd].kind == FD_KIND_FREE) {
+                current_task->fds[fd].kind = FD_KIND_TTY;
+                current_task->fds[fd].fd_flags = 0;
+                current_task->fds[fd].fl_flags = flags;
+                current_task->fds[fd].handle = NULL;
+                current_task->fds[fd].pipe = NULL;
+                current_task->fds[fd].pipe_write_end = false;
+                current_task->fds[fd].pending_len = 0;
+                current_task->fds[fd].pending_off = 0;
+                irq_restore(irq_flags);
+                return fd;
+            }
+        }
+        irq_restore(irq_flags);
+        return -EMFILE;
+    }
+
     vfs_handle_t* h = NULL;
     int32_t rc = vfs_open_path(current_task->cwd, path, flags, &h);
     if (rc < 0) {
@@ -3456,7 +3478,8 @@ int32_t tasking_fd_read(int32_t fd, void* dst_user, uint32_t len) {
     uint32_t irq_flags = irq_save();
     fd_entry_t* ent = &current_task->fds[fd];
 
-    if (ent->kind == FD_KIND_STDIN) {
+    // FD_KIND_TTY reads behave like stdin
+    if (ent->kind == FD_KIND_STDIN || ent->kind == FD_KIND_TTY) {
         uint32_t fl_flags = ent->fl_flags;
         irq_restore(irq_flags);
 
@@ -3699,7 +3722,8 @@ int32_t tasking_fd_write(int32_t fd, const void* src_user, uint32_t len) {
     uint32_t total = 0;
     uint8_t tmp[128];
 
-    if (kind == FD_KIND_STDOUT || kind == FD_KIND_STDERR) {
+    // FD_KIND_TTY writes behave like stdout
+    if (kind == FD_KIND_STDOUT || kind == FD_KIND_STDERR || kind == FD_KIND_TTY) {
         while (total < len) {
             uint32_t chunk = len - total;
             if (chunk > (uint32_t)sizeof(tmp)) {
@@ -3828,7 +3852,7 @@ int32_t tasking_fd_fstat(int32_t fd, void* st_user) {
         if (rc < 0) {
             return rc;
         }
-    } else if (kind == FD_KIND_STDIN || kind == FD_KIND_STDOUT || kind == FD_KIND_STDERR) {
+    } else if (kind == FD_KIND_STDIN || kind == FD_KIND_STDOUT || kind == FD_KIND_STDERR || kind == FD_KIND_TTY) {
         // Leave as a "tty-like" entry (size 0, not a directory).
     } else if (kind == FD_KIND_PIPE) {
         // Anonymous pipe: treat as a non-directory stream.
@@ -4364,6 +4388,7 @@ int32_t tasking_fd_is_readable(int32_t fd) {
             return -1;
 
         case FD_KIND_STDIN:
+        case FD_KIND_TTY:  // TTY reads like stdin
             // Check if there's keyboard input available or serial input
             irq_restore(irq_flags);
             if (keyboard_has_key()) {
@@ -4435,7 +4460,8 @@ int32_t tasking_fd_is_writable(int32_t fd) {
 
         case FD_KIND_STDOUT:
         case FD_KIND_STDERR:
-            // stdout/stderr are always writable
+        case FD_KIND_TTY:  // TTY writes like stdout
+            // stdout/stderr/tty are always writable
             irq_restore(irq_flags);
             return 1;
 
@@ -4540,7 +4566,7 @@ int32_t tasking_fd_ioctl(int32_t fd, uint32_t req, void* argp_user) {
     fd_kind_t kind = ent->kind;
     irq_restore(irq_flags);
 
-    if (kind != FD_KIND_STDIN && kind != FD_KIND_STDOUT && kind != FD_KIND_STDERR) {
+    if (kind != FD_KIND_STDIN && kind != FD_KIND_STDOUT && kind != FD_KIND_STDERR && kind != FD_KIND_TTY) {
         return -ENOTTY;
     }
 

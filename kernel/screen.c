@@ -141,6 +141,28 @@ extern const uint8_t _binary_third_party_fonts_terminus_Uni3_TerminusBold32x16_p
 extern const uint8_t _binary_third_party_fonts_terminus_Uni3_TerminusBold32x16_psf_end[];
 extern const uint8_t _binary_third_party_fonts_tamzen_Tamzen10x20_psf_start[];
 extern const uint8_t _binary_third_party_fonts_tamzen_Tamzen10x20_psf_end[];
+// Terminus Powerline fonts (various sizes)
+extern const uint8_t _binary_third_party_fonts_terminus_powerline_ter_powerline_v16b_psf_start[];
+extern const uint8_t _binary_third_party_fonts_terminus_powerline_ter_powerline_v16b_psf_end[];
+extern const uint8_t _binary_third_party_fonts_terminus_powerline_ter_powerline_v18b_psf_start[];
+extern const uint8_t _binary_third_party_fonts_terminus_powerline_ter_powerline_v18b_psf_end[];
+extern const uint8_t _binary_third_party_fonts_terminus_powerline_ter_powerline_v20b_psf_start[];
+extern const uint8_t _binary_third_party_fonts_terminus_powerline_ter_powerline_v20b_psf_end[];
+extern const uint8_t _binary_third_party_fonts_terminus_powerline_ter_powerline_v20n_psf_start[];
+extern const uint8_t _binary_third_party_fonts_terminus_powerline_ter_powerline_v20n_psf_end[];
+extern const uint8_t _binary_third_party_fonts_terminus_powerline_ter_powerline_v22b_psf_start[];
+extern const uint8_t _binary_third_party_fonts_terminus_powerline_ter_powerline_v22b_psf_end[];
+extern const uint8_t _binary_third_party_fonts_terminus_powerline_ter_powerline_v24b_psf_start[];
+extern const uint8_t _binary_third_party_fonts_terminus_powerline_ter_powerline_v24b_psf_end[];
+extern const uint8_t _binary_third_party_fonts_terminus_powerline_ter_powerline_v28b_psf_start[];
+extern const uint8_t _binary_third_party_fonts_terminus_powerline_ter_powerline_v28b_psf_end[];
+extern const uint8_t _binary_third_party_fonts_terminus_powerline_ter_powerline_v32b_psf_start[];
+extern const uint8_t _binary_third_party_fonts_terminus_powerline_ter_powerline_v32b_psf_end[];
+// Gohufont
+extern const uint8_t _binary_third_party_fonts_gohufont_gohufont_uni_11_psf_start[];
+extern const uint8_t _binary_third_party_fonts_gohufont_gohufont_uni_11_psf_end[];
+extern const uint8_t _binary_third_party_fonts_gohufont_gohufont_uni_11b_psf_start[];
+extern const uint8_t _binary_third_party_fonts_gohufont_gohufont_uni_11b_psf_end[];
 
 typedef struct {
     const char* name;
@@ -170,6 +192,18 @@ enum {
     FB_FONT_SPLEEN_16X32 = 7,
     FB_FONT_SPLEEN_32X64 = 8,
     FB_FONT_TAMZEN_10X20 = 9,
+    // Terminus Powerline fonts
+    FB_FONT_TPWL_16B = 10,
+    FB_FONT_TPWL_18B = 11,
+    FB_FONT_TPWL_20B = 12,
+    FB_FONT_TPWL_20N = 13,
+    FB_FONT_TPWL_22B = 14,
+    FB_FONT_TPWL_24B = 15,
+    FB_FONT_TPWL_28B = 16,
+    FB_FONT_TPWL_32B = 17,
+    // Gohufont
+    FB_FONT_GOHU_11 = 18,
+    FB_FONT_GOHU_11B = 19,
 };
 
 static const fb_font_source_t fb_fonts[] = {
@@ -189,6 +223,28 @@ static const fb_font_source_t fb_fonts[] = {
                               _binary_third_party_fonts_spleen_spleen_32x64_psf_end, 0},
     [FB_FONT_TAMZEN_10X20] = {"tamzen-10x20", _binary_third_party_fonts_tamzen_Tamzen10x20_psf_start,
                               _binary_third_party_fonts_tamzen_Tamzen10x20_psf_end, 0},
+    // Terminus Powerline fonts (bold variants, various sizes)
+    [FB_FONT_TPWL_16B] = {"tpwl-8x16-bold", _binary_third_party_fonts_terminus_powerline_ter_powerline_v16b_psf_start,
+                          _binary_third_party_fonts_terminus_powerline_ter_powerline_v16b_psf_end, 0},
+    [FB_FONT_TPWL_18B] = {"tpwl-10x18-bold", _binary_third_party_fonts_terminus_powerline_ter_powerline_v18b_psf_start,
+                          _binary_third_party_fonts_terminus_powerline_ter_powerline_v18b_psf_end, 0},
+    [FB_FONT_TPWL_20B] = {"tpwl-10x20-bold", _binary_third_party_fonts_terminus_powerline_ter_powerline_v20b_psf_start,
+                          _binary_third_party_fonts_terminus_powerline_ter_powerline_v20b_psf_end, 0},
+    [FB_FONT_TPWL_20N] = {"tpwl-10x20", _binary_third_party_fonts_terminus_powerline_ter_powerline_v20n_psf_start,
+                          _binary_third_party_fonts_terminus_powerline_ter_powerline_v20n_psf_end, 0},
+    [FB_FONT_TPWL_22B] = {"tpwl-11x22-bold", _binary_third_party_fonts_terminus_powerline_ter_powerline_v22b_psf_start,
+                          _binary_third_party_fonts_terminus_powerline_ter_powerline_v22b_psf_end, 0},
+    [FB_FONT_TPWL_24B] = {"tpwl-12x24-bold", _binary_third_party_fonts_terminus_powerline_ter_powerline_v24b_psf_start,
+                          _binary_third_party_fonts_terminus_powerline_ter_powerline_v24b_psf_end, 0},
+    [FB_FONT_TPWL_28B] = {"tpwl-14x28-bold", _binary_third_party_fonts_terminus_powerline_ter_powerline_v28b_psf_start,
+                          _binary_third_party_fonts_terminus_powerline_ter_powerline_v28b_psf_end, 0},
+    [FB_FONT_TPWL_32B] = {"tpwl-16x32-bold", _binary_third_party_fonts_terminus_powerline_ter_powerline_v32b_psf_start,
+                          _binary_third_party_fonts_terminus_powerline_ter_powerline_v32b_psf_end, 0},
+    // Gohufont
+    [FB_FONT_GOHU_11] = {"gohufont-6x11", _binary_third_party_fonts_gohufont_gohufont_uni_11_psf_start,
+                         _binary_third_party_fonts_gohufont_gohufont_uni_11_psf_end, 0},
+    [FB_FONT_GOHU_11B] = {"gohufont-6x11-bold", _binary_third_party_fonts_gohufont_gohufont_uni_11b_psf_start,
+                          _binary_third_party_fonts_gohufont_gohufont_uni_11b_psf_end, 0},
 };
 
 static int fb_font_count_value(void) {
@@ -302,7 +358,8 @@ static uint32_t scrollback_view_offset = 0;
 static int scrollback_cols = 0;
 static bool cursor_force_hidden = false;
 
-static const uint8_t vga_palette_rgb[16][3] = {
+// Color theme system - mutable palette that can be switched at runtime
+static uint8_t vga_palette_rgb[16][3] = {
     {0, 0, 0},       // 0 black
     {0, 0, 170},     // 1 blue
     {0, 170, 0},     // 2 green
@@ -320,6 +377,130 @@ static const uint8_t vga_palette_rgb[16][3] = {
     {255, 255, 85},  // 14 yellow
     {255, 255, 255}, // 15 white
 };
+
+// Color theme definitions
+typedef struct {
+    const char* name;
+    uint8_t colors[16][3];  // 16 colors: black, blue, green, cyan, red, magenta, brown, lightgrey, darkgrey, lightblue, lightgreen, lightcyan, lightred, lightmagenta, yellow, white
+} color_theme_t;
+
+static const color_theme_t color_themes[] = {
+    // 0: VGA Classic (default)
+    {"VGA Classic", {
+        {0, 0, 0}, {0, 0, 170}, {0, 170, 0}, {0, 170, 170},
+        {170, 0, 0}, {170, 0, 170}, {170, 85, 0}, {170, 170, 170},
+        {85, 85, 85}, {85, 85, 255}, {85, 255, 85}, {85, 255, 255},
+        {255, 85, 85}, {255, 85, 255}, {255, 255, 85}, {255, 255, 255}
+    }},
+    // 1: Dracula
+    {"Dracula", {
+        {40, 42, 54}, {189, 147, 249}, {80, 250, 123}, {139, 233, 253},
+        {255, 85, 85}, {255, 121, 198}, {241, 250, 140}, {248, 248, 242},
+        {68, 71, 90}, {189, 147, 249}, {80, 250, 123}, {139, 233, 253},
+        {255, 85, 85}, {255, 121, 198}, {241, 250, 140}, {255, 255, 255}
+    }},
+    // 2: Solarized Dark
+    {"Solarized Dark", {
+        {0, 43, 54}, {38, 139, 210}, {133, 153, 0}, {42, 161, 152},
+        {220, 50, 47}, {211, 54, 130}, {181, 137, 0}, {147, 161, 161},
+        {88, 110, 117}, {131, 148, 150}, {88, 110, 117}, {147, 161, 161},
+        {203, 75, 22}, {108, 113, 196}, {238, 232, 213}, {253, 246, 227}
+    }},
+    // 3: Nord
+    {"Nord", {
+        {46, 52, 64}, {129, 161, 193}, {163, 190, 140}, {136, 192, 208},
+        {191, 97, 106}, {180, 142, 173}, {235, 203, 139}, {229, 233, 240},
+        {76, 86, 106}, {129, 161, 193}, {163, 190, 140}, {143, 188, 187},
+        {191, 97, 106}, {180, 142, 173}, {235, 203, 139}, {236, 239, 244}
+    }},
+    // 4: Gruvbox Dark
+    {"Gruvbox Dark", {
+        {40, 40, 40}, {69, 133, 136}, {152, 151, 26}, {104, 157, 106},
+        {204, 36, 29}, {177, 98, 134}, {215, 153, 33}, {168, 153, 132},
+        {146, 131, 116}, {131, 165, 152}, {184, 187, 38}, {142, 192, 124},
+        {251, 73, 52}, {211, 134, 155}, {250, 189, 47}, {235, 219, 178}
+    }},
+    // 5: Monokai
+    {"Monokai", {
+        {39, 40, 34}, {102, 217, 239}, {166, 226, 46}, {102, 217, 239},
+        {249, 38, 114}, {174, 129, 255}, {230, 219, 116}, {248, 248, 242},
+        {117, 113, 94}, {102, 217, 239}, {166, 226, 46}, {102, 217, 239},
+        {249, 38, 114}, {174, 129, 255}, {230, 219, 116}, {249, 248, 245}
+    }},
+    // 6: One Dark
+    {"One Dark", {
+        {40, 44, 52}, {97, 175, 239}, {152, 195, 121}, {86, 182, 194},
+        {224, 108, 117}, {198, 120, 221}, {229, 192, 123}, {171, 178, 191},
+        {92, 99, 112}, {97, 175, 239}, {152, 195, 121}, {86, 182, 194},
+        {224, 108, 117}, {198, 120, 221}, {229, 192, 123}, {255, 255, 255}
+    }},
+    // 7: Tokyo Night
+    {"Tokyo Night", {
+        {26, 27, 38}, {122, 162, 247}, {158, 206, 106}, {125, 207, 255},
+        {247, 118, 142}, {187, 154, 247}, {224, 175, 104}, {169, 177, 214},
+        {65, 72, 104}, {122, 162, 247}, {158, 206, 106}, {125, 207, 255},
+        {247, 118, 142}, {187, 154, 247}, {224, 175, 104}, {192, 202, 245}
+    }},
+    // 8: Catppuccin Mocha
+    {"Catppuccin Mocha", {
+        {30, 30, 46}, {137, 180, 250}, {166, 227, 161}, {148, 226, 213},
+        {243, 139, 168}, {245, 194, 231}, {249, 226, 175}, {186, 194, 222},
+        {69, 71, 90}, {137, 180, 250}, {166, 227, 161}, {148, 226, 213},
+        {243, 139, 168}, {245, 194, 231}, {249, 226, 175}, {205, 214, 244}
+    }},
+    // 9: Cyberpunk
+    {"Cyberpunk", {
+        {13, 2, 33}, {0, 255, 255}, {57, 255, 20}, {0, 255, 255},
+        {255, 0, 128}, {255, 0, 255}, {255, 255, 0}, {200, 200, 255},
+        {60, 20, 100}, {0, 255, 255}, {57, 255, 20}, {0, 255, 255},
+        {255, 0, 128}, {255, 0, 255}, {255, 255, 0}, {255, 255, 255}
+    }},
+    // 10: Matrix
+    {"Matrix", {
+        {0, 10, 0}, {0, 180, 0}, {0, 255, 0}, {0, 200, 100},
+        {200, 0, 0}, {0, 200, 0}, {100, 255, 0}, {0, 200, 0},
+        {0, 80, 0}, {0, 255, 0}, {50, 255, 50}, {100, 255, 100},
+        {255, 100, 100}, {0, 255, 100}, {200, 255, 0}, {0, 255, 0}
+    }},
+    // 11: Retro Amber
+    {"Retro Amber", {
+        {20, 15, 0}, {255, 176, 0}, {255, 200, 0}, {255, 180, 50},
+        {200, 100, 0}, {255, 150, 0}, {255, 160, 0}, {255, 190, 80},
+        {100, 70, 0}, {255, 200, 0}, {255, 220, 50}, {255, 200, 100},
+        {255, 140, 0}, {255, 180, 50}, {255, 230, 100}, {255, 220, 150}
+    }},
+    // 12: Retro Green
+    {"Retro Green", {
+        {0, 20, 0}, {0, 200, 0}, {0, 255, 0}, {50, 220, 50},
+        {200, 50, 0}, {0, 200, 50}, {100, 200, 0}, {100, 255, 100},
+        {0, 100, 0}, {50, 255, 50}, {100, 255, 100}, {150, 255, 150},
+        {255, 100, 50}, {100, 255, 100}, {200, 255, 100}, {200, 255, 200}
+    }},
+    // 13: High Contrast
+    {"High Contrast", {
+        {0, 0, 0}, {0, 0, 255}, {0, 255, 0}, {0, 255, 255},
+        {255, 0, 0}, {255, 0, 255}, {255, 255, 0}, {255, 255, 255},
+        {128, 128, 128}, {128, 128, 255}, {128, 255, 128}, {128, 255, 255},
+        {255, 128, 128}, {255, 128, 255}, {255, 255, 128}, {255, 255, 255}
+    }},
+    // 14: Solarized Light
+    {"Solarized Light", {
+        {253, 246, 227}, {38, 139, 210}, {133, 153, 0}, {42, 161, 152},
+        {220, 50, 47}, {211, 54, 130}, {181, 137, 0}, {88, 110, 117},
+        {238, 232, 213}, {131, 148, 150}, {147, 161, 161}, {147, 161, 161},
+        {203, 75, 22}, {108, 113, 196}, {7, 54, 66}, {0, 43, 54}
+    }},
+    // 15: Palenight
+    {"Palenight", {
+        {41, 45, 62}, {130, 170, 255}, {195, 232, 141}, {137, 221, 255},
+        {240, 113, 120}, {199, 146, 234}, {255, 203, 107}, {166, 172, 205},
+        {103, 110, 149}, {130, 170, 255}, {195, 232, 141}, {137, 221, 255},
+        {240, 113, 120}, {199, 146, 234}, {255, 203, 107}, {255, 255, 255}
+    }},
+};
+
+static int current_theme_index = 0;
+#define COLOR_THEME_COUNT ((int)(sizeof(color_themes) / sizeof(color_themes[0])))
 
 static const uint8_t xterm16_to_vga[16] = {
     VGA_BLACK,         // 0 black
@@ -2210,6 +2391,27 @@ void screen_clear(void) {
     fb_update_mouse_cursor();
 }
 
+void screen_refresh(void) {
+    // Redraw the entire screen with current colors (used after theme change)
+    if (backend == SCREEN_BACKEND_FRAMEBUFFER) {
+        int cols = screen_cols_value;
+        int rows = screen_rows_value;
+
+        // Redraw all cells
+        for (int y = 0; y < rows; y++) {
+            for (int x = 0; x < cols; x++) {
+                fb_cell_t cell = fb_cells[y * cols + x];
+                fb_draw_cell_at(x, y, cell);
+            }
+        }
+
+        // Update cursor
+        update_cursor();
+        fb_update_mouse_cursor();
+        statusbar_refresh();
+    }
+}
+
 void screen_init(uint32_t multiboot_magic, uint32_t* mboot_info) {
     default_fg = xterm_from_vga_index(VGA_WHITE);
     default_bg = xterm_from_vga_index(VGA_BLUE);
@@ -2935,6 +3137,53 @@ int screen_font_set(int index) {
     }
     irq_restore(flags);
     return rc;
+}
+
+// Color theme functions
+int screen_theme_count(void) {
+    return COLOR_THEME_COUNT;
+}
+
+int screen_theme_get_current(void) {
+    return current_theme_index;
+}
+
+int screen_theme_get_info(int index, char* name_out, uint32_t name_cap) {
+    if (index < 0 || index >= COLOR_THEME_COUNT) {
+        return -EINVAL;
+    }
+    if (name_out && name_cap > 0) {
+        const char* n = color_themes[index].name;
+        uint32_t len = 0;
+        while (n[len] && len < name_cap - 1) {
+            name_out[len] = n[len];
+            len++;
+        }
+        name_out[len] = '\0';
+    }
+    return 0;
+}
+
+int screen_theme_set(int index) {
+    if (index < 0 || index >= COLOR_THEME_COUNT) {
+        return -EINVAL;
+    }
+
+    // Copy the theme colors to the active palette
+    for (int i = 0; i < 16; i++) {
+        vga_palette_rgb[i][0] = color_themes[index].colors[i][0];
+        vga_palette_rgb[i][1] = color_themes[index].colors[i][1];
+        vga_palette_rgb[i][2] = color_themes[index].colors[i][2];
+    }
+    current_theme_index = index;
+
+    // Rebuild the xterm palette and refresh the display
+    if (backend == SCREEN_BACKEND_FRAMEBUFFER) {
+        fb_xterm_palette_ready = false;
+        fb_build_xterm_palette();
+        screen_refresh();
+    }
+    return 0;
 }
 
 static inline bool fb_xy_in_bounds(int32_t x, int32_t y) {

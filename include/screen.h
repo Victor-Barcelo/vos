@@ -97,6 +97,15 @@ int screen_font_get_current(void);
 int screen_font_get_info(int index, screen_font_info_t* out);
 int screen_font_set(int index);
 
+// Color theme support
+int screen_theme_count(void);
+int screen_theme_get_current(void);
+int screen_theme_get_info(int index, char* name_out, uint32_t name_cap);
+int screen_theme_set(int index);
+
+// Refresh screen (redraw all cells with current colors)
+void screen_refresh(void);
+
 // Simple framebuffer pixel primitives (no-op in VGA text mode).
 bool screen_graphics_clear(uint8_t bg_vga);
 bool screen_graphics_putpixel(int32_t x, int32_t y, uint8_t vga_color);

@@ -26,7 +26,7 @@
 int vi_hidch;		/* show hidden chars */
 int vi_lncol;		/* line numbers cursor offset */
 char vi_msg[512];	/* current message */
-static int vi_lnnum = 1;	/* line numbers (1 = enabled by default) */
+static int vi_lnnum = 2;	/* line numbers: 0=off, 2=absolute only (default) */
 static int vi_mod;	/* screen should be redrawn -
 			bit 1: whole screen, bit 2: current line, bit 3: update vi_col) */
 static char vi_word_m[] = "\0leEwW";	/* line word navigation */
@@ -172,37 +172,20 @@ static void vi_drawrow(int row)
 	if (!s)
 		s = row ? ch : ch+1;
 	else if (lnnum && xled) {
-		char tmp[32], tmp1[32], *p;
-		c = tmp, i = 0, i1 = 0;
-		if (lnnum == 1 || lnnum & 2) {
-			c = nvi_itoa(row+1-vi_rshift, tmp);
-			*c++ = ' ';
-			i = snprintf(0, 0, "%d", xtop+xrows);
-		}
-		p = c;
-		if (lnnum == 1 || lnnum & 4 || lnnum & 8) {
-			c = nvi_itoa(abs(xrow-row+vi_rshift), c);
-			*c++ = ' ';
-			i1 = snprintf(0, 0, "%d", xrows);
-		}
-		*c = '\0';
-		l1 = (c - tmp) + (i+i1 - (strlen(tmp) - !!i - !!i1));
+		char tmp[16];
+		int linenum = row + 1 - vi_rshift;
+		int maxline = lbuf_len(xb);
+		int width = 1;
+		/* calculate width needed for largest line number */
+		while (maxline >= 10) { width++; maxline /= 10; }
+		if (width < 3) width = 3;  /* minimum 3 chars */
+		/* format: right-aligned number + space separator */
+		snprintf(tmp, sizeof(tmp), "%*d ", width, linenum);
+		l1 = strlen(tmp);
 		vi_lncol = dir_context(s) < 0 ? 0 : l1;
-		memset(c, ' ', l1 - (c - tmp));
-		c[l1 - (c - tmp)] = '\0';
 		led_crender(s, row - xtop, l1, xleft, xleft + xcols - l1)
 		preserve(int, syn_blockhl, syn_blockhl = -1;)
 		syn_setft(nn_ft);
-		if ((lnnum == 1 || lnnum & 4) && !xleft && vi_lncol) {
-			for (i1 = 0; i1 < rstate->cmax &&
-					memchr(" \t", *rstate->chrs[ren_off(s, i1)], 2);)
-				i1 = ren_next(s, i1, 1);
-			i1 -= (nvi_itoa(abs(xrow-row+vi_rshift), tmp1) - tmp1)+1;
-			if (i1 >= 0) {
-				memset(p, ' ', strlen(p));
-				RS(2, led_prender(tmp1, row - xtop, l1+i1, 0, l1))
-			}
-		}
 		RS(2, led_prender(tmp, row - xtop, 0, 0, l1))
 		syn_setft(xb_ft);
 		restore(syn_blockhl)
@@ -1212,11 +1195,6 @@ void vi(int init)
 		vi_ybuf = vi_yankbuf();
 		vi_arg = vi_prefix();
 		term_dec()
-		if (vi_lnnum == 1) {
-			vi_lnnum = 0;
-			vi_lncol = 0;
-			vi_mod |= 1;
-		}
 		if (vi_msg[0]) {
 			vi_msg[0] = '\0';
 			if (!vi_status)
@@ -1354,10 +1332,8 @@ void vi(int init)
 				writexb = cs ? xb : NULL;
 				break;
 			case '#':
-				if (vi_lnnum & vi_arg)
-					vi_lnnum = vi_lnnum & ~vi_arg;
-				else
-					vi_lnnum = vi_arg ? vi_lnnum | vi_arg : !vi_lnnum;
+				/* simple toggle: 0 = off, 2 = on */
+				vi_lnnum = vi_lnnum ? 0 : 2;
 				vi_lncol = 0;
 				vi_mod |= 1;
 				break;
@@ -1613,6 +1589,26 @@ void vi(int init)
 				} else if (k == '~' || k == 'u' || k == 'U') {
 					vc_motion(k);
 					goto rep;
+				} else if (k == 'm') {
+					/* gm - :make (compile) */
+					ex_exec("make");
+					vi_mod |= 1;
+				} else if (k == 'r') {
+					/* gr - :run (compile and run) */
+					ex_exec("run");
+					vi_mod |= 1;
+				} else if (k == 'n') {
+					/* gn - :cn (next error) */
+					ex_exec("cn");
+					vi_mod |= 1;
+				} else if (k == 'p') {
+					/* gp - :cp (previous error) */
+					ex_exec("cp");
+					vi_mod |= 1;
+				} else if (k == 'l') {
+					/* gl - :cl (list errors) */
+					ex_exec("cl");
+					vi_mod |= 1;
 				}
 				break;
 			case 'x':

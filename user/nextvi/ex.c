@@ -48,6 +48,86 @@ static char xirerr[] = "invalid range";
 static char xrnferr[] = "range not found";
 static char *xrerr;
 
+/* error list for :make/:cn/:cp */
+#define ERRLIST_MAX 64
+static struct {
+	char *file;
+	int line;
+	char *msg;
+} errlist[ERRLIST_MAX];
+static int errlist_n;		/* number of errors */
+static int errlist_cur;		/* current error index */
+char *makeprg = "tcc";		/* :make program */
+char *runprg = "tcc -run";	/* :run program */
+
+static void errlist_clear(void)
+{
+	for (int i = 0; i < errlist_n; i++) {
+		free(errlist[i].file);
+		free(errlist[i].msg);
+	}
+	errlist_n = 0;
+	errlist_cur = 0;
+}
+
+/* parse "file:line: message" or "file:line:col: message" */
+static void errlist_parse(char *output)
+{
+	char *s = output;
+	errlist_clear();
+	while (*s && errlist_n < ERRLIST_MAX) {
+		char *line_start = s;
+		char *colon1 = NULL, *colon2 = NULL;
+		/* find file:line pattern */
+		while (*s && *s != '\n') {
+			if (*s == ':' && !colon1)
+				colon1 = s;
+			else if (*s == ':' && colon1 && !colon2)
+				colon2 = s;
+			s++;
+		}
+		if (colon1 && colon2 && colon2 > colon1 + 1) {
+			/* check if between colons is a number */
+			char *p = colon1 + 1;
+			int is_line = 1;
+			while (p < colon2) {
+				if (*p < '0' || *p > '9') {
+					is_line = 0;
+					break;
+				}
+				p++;
+			}
+			if (is_line && colon1 > line_start) {
+				int flen = colon1 - line_start;
+				errlist[errlist_n].file = emalloc(flen + 1);
+				memcpy(errlist[errlist_n].file, line_start, flen);
+				errlist[errlist_n].file[flen] = '\0';
+				errlist[errlist_n].line = atoi(colon1 + 1);
+				/* skip optional column number */
+				char *msg_start = colon2 + 1;
+				if (*msg_start == ' ')
+					msg_start++;
+				else if (*msg_start >= '0' && *msg_start <= '9') {
+					while (*msg_start && *msg_start != ':' && *msg_start != '\n')
+						msg_start++;
+					if (*msg_start == ':')
+						msg_start++;
+					if (*msg_start == ' ')
+						msg_start++;
+				}
+				int mlen = (*s ? s : s) - msg_start;
+				if (mlen < 0) mlen = 0;
+				errlist[errlist_n].msg = emalloc(mlen + 1);
+				memcpy(errlist[errlist_n].msg, msg_start, mlen);
+				errlist[errlist_n].msg[mlen] = '\0';
+				errlist_n++;
+			}
+		}
+		if (*s == '\n')
+			s++;
+	}
+}
+
 static int rstrcmp(const char *s1, const char *s2, int l1, int l2)
 {
 	if (l1 != l2 || !l1)
@@ -1285,6 +1365,148 @@ _EO(left,
 	return NULL;
 )
 
+/* :make - compile current file */
+static void *ec_make(char *loc, char *cmd, char *arg)
+{
+	char cmdstr[512];
+	int status = 0;
+	sbuf *out;
+	/* save current file first */
+	if (xb && lbuf_len(xb) && ex_buf->path[0])
+		ec_write("", "w", "");
+	/* build command: makeprg + args + current file */
+	if (*arg)
+		snprintf(cmdstr, sizeof(cmdstr), "%s %s", makeprg, arg);
+	else if (ex_buf->path[0])
+		snprintf(cmdstr, sizeof(cmdstr), "%s %s", makeprg, ex_buf->path);
+	else {
+		snprintf(vi_msg, sizeof(vi_msg), "no file");
+		return NULL;
+	}
+	/* run compiler and capture output */
+	out = cmd_pipe(cmdstr, NULL, 1, &status);
+	if (out) {
+		errlist_parse(out->s);
+		/* show output */
+		if (out->s_n > 0) {
+			ex_print(out->s, msg_ft)
+		}
+		sbuf_free(out)
+	}
+	if (errlist_n > 0) {
+		snprintf(vi_msg, sizeof(vi_msg), "%d error(s). Use :cn/:cp to navigate",
+			errlist_n);
+		/* jump to first error */
+		errlist_cur = 0;
+		if (errlist[0].file) {
+			int idx = bufs_find(errlist[0].file, strlen(errlist[0].file));
+			if (idx >= 0)
+				bufs_switch(idx);
+			else
+				ec_edit("", "e", errlist[0].file);
+			xrow = errlist[0].line > 0 ? errlist[0].line - 1 : 0;
+			xoff = 0;
+		}
+	} else if (status == 0) {
+		snprintf(vi_msg, sizeof(vi_msg), "build successful");
+	}
+	return NULL;
+}
+
+/* :run - compile and run current file */
+static void *ec_run(char *loc, char *cmd, char *arg)
+{
+	char cmdstr[512];
+	/* save current file first */
+	if (xb && lbuf_len(xb) && ex_buf->path[0])
+		ec_write("", "w", "");
+	/* build command: runprg + args + current file */
+	if (*arg)
+		snprintf(cmdstr, sizeof(cmdstr), "%s %s", runprg, arg);
+	else if (ex_buf->path[0])
+		snprintf(cmdstr, sizeof(cmdstr), "%s %s", runprg, ex_buf->path);
+	else {
+		snprintf(vi_msg, sizeof(vi_msg), "no file");
+		return NULL;
+	}
+	/* run and show output */
+	return ex_pipeout(cmdstr, NULL);
+}
+
+/* :cn - next error */
+static void *ec_cn(char *loc, char *cmd, char *arg)
+{
+	if (errlist_n == 0) {
+		snprintf(vi_msg, sizeof(vi_msg), "no errors");
+		return NULL;
+	}
+	errlist_cur++;
+	if (errlist_cur >= errlist_n)
+		errlist_cur = 0;
+	if (errlist[errlist_cur].file) {
+		int idx = bufs_find(errlist[errlist_cur].file,
+			strlen(errlist[errlist_cur].file));
+		if (idx >= 0)
+			bufs_switch(idx);
+		else
+			ec_edit("", "e", errlist[errlist_cur].file);
+		xrow = errlist[errlist_cur].line > 0 ? errlist[errlist_cur].line - 1 : 0;
+		xoff = 0;
+		syn_setft(xb_ft);
+	}
+	snprintf(vi_msg, sizeof(vi_msg), "(%d/%d) %s",
+		errlist_cur + 1, errlist_n,
+		errlist[errlist_cur].msg ? errlist[errlist_cur].msg : "");
+	return NULL;
+}
+
+/* :cp - previous error */
+static void *ec_cp(char *loc, char *cmd, char *arg)
+{
+	if (errlist_n == 0) {
+		snprintf(vi_msg, sizeof(vi_msg), "no errors");
+		return NULL;
+	}
+	errlist_cur--;
+	if (errlist_cur < 0)
+		errlist_cur = errlist_n - 1;
+	if (errlist[errlist_cur].file) {
+		int idx = bufs_find(errlist[errlist_cur].file,
+			strlen(errlist[errlist_cur].file));
+		if (idx >= 0)
+			bufs_switch(idx);
+		else
+			ec_edit("", "e", errlist[errlist_cur].file);
+		xrow = errlist[errlist_cur].line > 0 ? errlist[errlist_cur].line - 1 : 0;
+		xoff = 0;
+		syn_setft(xb_ft);
+	}
+	snprintf(vi_msg, sizeof(vi_msg), "(%d/%d) %s",
+		errlist_cur + 1, errlist_n,
+		errlist[errlist_cur].msg ? errlist[errlist_cur].msg : "");
+	return NULL;
+}
+
+/* :cl - list errors */
+static void *ec_cl(char *loc, char *cmd, char *arg)
+{
+	if (errlist_n == 0) {
+		snprintf(vi_msg, sizeof(vi_msg), "no errors");
+		return NULL;
+	}
+	for (int i = 0; i < errlist_n; i++) {
+		char line[256];
+		snprintf(line, sizeof(line), "%c%d: %s:%d: %s",
+			i == errlist_cur ? '>' : ' ',
+			i + 1,
+			errlist[i].file ? errlist[i].file : "?",
+			errlist[i].line,
+			errlist[i].msg ? errlist[i].msg : "");
+		ex_print(line, msg_ft)
+	}
+	return NULL;
+}
+
 #undef EO
 #define EO(opt) {#opt, eo_##opt}
 
@@ -1331,10 +1553,12 @@ static struct excmd {
 	{"g!", ec_glob},
 	{"g", ec_glob},
 	EO(mpt),
+	{"make", ec_make},
 	{"m", ec_mark},
 	{"q!", ec_quit},
 	{"q", ec_quit},
 	{"reg", ec_regprint},
+	{"run", ec_run},
 	{"rd", ec_undoredo},
 	{"r", ec_read},
 	{"wq!", ec_write},
@@ -1355,6 +1579,9 @@ static struct excmd {
 	{"ya", ec_yank},
 	{"cm!", ec_cmap},
 	{"cm", ec_cmap},
+	{"cn", ec_cn},
+	{"cp", ec_cp},
+	{"cl", ec_cl},
 	{"cd", ec_chdir},
 	{"c", ec_insert},
 	{"j", ec_join},
@@ -1516,6 +1743,45 @@ void ex(void)
 	xgrec--;
 }
 
+/* read config file and execute each line as ex command */
+static void ex_readrc(const char *path)
+{
+	int fd = open(path, O_RDONLY);
+	if (fd < 0)
+		return;
+	struct stat st;
+	if (fstat(fd, &st) < 0 || st.st_size <= 0) {
+		close(fd);
+		return;
+	}
+	char *buf = emalloc(st.st_size + 1);
+	int n = read(fd, buf, st.st_size);
+	close(fd);
+	if (n <= 0) {
+		free(buf);
+		return;
+	}
+	buf[n] = '\0';
+	/* execute each line */
+	char *line = buf;
+	while (*line) {
+		char *end = line;
+		while (*end && *end != '\n')
+			end++;
+		int len = end - line;
+		if (len > 0 && line[0] != '"') {  /* skip comment lines */
+			char cmd[512];
+			if (len >= sizeof(cmd))
+				len = sizeof(cmd) - 1;
+			memcpy(cmd, line, len);
+			cmd[len] = '\0';
+			ex_exec(cmd);
+		}
+		line = *end ? end + 1 : end;
+	}
+	free(buf);
+}
+
 void ex_init(char **files, int n)
 {
 	xbufsalloc = MAX(n, xbufsalloc);
@@ -1527,6 +1793,10 @@ void ex_init(char **files, int n)
 	} while (--n > 0);
 	xmpt = 0;
 	xvis &= ~8;
+	/* read config file - try writable locations first */
+	ex_readrc("/disk/.virc");
+	ex_readrc("/disk/etc/virc");
+	/* EXINIT overrides config file */
 	if ((s = getenv("EXINIT")))
 		ex_command(s)
 }

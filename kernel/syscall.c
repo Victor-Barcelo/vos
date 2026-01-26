@@ -99,6 +99,94 @@ enum {
     SYS_IRQ_STATS = 75,
     SYS_SCHED_STATS = 76,
     SYS_DESCRIPTOR_INFO = 77,
+    SYS_SYSCALL_STATS = 78,
+    SYS_MAX = 79,
+};
+
+// Syscall counters - track how many times each syscall is invoked
+static uint32_t syscall_counts[SYS_MAX] = {0};
+
+// Syscall name table for introspection
+static const char* syscall_names[SYS_MAX] = {
+    [SYS_WRITE] = "write",
+    [SYS_EXIT] = "exit",
+    [SYS_YIELD] = "yield",
+    [SYS_SLEEP] = "sleep",
+    [SYS_WAIT] = "wait",
+    [SYS_KILL] = "kill",
+    [SYS_SBRK] = "sbrk",
+    [SYS_READFILE] = "readfile",
+    [SYS_OPEN] = "open",
+    [SYS_READ] = "read",
+    [SYS_CLOSE] = "close",
+    [SYS_LSEEK] = "lseek",
+    [SYS_FSTAT] = "fstat",
+    [SYS_STAT] = "stat",
+    [SYS_MKDIR] = "mkdir",
+    [SYS_READDIR] = "readdir",
+    [SYS_CHDIR] = "chdir",
+    [SYS_GETCWD] = "getcwd",
+    [SYS_IOCTL] = "ioctl",
+    [SYS_UNLINK] = "unlink",
+    [SYS_RENAME] = "rename",
+    [SYS_RMDIR] = "rmdir",
+    [SYS_TRUNCATE] = "truncate",
+    [SYS_FTRUNCATE] = "ftruncate",
+    [SYS_FSYNC] = "fsync",
+    [SYS_DUP] = "dup",
+    [SYS_DUP2] = "dup2",
+    [SYS_PIPE] = "pipe",
+    [SYS_GETPID] = "getpid",
+    [SYS_SPAWN] = "spawn",
+    [SYS_UPTIME_MS] = "uptime_ms",
+    [SYS_RTC_GET] = "rtc_get",
+    [SYS_RTC_SET] = "rtc_set",
+    [SYS_TASK_COUNT] = "task_count",
+    [SYS_TASK_INFO] = "task_info",
+    [SYS_SCREEN_IS_FB] = "screen_is_fb",
+    [SYS_GFX_CLEAR] = "gfx_clear",
+    [SYS_GFX_PSET] = "gfx_pset",
+    [SYS_GFX_LINE] = "gfx_line",
+    [SYS_MEM_TOTAL_KB] = "mem_total_kb",
+    [SYS_CPU_VENDOR] = "cpu_vendor",
+    [SYS_CPU_BRAND] = "cpu_brand",
+    [SYS_VFS_FILE_COUNT] = "vfs_file_count",
+    [SYS_FONT_COUNT] = "font_count",
+    [SYS_FONT_GET] = "font_get",
+    [SYS_FONT_INFO] = "font_info",
+    [SYS_FONT_SET] = "font_set",
+    [SYS_GFX_BLIT_RGBA] = "gfx_blit_rgba",
+    [SYS_MMAP] = "mmap",
+    [SYS_MUNMAP] = "munmap",
+    [SYS_MPROTECT] = "mprotect",
+    [SYS_GETUID] = "getuid",
+    [SYS_SETUID] = "setuid",
+    [SYS_GETGID] = "getgid",
+    [SYS_SETGID] = "setgid",
+    [SYS_SIGNAL] = "signal",
+    [SYS_SIGRETURN] = "sigreturn",
+    [SYS_SIGPROCMASK] = "sigprocmask",
+    [SYS_GETPPID] = "getppid",
+    [SYS_GETPGRP] = "getpgrp",
+    [SYS_SETPGID] = "setpgid",
+    [SYS_FCNTL] = "fcntl",
+    [SYS_ALARM] = "alarm",
+    [SYS_LSTAT] = "lstat",
+    [SYS_SYMLINK] = "symlink",
+    [SYS_READLINK] = "readlink",
+    [SYS_CHMOD] = "chmod",
+    [SYS_FCHMOD] = "fchmod",
+    [SYS_FORK] = "fork",
+    [SYS_EXECVE] = "execve",
+    [SYS_WAITPID] = "waitpid",
+    [SYS_STATFS] = "statfs",
+    [SYS_PMM_INFO] = "pmm_info",
+    [SYS_HEAP_INFO] = "heap_info",
+    [SYS_TIMER_INFO] = "timer_info",
+    [SYS_IRQ_STATS] = "irq_stats",
+    [SYS_SCHED_STATS] = "sched_stats",
+    [SYS_DESCRIPTOR_INFO] = "desc_info",
+    [SYS_SYSCALL_STATS] = "syscall_stats",
 };
 
 typedef struct vos_task_info_user {
@@ -160,6 +248,13 @@ typedef struct vos_descriptor_info_user {
     uint32_t idt_entries;
     uint32_t tss_esp0;
 } vos_descriptor_info_user_t;
+
+#define VOS_SYSCALL_STATS_MAX 80
+typedef struct vos_syscall_stats_user {
+    uint32_t num_syscalls;               // Total number of syscalls supported
+    uint32_t counts[VOS_SYSCALL_STATS_MAX]; // Count for each syscall
+    char names[VOS_SYSCALL_STATS_MAX][16];  // Name of each syscall (truncated)
+} vos_syscall_stats_user_t;
 
 static int32_t copy_kernel_string_to_user(char* dst_user, uint32_t cap, const char* src) {
     if (cap == 0) {
@@ -277,6 +372,12 @@ interrupt_frame_t* syscall_handle(interrupt_frame_t* frame) {
     }
 
     uint32_t num = frame->eax;
+
+    // Track syscall invocation count
+    if (num < SYS_MAX) {
+        syscall_counts[num]++;
+    }
+
     switch (num) {
         case SYS_WRITE: {
             int32_t fd = (int32_t)frame->ebx;
@@ -1243,6 +1344,31 @@ interrupt_frame_t* syscall_handle(interrupt_frame_t* frame) {
             idt_get_info(&info.idt_base, &info.idt_entries);
             info.tss_esp0 = tss_get_esp0();
             if (!copy_to_user(info_user, &info, sizeof(info))) {
+                frame->eax = (uint32_t)-EFAULT;
+                return frame;
+            }
+            frame->eax = 0;
+            return frame;
+        }
+        case SYS_SYSCALL_STATS: {
+            vos_syscall_stats_user_t* stats_user = (vos_syscall_stats_user_t*)frame->ebx;
+            if (!stats_user) {
+                frame->eax = (uint32_t)-EFAULT;
+                return frame;
+            }
+            vos_syscall_stats_user_t stats;
+            memset(&stats, 0, sizeof(stats));
+            stats.num_syscalls = SYS_MAX;
+            for (uint32_t i = 0; i < SYS_MAX && i < VOS_SYSCALL_STATS_MAX; i++) {
+                stats.counts[i] = syscall_counts[i];
+                if (syscall_names[i]) {
+                    strncpy(stats.names[i], syscall_names[i], 15);
+                    stats.names[i][15] = '\0';
+                } else {
+                    stats.names[i][0] = '\0';
+                }
+            }
+            if (!copy_to_user(stats_user, &stats, sizeof(stats))) {
                 frame->eax = (uint32_t)-EFAULT;
                 return frame;
             }

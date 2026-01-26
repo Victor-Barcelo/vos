@@ -26,6 +26,7 @@ typedef enum {
     VIEW_MEMORY,
     VIEW_PROCESSES,
     VIEW_INTERRUPTS,
+    VIEW_SYSCALLS,
     VIEW_HELP,
     VIEW_COUNT
 } view_mode_t;
@@ -103,15 +104,15 @@ static void print_bar(uint32_t used, uint32_t total, int width) {
 static void print_header(void) {
     printf("%s", CLR_TITLE);
     puts("================================================================================");
-    printf("          VOS System Viewer v1.0  |  ");
-    printf("%s'q'%s quit  %s'Tab'%s cycle views  %s'1-5'%s jump\n",
+    printf("          VOS System Viewer v1.1  |  ");
+    printf("%s'q'%s quit  %s'Tab'%s cycle views  %s'1-6'%s jump\n",
            CLR_VALUE, CLR_TITLE, CLR_VALUE, CLR_TITLE, CLR_VALUE, CLR_TITLE);
     puts("================================================================================");
     printf("%s", CLR_RESET);
 
     // Show current view indicator
     printf("  View: ");
-    const char* views[] = {"[1]Overview", "[2]Memory", "[3]Processes", "[4]Interrupts", "[5]Help"};
+    const char* views[] = {"[1]Overview", "[2]Memory", "[3]Procs", "[4]IRQ", "[5]Syscalls", "[6]Help"};
     for (int i = 0; i < VIEW_COUNT; i++) {
         if (i == (int)current_view) {
             printf("%s%s%s ", CLR_HEADER, views[i], CLR_RESET);
@@ -352,6 +353,68 @@ static void render_interrupt_view(void) {
     printf("  %sTotal Ticks:%s     %lu\n", CLR_LABEL, CLR_RESET, (unsigned long)timer.ticks);
 }
 
+// Previous syscall counts for delta calculation
+static vos_syscall_stats_t prev_syscall_stats = {0};
+static int have_prev_stats = 0;
+
+static void render_syscall_view(void) {
+    vos_syscall_stats_t stats;
+    sys_syscall_stats(&stats);
+
+    printf("%s=== SYSCALL ACTIVITY ===%s\n\n", CLR_HEADER, CLR_RESET);
+    printf("  Watch syscalls being called in real-time!\n");
+    printf("  Compile & run a C program with TCC to see syscalls.\n\n");
+
+    // Calculate total calls
+    uint32_t total = 0;
+    for (uint32_t i = 0; i < stats.num_syscalls; i++) {
+        total += stats.counts[i];
+    }
+    printf("  %sTotal Syscalls:%s %lu\n\n", CLR_LABEL, CLR_RESET, (unsigned long)total);
+
+    // Show active syscalls (those with non-zero counts), sorted by activity
+    printf("  %s#    Name            Count       Delta%s\n", CLR_DIM, CLR_RESET);
+    printf("  %s---  --------------  ----------  ------%s\n", CLR_DIM, CLR_RESET);
+
+    // Find and display syscalls with activity (most recent first by showing deltas)
+    int displayed = 0;
+    for (uint32_t i = 0; i < stats.num_syscalls && displayed < 20; i++) {
+        if (stats.counts[i] > 0 && stats.names[i][0] != '\0') {
+            uint32_t delta = 0;
+            if (have_prev_stats && i < prev_syscall_stats.num_syscalls) {
+                delta = stats.counts[i] - prev_syscall_stats.counts[i];
+            }
+
+            const char* color = CLR_VALUE;
+            const char* delta_color = CLR_DIM;
+            if (delta > 0) {
+                color = CLR_GOOD;       // Green for recently active
+                delta_color = CLR_GOOD;
+            }
+
+            printf("  %s%-3lu  %-14s  %10lu%s  ",
+                   color, (unsigned long)i, stats.names[i],
+                   (unsigned long)stats.counts[i], CLR_RESET);
+
+            if (delta > 0) {
+                printf("%s+%lu%s", delta_color, (unsigned long)delta, CLR_RESET);
+            }
+            puts("");
+            displayed++;
+        }
+    }
+
+    if (displayed == 0) {
+        printf("  %sNo syscalls recorded yet.%s\n", CLR_DIM, CLR_RESET);
+    }
+
+    // Save for next delta calculation
+    prev_syscall_stats = stats;
+    have_prev_stats = 1;
+
+    printf("\n  %sTip:%s Run 'tcc -run /bin/hello.c' to see syscalls!\n", CLR_LABEL, CLR_RESET);
+}
+
 static void render_help_view(void) {
     printf("%s=== VOS SYSTEM INTERNALS EXPLAINED ===%s\n\n", CLR_HEADER, CLR_RESET);
 
@@ -384,7 +447,13 @@ static void render_help_view(void) {
     printf("%s[DESCRIPTORS]%s\n", CLR_LABEL, CLR_RESET);
     puts("  GDT = Global Descriptor Table (memory segments for ring 0/3)");
     puts("  IDT = Interrupt Descriptor Table (256 interrupt handlers)");
-    puts("  TSS = Task State Segment (kernel stack for syscalls/interrupts)");
+    puts("  TSS = Task State Segment (kernel stack for syscalls/interrupts)\n");
+
+    printf("%s[SYSCALLS]%s\n", CLR_LABEL, CLR_RESET);
+    puts("  User programs can't directly access hardware or kernel memory.");
+    puts("  They use 'int 0x80' to request services from the kernel.");
+    puts("  Examples: write() to print, read() to get input, fork() to spawn.");
+    puts("  View [5] shows syscalls in real-time - compile a program to see!");
 }
 
 int main(int argc, char** argv) {
@@ -415,7 +484,7 @@ int main(int argc, char** argv) {
             if (c == '\t') {
                 current_view = (view_mode_t)((current_view + 1) % VIEW_COUNT);
             }
-            if (c >= '1' && c <= '5') {
+            if (c >= '1' && c <= '6') {
                 current_view = (view_mode_t)(c - '1');
             }
         }
@@ -429,6 +498,7 @@ int main(int argc, char** argv) {
             case VIEW_MEMORY:     render_memory_view(); break;
             case VIEW_PROCESSES:  render_process_view(); break;
             case VIEW_INTERRUPTS: render_interrupt_view(); break;
+            case VIEW_SYSCALLS:   render_syscall_view(); break;
             case VIEW_HELP:       render_help_view(); break;
             default: break;
         }

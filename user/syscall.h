@@ -79,6 +79,13 @@ typedef struct vos_descriptor_info {
     uint32_t tss_esp0;
 } vos_descriptor_info_t;
 
+#define VOS_SYSCALL_STATS_MAX 80
+typedef struct vos_syscall_stats {
+    uint32_t num_syscalls;                  // Total number of syscalls supported
+    uint32_t counts[VOS_SYSCALL_STATS_MAX]; // Count for each syscall
+    char names[VOS_SYSCALL_STATS_MAX][16];  // Name of each syscall
+} vos_syscall_stats_t;
+
 enum {
     SYS_WRITE = 0,
     SYS_EXIT = 1,
@@ -158,6 +165,7 @@ enum {
     SYS_IRQ_STATS = 75,
     SYS_SCHED_STATS = 76,
     SYS_DESCRIPTOR_INFO = 77,
+    SYS_SYSCALL_STATS = 78,
 };
 
 static inline int sys_write(int fd, const char* buf, uint32_t len) {
@@ -706,6 +714,17 @@ static inline int sys_descriptor_info(vos_descriptor_info_t* out) {
         "int $0x80"
         : "=a"(ret)
         : "a"(SYS_DESCRIPTOR_INFO), "b"(out)
+        : "memory"
+    );
+    return ret;
+}
+
+static inline int sys_syscall_stats(vos_syscall_stats_t* out) {
+    int ret;
+    __asm__ volatile (
+        "int $0x80"
+        : "=a"(ret)
+        : "a"(SYS_SYSCALL_STATS), "b"(out)
         : "memory"
     );
     return ret;

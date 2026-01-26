@@ -12,6 +12,11 @@ static uint32_t frames_free = 0;
 static uint32_t early_reserved_end = 0;
 static uint32_t alloc_cursor = 0;
 
+// Debug counters for memory allocation tracking
+static uint32_t alloc_count = 0;    // successful allocations
+static uint32_t free_count = 0;     // successful frees
+static uint32_t fail_count = 0;     // allocation failures (out of memory)
+
 static bool bitmap_test(uint32_t frame) {
     uint32_t byte = frame / 8u;
     uint32_t bit = frame % 8u;
@@ -227,17 +232,20 @@ uint32_t pmm_alloc_frame(void) {
         if (!bitmap_test(frame)) {
             mark_frame_used(frame);
             alloc_cursor = (frame == 0) ? (frames_total - 1u) : (frame - 1u);
+            alloc_count++;
             return frame * PAGE_SIZE;
         }
 
         alloc_cursor = (alloc_cursor == 0) ? (frames_total - 1u) : (alloc_cursor - 1u);
     }
+    fail_count++;
     return 0;
 }
 
 void pmm_free_frame(uint32_t paddr) {
     uint32_t frame = paddr / PAGE_SIZE;
     mark_frame_free(frame);
+    free_count++;
 }
 
 uint32_t pmm_total_frames(void) {
@@ -246,4 +254,16 @@ uint32_t pmm_total_frames(void) {
 
 uint32_t pmm_free_frames(void) {
     return frames_free;
+}
+
+uint32_t pmm_alloc_count(void) {
+    return alloc_count;
+}
+
+uint32_t pmm_free_count(void) {
+    return free_count;
+}
+
+uint32_t pmm_fail_count(void) {
+    return fail_count;
 }

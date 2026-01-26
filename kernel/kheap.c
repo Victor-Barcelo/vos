@@ -19,6 +19,11 @@ static uint32_t heap_end = 0;
 static uint32_t heap_mapped_end = 0;
 static block_header_t* free_list = NULL;
 
+// Debug counters for heap allocation tracking
+static uint32_t heap_alloc_count = 0;   // successful allocations
+static uint32_t heap_free_count = 0;    // successful frees
+static uint32_t heap_fail_count = 0;    // allocation failures
+
 static uint32_t align_up(uint32_t v, uint32_t a) {
     return (v + a - 1u) & ~(a - 1u);
 }
@@ -235,6 +240,7 @@ void* kmalloc(size_t size) {
 
                 b->used = 1;
                 write_footer(b);
+                heap_alloc_count++;
                 return (uint8_t*)b + sizeof(block_header_t);
             }
             b = b->next_free;
@@ -242,6 +248,7 @@ void* kmalloc(size_t size) {
 
         // No free block large enough; grow the heap and retry.
         if (!heap_grow(total)) {
+            heap_fail_count++;
             return NULL;
         }
     }
@@ -282,6 +289,7 @@ void kfree(void* ptr) {
     write_footer(b);
     b = coalesce(b);
     free_list_insert(b);
+    heap_free_count++;
 }
 
 void kheap_get_info(uint32_t* out_base, uint32_t* out_end,
@@ -308,4 +316,16 @@ void kheap_get_info(uint32_t* out_base, uint32_t* out_end,
     if (out_free_blocks) {
         *out_free_blocks = free_blocks;
     }
+}
+
+uint32_t kheap_alloc_count(void) {
+    return heap_alloc_count;
+}
+
+uint32_t kheap_free_count(void) {
+    return heap_free_count;
+}
+
+uint32_t kheap_fail_count(void) {
+    return heap_fail_count;
 }

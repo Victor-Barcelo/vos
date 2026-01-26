@@ -12,5 +12,10 @@ void pmm_free_frame(uint32_t paddr);
 uint32_t pmm_total_frames(void);
 uint32_t pmm_free_frames(void);
 
+// Debug counters for memory allocation tracking
+uint32_t pmm_alloc_count(void);
+uint32_t pmm_free_count(void);
+uint32_t pmm_fail_count(void);
+
 #endif
 

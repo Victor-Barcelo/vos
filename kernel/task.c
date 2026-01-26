@@ -207,7 +207,7 @@ static bool enabled = false;
 static uint32_t next_id = 1;
 static uint32_t tick_div = 0;
 static uint32_t next_kstack_region = KSTACK_REGION_BASE;
-static uint32_t tty_foreground_pgid = 0;
+static volatile uint32_t tty_foreground_pgid = 0;  // volatile: accessed from interrupts
 static bool reap_pending = false;
 static uint32_t context_switch_count = 0;
 
@@ -3027,6 +3027,9 @@ int32_t tasking_spawn_exec(const char* path, const char* const* argv, uint32_t a
     kfree(image);
 
     if (!ok) {
+        // Note: user_dir allocated via early_alloc cannot be freed.
+        // This is a known limitation - page directories are never reclaimed.
+        free_user_pages_in_directory(user_dir);  // At least free the user pages
         return -ENOEXEC;
     }
 

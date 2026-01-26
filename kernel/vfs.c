@@ -386,6 +386,15 @@ static bool fat_mount_view(fat_view_t* out, const uint8_t* img, uint32_t img_len
     uint32_t data_offset_bytes = first_data_sector * bytes_per_sector;
     uint32_t cluster_size_bytes = (uint32_t)bytes_per_sector * sectors_per_cluster;
 
+    // Validate FAT size is sufficient for cluster count
+    uint32_t min_fat_bytes = (kind == FAT_KIND_12)
+        ? ((cluster_count + 2u) * 3u + 1u) / 2u  // FAT12: 1.5 bytes per entry
+        : (cluster_count + 2u) * 2u;             // FAT16: 2 bytes per entry
+    if (fat_size_bytes < min_fat_bytes) {
+        return false;
+    }
+
+    // Bounds checks - ensure regions fit within image
     if (fat_offset_bytes + fat_size_bytes > img_len) {
         return false;
     }
@@ -393,6 +402,15 @@ static bool fat_mount_view(fat_view_t* out, const uint8_t* img, uint32_t img_len
         return false;
     }
     if (data_offset_bytes > img_len) {
+        return false;
+    }
+
+    // Validate regions don't overlap (FAT must end before root dir starts)
+    if (fat_offset_bytes + fat_size_bytes > root_offset_bytes) {
+        return false;
+    }
+    // Root dir must end before data area starts
+    if (root_offset_bytes + root_size_bytes > data_offset_bytes) {
         return false;
     }
 

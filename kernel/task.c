@@ -4347,6 +4347,122 @@ int32_t tasking_fd_fcntl(int32_t fd, int32_t cmd, int32_t arg) {
     }
 }
 
+int32_t tasking_fd_is_readable(int32_t fd) {
+    if (!current_task) {
+        return -1;
+    }
+    if (fd < 0 || fd >= (int32_t)TASK_MAX_FDS) {
+        return -1;
+    }
+
+    uint32_t irq_flags = irq_save();
+    fd_entry_t* ent = &current_task->fds[fd];
+
+    switch (ent->kind) {
+        case FD_KIND_FREE:
+            irq_restore(irq_flags);
+            return -1;
+
+        case FD_KIND_STDIN:
+            // Check if there's keyboard input available or serial input
+            irq_restore(irq_flags);
+            if (keyboard_has_key()) {
+                return 1;
+            }
+            // Also check serial port
+            {
+                char tmp;
+                if (serial_try_read_char(&tmp)) {
+                    // Put it back - inject into keyboard buffer
+                    keyboard_inject_bytes((const uint8_t*)&tmp, 1);
+                    return 1;
+                }
+            }
+            return 0;
+
+        case FD_KIND_STDOUT:
+        case FD_KIND_STDERR:
+            // stdout/stderr are never readable
+            irq_restore(irq_flags);
+            return 0;
+
+        case FD_KIND_VFS:
+            // Regular files are always readable (we don't track EOF here)
+            irq_restore(irq_flags);
+            return 1;
+
+        case FD_KIND_PIPE: {
+            pipe_obj_t* p = ent->pipe;
+            if (!p || ent->pipe_write_end) {
+                // Write end of pipe is not readable
+                irq_restore(irq_flags);
+                return 0;
+            }
+            // Check if pipe has data
+            bool has_data = (p->used > 0);
+            bool no_writers = (p->writers == 0);
+            irq_restore(irq_flags);
+            // Readable if data available OR no writers (EOF)
+            return (has_data || no_writers) ? 1 : 0;
+        }
+
+        default:
+            irq_restore(irq_flags);
+            return -1;
+    }
+}
+
+int32_t tasking_fd_is_writable(int32_t fd) {
+    if (!current_task) {
+        return -1;
+    }
+    if (fd < 0 || fd >= (int32_t)TASK_MAX_FDS) {
+        return -1;
+    }
+
+    uint32_t irq_flags = irq_save();
+    fd_entry_t* ent = &current_task->fds[fd];
+
+    switch (ent->kind) {
+        case FD_KIND_FREE:
+            irq_restore(irq_flags);
+            return -1;
+
+        case FD_KIND_STDIN:
+            // stdin is never writable
+            irq_restore(irq_flags);
+            return 0;
+
+        case FD_KIND_STDOUT:
+        case FD_KIND_STDERR:
+            // stdout/stderr are always writable
+            irq_restore(irq_flags);
+            return 1;
+
+        case FD_KIND_VFS:
+            // Regular files are always writable (simplified)
+            irq_restore(irq_flags);
+            return 1;
+
+        case FD_KIND_PIPE: {
+            pipe_obj_t* p = ent->pipe;
+            if (!p || !ent->pipe_write_end) {
+                // Read end of pipe is not writable
+                irq_restore(irq_flags);
+                return 0;
+            }
+            // Check if pipe has space
+            bool has_space = (p->used < PIPE_BUF_SIZE);
+            irq_restore(irq_flags);
+            return has_space ? 1 : 0;
+        }
+
+        default:
+            irq_restore(irq_flags);
+            return -1;
+    }
+}
+
 int32_t tasking_pipe(void* pipefds_user) {
     if (!current_task || !pipefds_user) {
         return -EFAULT;

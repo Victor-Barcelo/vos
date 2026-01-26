@@ -15,12 +15,31 @@
 #include <sys/utsname.h>
 #include <sys/ioctl.h>
 #include <sys/mman.h>
+#include <sys/select.h>
 #include <dirent.h>
 #include <signal.h>
 #include <reent.h>
 #include <termios.h>
 #include <time.h>
 #include <unistd.h>
+
+// poll.h is not in newlib, define here
+#ifndef POLLIN
+#define POLLIN   0x001
+#define POLLOUT  0x004
+#define POLLERR  0x008
+#define POLLHUP  0x010
+#define POLLNVAL 0x020
+#endif
+
+#ifndef _POLL_H
+struct pollfd {
+    int fd;
+    short events;
+    short revents;
+};
+typedef unsigned int nfds_t;
+#endif
 
 // Force "C"/ASCII collation for newlib's regex implementation.
 int __collate_load_error = 1;
@@ -716,7 +735,19 @@ enum {
     SYS_FORK = 68,
     SYS_EXECVE = 69,
     SYS_WAITPID = 70,
+    SYS_SELECT = 79,
 };
+
+// For select() syscall
+#define VOS_FD_SETSIZE 64
+typedef struct vos_fd_set_internal {
+    unsigned int bits[VOS_FD_SETSIZE / 32];
+} vos_fd_set_internal_t;
+
+typedef struct vos_timeval_internal {
+    int tv_sec;
+    int tv_usec;
+} vos_timeval_internal_t;
 
 typedef struct vos_stat {
     unsigned char is_dir;
@@ -2701,4 +2732,142 @@ int system(const char* command) {
 
 __attribute__((noreturn)) void _exit(int code) {
     vos_sys_exit(code);
+}
+
+// select() implementation
+static inline int vos_sys_select(int nfds, vos_fd_set_internal_t* readfds,
+                                  vos_fd_set_internal_t* writefds,
+                                  vos_fd_set_internal_t* exceptfds,
+                                  vos_timeval_internal_t* timeout) {
+    int ret;
+    __asm__ volatile (
+        "int $0x80"
+        : "=a"(ret)
+        : "a"(SYS_SELECT), "b"(nfds), "c"(readfds), "d"(writefds), "S"(exceptfds), "D"(timeout)
+        : "memory"
+    );
+    return ret;
+}
+
+int select(int nfds, fd_set* readfds, fd_set* writefds, fd_set* exceptfds, struct timeval* timeout) {
+    vos_fd_set_internal_t r = {0}, w = {0}, e = {0};
+    vos_timeval_internal_t tv = {0, 0};
+
+    // Convert fd_set to our internal format
+    // fd_set is typically an array of longs, we need to handle this portably
+    if (readfds) {
+        for (int i = 0; i < nfds && i < VOS_FD_SETSIZE; i++) {
+            if (FD_ISSET(i, readfds)) {
+                r.bits[i / 32] |= (1u << (i % 32));
+            }
+        }
+    }
+    if (writefds) {
+        for (int i = 0; i < nfds && i < VOS_FD_SETSIZE; i++) {
+            if (FD_ISSET(i, writefds)) {
+                w.bits[i / 32] |= (1u << (i % 32));
+            }
+        }
+    }
+    if (exceptfds) {
+        for (int i = 0; i < nfds && i < VOS_FD_SETSIZE; i++) {
+            if (FD_ISSET(i, exceptfds)) {
+                e.bits[i / 32] |= (1u << (i % 32));
+            }
+        }
+    }
+
+    if (timeout) {
+        tv.tv_sec = (int)timeout->tv_sec;
+        tv.tv_usec = (int)timeout->tv_usec;
+    }
+
+    int rc = vos_sys_select(nfds,
+                            readfds ? &r : NULL,
+                            writefds ? &w : NULL,
+                            exceptfds ? &e : NULL,
+                            timeout ? &tv : NULL);
+
+    if (rc < 0) {
+        errno = -rc;
+        return -1;
+    }
+
+    // Convert back
+    if (readfds) {
+        FD_ZERO(readfds);
+        for (int i = 0; i < nfds && i < VOS_FD_SETSIZE; i++) {
+            if (r.bits[i / 32] & (1u << (i % 32))) {
+                FD_SET(i, readfds);
+            }
+        }
+    }
+    if (writefds) {
+        FD_ZERO(writefds);
+        for (int i = 0; i < nfds && i < VOS_FD_SETSIZE; i++) {
+            if (w.bits[i / 32] & (1u << (i % 32))) {
+                FD_SET(i, writefds);
+            }
+        }
+    }
+    if (exceptfds) {
+        FD_ZERO(exceptfds);
+        for (int i = 0; i < nfds && i < VOS_FD_SETSIZE; i++) {
+            if (e.bits[i / 32] & (1u << (i % 32))) {
+                FD_SET(i, exceptfds);
+            }
+        }
+    }
+
+    return rc;
+}
+
+// poll() implementation using select()
+int poll(struct pollfd* fds, nfds_t nfds, int timeout) {
+    if (!fds || nfds == 0) {
+        if (timeout > 0) {
+            usleep((unsigned int)timeout * 1000);
+        }
+        return 0;
+    }
+
+    fd_set readfds, writefds;
+    FD_ZERO(&readfds);
+    FD_ZERO(&writefds);
+
+    int maxfd = -1;
+    for (nfds_t i = 0; i < nfds; i++) {
+        fds[i].revents = 0;
+        if (fds[i].fd < 0) continue;
+        if (fds[i].fd > maxfd) maxfd = fds[i].fd;
+        if (fds[i].events & POLLIN) FD_SET(fds[i].fd, &readfds);
+        if (fds[i].events & POLLOUT) FD_SET(fds[i].fd, &writefds);
+    }
+
+    struct timeval tv;
+    struct timeval* tvp = NULL;
+    if (timeout >= 0) {
+        tv.tv_sec = timeout / 1000;
+        tv.tv_usec = (timeout % 1000) * 1000;
+        tvp = &tv;
+    }
+
+    int rc = select(maxfd + 1, &readfds, &writefds, NULL, tvp);
+    if (rc < 0) {
+        return -1;
+    }
+
+    int nready = 0;
+    for (nfds_t i = 0; i < nfds; i++) {
+        if (fds[i].fd < 0) continue;
+        if ((fds[i].events & POLLIN) && FD_ISSET(fds[i].fd, &readfds)) {
+            fds[i].revents |= POLLIN;
+        }
+        if ((fds[i].events & POLLOUT) && FD_ISSET(fds[i].fd, &writefds)) {
+            fds[i].revents |= POLLOUT;
+        }
+        if (fds[i].revents) nready++;
+    }
+
+    return nready;
 }

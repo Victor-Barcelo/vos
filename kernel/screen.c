@@ -139,6 +139,8 @@ extern const uint8_t _binary_third_party_fonts_terminus_Uni3_Terminus28x14_psf_s
 extern const uint8_t _binary_third_party_fonts_terminus_Uni3_Terminus28x14_psf_end[];
 extern const uint8_t _binary_third_party_fonts_terminus_Uni3_TerminusBold32x16_psf_start[];
 extern const uint8_t _binary_third_party_fonts_terminus_Uni3_TerminusBold32x16_psf_end[];
+extern const uint8_t _binary_third_party_fonts_tamzen_Tamzen10x20_psf_start[];
+extern const uint8_t _binary_third_party_fonts_tamzen_Tamzen10x20_psf_end[];
 
 typedef struct {
     const char* name;
@@ -167,6 +169,7 @@ enum {
     FB_FONT_SPLEEN_12X24 = 6,
     FB_FONT_SPLEEN_16X32 = 7,
     FB_FONT_SPLEEN_32X64 = 8,
+    FB_FONT_TAMZEN_10X20 = 9,
 };
 
 static const fb_font_source_t fb_fonts[] = {
@@ -184,6 +187,8 @@ static const fb_font_source_t fb_fonts[] = {
                               _binary_third_party_fonts_spleen_spleen_16x32_psf_end, 0},
     [FB_FONT_SPLEEN_32X64] = {"spleen-32x64", _binary_third_party_fonts_spleen_spleen_32x64_psf_start,
                               _binary_third_party_fonts_spleen_spleen_32x64_psf_end, 0},
+    [FB_FONT_TAMZEN_10X20] = {"tamzen-10x20", _binary_third_party_fonts_tamzen_Tamzen10x20_psf_start,
+                              _binary_third_party_fonts_tamzen_Tamzen10x20_psf_end, 0},
 };
 
 static int fb_font_count_value(void) {
@@ -2297,15 +2302,18 @@ void screen_init(uint32_t multiboot_magic, uint32_t* mboot_info) {
                     const int* candidates = NULL;
                     int candidates_count = 0;
 
+                    // Prefer Spleen fonts - modern, readable, excellent Unicode coverage
                     const int large_candidates[] = {
+                        FB_FONT_SPLEEN_16X32,          // Primary: crisp modern font
+                        FB_FONT_TAMZEN_10X20,          // Smaller alternative
                         FB_FONT_TERMINUS_BOLD_32X16,
                         FB_FONT_TERMINUS_32X16,
-                        FB_FONT_SPLEEN_16X32,
                         FB_FONT_VGA_32X16,
                     };
                     const int small_candidates[] = {
-                        FB_FONT_TERMINUS_24X12,
                         FB_FONT_SPLEEN_12X24,
+                        FB_FONT_TAMZEN_10X20,
+                        FB_FONT_TERMINUS_24X12,
                         FB_FONT_VGA_28X16,
                     };
 

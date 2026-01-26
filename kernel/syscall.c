@@ -14,6 +14,8 @@
 #include "interrupts.h"
 #include "gdt.h"
 #include "idt.h"
+#include "keyboard.h"
+#include "serial.h"
 
 // Keep syscall argv marshalling bounded (argv strings are copied into
 // kernel memory before switching address spaces for exec/spawn).
@@ -100,7 +102,8 @@ enum {
     SYS_SCHED_STATS = 76,
     SYS_DESCRIPTOR_INFO = 77,
     SYS_SYSCALL_STATS = 78,
-    SYS_MAX = 79,
+    SYS_SELECT = 79,
+    SYS_MAX = 80,
 };
 
 // Syscall counters - track how many times each syscall is invoked
@@ -187,6 +190,7 @@ static const char* syscall_names[SYS_MAX] = {
     [SYS_SCHED_STATS] = "sched_stats",
     [SYS_DESCRIPTOR_INFO] = "desc_info",
     [SYS_SYSCALL_STATS] = "syscall_stats",
+    [SYS_SELECT] = "select",
 };
 
 typedef struct vos_task_info_user {
@@ -255,6 +259,33 @@ typedef struct vos_syscall_stats_user {
     uint32_t counts[VOS_SYSCALL_STATS_MAX]; // Count for each syscall
     char names[VOS_SYSCALL_STATS_MAX][16];  // Name of each syscall (truncated)
 } vos_syscall_stats_user_t;
+
+// For select() syscall
+typedef struct vos_timeval {
+    int32_t tv_sec;
+    int32_t tv_usec;
+} vos_timeval_t;
+
+// fd_set is a bitmask - 32 fds per word, we support up to 64 fds
+#define VOS_FD_SETSIZE 64
+typedef struct vos_fd_set {
+    uint32_t bits[VOS_FD_SETSIZE / 32];
+} vos_fd_set_t;
+
+static inline bool fd_set_isset(const vos_fd_set_t* set, int fd) {
+    if (!set || fd < 0 || fd >= VOS_FD_SETSIZE) return false;
+    return (set->bits[fd / 32] & (1u << (fd % 32))) != 0;
+}
+
+static inline void fd_set_set(vos_fd_set_t* set, int fd) {
+    if (!set || fd < 0 || fd >= VOS_FD_SETSIZE) return;
+    set->bits[fd / 32] |= (1u << (fd % 32));
+}
+
+static inline void fd_set_clr(vos_fd_set_t* set, int fd) {
+    if (!set || fd < 0 || fd >= VOS_FD_SETSIZE) return;
+    set->bits[fd / 32] &= ~(1u << (fd % 32));
+}
 
 static int32_t copy_kernel_string_to_user(char* dst_user, uint32_t cap, const char* src) {
     if (cap == 0) {
@@ -1374,6 +1405,126 @@ interrupt_frame_t* syscall_handle(interrupt_frame_t* frame) {
             }
             frame->eax = 0;
             return frame;
+        }
+        case SYS_SELECT: {
+            // select(nfds, readfds, writefds, exceptfds, timeout)
+            int32_t nfds = (int32_t)frame->ebx;
+            vos_fd_set_t* readfds_user = (vos_fd_set_t*)frame->ecx;
+            vos_fd_set_t* writefds_user = (vos_fd_set_t*)frame->edx;
+            vos_fd_set_t* exceptfds_user = (vos_fd_set_t*)frame->esi;
+            vos_timeval_t* timeout_user = (vos_timeval_t*)frame->edi;
+
+            if (nfds < 0 || nfds > VOS_FD_SETSIZE) {
+                frame->eax = (uint32_t)-EINVAL;
+                return frame;
+            }
+
+            // Copy fd_sets from user space
+            vos_fd_set_t readfds = {0}, writefds = {0}, exceptfds = {0};
+            if (readfds_user && !copy_from_user(&readfds, readfds_user, sizeof(readfds))) {
+                frame->eax = (uint32_t)-EFAULT;
+                return frame;
+            }
+            if (writefds_user && !copy_from_user(&writefds, writefds_user, sizeof(writefds))) {
+                frame->eax = (uint32_t)-EFAULT;
+                return frame;
+            }
+            if (exceptfds_user && !copy_from_user(&exceptfds, exceptfds_user, sizeof(exceptfds))) {
+                frame->eax = (uint32_t)-EFAULT;
+                return frame;
+            }
+
+            // Get timeout (NULL = block forever, {0,0} = poll)
+            int32_t timeout_ms = -1;  // -1 = infinite
+            if (timeout_user) {
+                vos_timeval_t tv;
+                if (!copy_from_user(&tv, timeout_user, sizeof(tv))) {
+                    frame->eax = (uint32_t)-EFAULT;
+                    return frame;
+                }
+                timeout_ms = tv.tv_sec * 1000 + tv.tv_usec / 1000;
+                if (timeout_ms < 0) timeout_ms = 0;
+            }
+
+            // Calculate deadline
+            uint32_t start_tick = timer_get_ticks();
+            uint32_t hz = timer_get_hz();
+            uint32_t deadline = 0;
+            if (timeout_ms > 0 && hz > 0) {
+                uint32_t timeout_ticks = ((uint32_t)timeout_ms * hz + 999u) / 1000u;
+                deadline = start_tick + timeout_ticks;
+            }
+
+            // Main select loop
+            for (;;) {
+                vos_fd_set_t out_read = {0}, out_write = {0}, out_except = {0};
+                int32_t nready = 0;
+
+                // Check each fd
+                for (int32_t fd = 0; fd < nfds; fd++) {
+                    if (readfds_user && fd_set_isset(&readfds, fd)) {
+                        int32_t r = tasking_fd_is_readable(fd);
+                        if (r == 1) {
+                            fd_set_set(&out_read, fd);
+                            nready++;
+                        } else if (r < 0) {
+                            frame->eax = (uint32_t)-EBADF;
+                            return frame;
+                        }
+                    }
+                    if (writefds_user && fd_set_isset(&writefds, fd)) {
+                        int32_t w = tasking_fd_is_writable(fd);
+                        if (w == 1) {
+                            fd_set_set(&out_write, fd);
+                            nready++;
+                        } else if (w < 0) {
+                            frame->eax = (uint32_t)-EBADF;
+                            return frame;
+                        }
+                    }
+                    // exceptfds not really supported, just clear
+                }
+
+                if (nready > 0 || timeout_ms == 0) {
+                    // Copy results back
+                    if (readfds_user && !copy_to_user(readfds_user, &out_read, sizeof(out_read))) {
+                        frame->eax = (uint32_t)-EFAULT;
+                        return frame;
+                    }
+                    if (writefds_user && !copy_to_user(writefds_user, &out_write, sizeof(out_write))) {
+                        frame->eax = (uint32_t)-EFAULT;
+                        return frame;
+                    }
+                    if (exceptfds_user && !copy_to_user(exceptfds_user, &out_except, sizeof(out_except))) {
+                        frame->eax = (uint32_t)-EFAULT;
+                        return frame;
+                    }
+                    frame->eax = (uint32_t)nready;
+                    return frame;
+                }
+
+                // Check for timeout
+                if (timeout_ms > 0) {
+                    uint32_t now = timer_get_ticks();
+                    if (now >= deadline) {
+                        // Timed out, return 0
+                        if (readfds_user) copy_to_user(readfds_user, &out_read, sizeof(out_read));
+                        if (writefds_user) copy_to_user(writefds_user, &out_write, sizeof(out_write));
+                        if (exceptfds_user) copy_to_user(exceptfds_user, &out_except, sizeof(out_except));
+                        frame->eax = 0;
+                        return frame;
+                    }
+                }
+
+                // Check for signals
+                if (tasking_current_should_interrupt()) {
+                    frame->eax = (uint32_t)-EINTR;
+                    return frame;
+                }
+
+                // Wait a bit before checking again (yield to other tasks)
+                __asm__ volatile ("sti; hlt; cli");
+            }
         }
 
         default:

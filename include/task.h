@@ -138,6 +138,14 @@ int32_t tasking_pipe(void* pipefds_user);
 int32_t tasking_fd_fcntl(int32_t fd, int32_t cmd, int32_t arg);
 int32_t tasking_alarm(uint32_t seconds);
 
+// Check if an fd is readable (has data available without blocking).
+// Returns 1 if readable, 0 if not, -1 if fd invalid.
+int32_t tasking_fd_is_readable(int32_t fd);
+
+// Check if an fd is writable (can accept data without blocking).
+// Returns 1 if writable, 0 if not, -1 if fd invalid.
+int32_t tasking_fd_is_writable(int32_t fd);
+
 // Virtual memory mappings (mmap-style).
 int32_t tasking_mmap(uint32_t addr_hint, uint32_t length, uint32_t prot, uint32_t flags, int32_t fd, uint32_t offset, uint32_t* out_addr);
 int32_t tasking_munmap(uint32_t addr, uint32_t length);

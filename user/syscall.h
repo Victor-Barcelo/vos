@@ -166,7 +166,24 @@ enum {
     SYS_SCHED_STATS = 76,
     SYS_DESCRIPTOR_INFO = 77,
     SYS_SYSCALL_STATS = 78,
+    SYS_SELECT = 79,
 };
+
+// For select() syscall
+typedef struct vos_timeval {
+    int32_t tv_sec;
+    int32_t tv_usec;
+} vos_timeval_t;
+
+#define VOS_FD_SETSIZE 64
+typedef struct vos_fd_set {
+    uint32_t bits[VOS_FD_SETSIZE / 32];
+} vos_fd_set_t;
+
+#define VOS_FD_ZERO(set)    do { (set)->bits[0] = 0; (set)->bits[1] = 0; } while(0)
+#define VOS_FD_SET(fd, set) do { if ((fd) >= 0 && (fd) < VOS_FD_SETSIZE) (set)->bits[(fd)/32] |= (1u << ((fd)%32)); } while(0)
+#define VOS_FD_CLR(fd, set) do { if ((fd) >= 0 && (fd) < VOS_FD_SETSIZE) (set)->bits[(fd)/32] &= ~(1u << ((fd)%32)); } while(0)
+#define VOS_FD_ISSET(fd, set) (((fd) >= 0 && (fd) < VOS_FD_SETSIZE) ? ((set)->bits[(fd)/32] & (1u << ((fd)%32))) != 0 : 0)
 
 static inline int sys_write(int fd, const char* buf, uint32_t len) {
     int ret;
@@ -725,6 +742,18 @@ static inline int sys_syscall_stats(vos_syscall_stats_t* out) {
         "int $0x80"
         : "=a"(ret)
         : "a"(SYS_SYSCALL_STATS), "b"(out)
+        : "memory"
+    );
+    return ret;
+}
+
+static inline int sys_select(int nfds, vos_fd_set_t* readfds, vos_fd_set_t* writefds,
+                             vos_fd_set_t* exceptfds, vos_timeval_t* timeout) {
+    int ret;
+    __asm__ volatile (
+        "int $0x80"
+        : "=a"(ret)
+        : "a"(SYS_SELECT), "b"(nfds), "c"(readfds), "d"(writefds), "S"(exceptfds), "D"(timeout)
         : "memory"
     );
     return ret;

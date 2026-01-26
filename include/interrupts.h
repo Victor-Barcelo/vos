@@ -33,4 +33,7 @@ void irq_register_handler(uint8_t irq, irq_handler_t handler);
 // Called from assembly stubs in boot/boot.asm
 interrupt_frame_t* interrupt_handler(interrupt_frame_t* frame);
 
+// Introspection for sysview
+void irq_get_counts(uint32_t out[16]);
+
 #endif

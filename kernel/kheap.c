@@ -283,3 +283,29 @@ void kfree(void* ptr) {
     b = coalesce(b);
     free_list_insert(b);
 }
+
+void kheap_get_info(uint32_t* out_base, uint32_t* out_end,
+                    uint32_t* out_free_bytes, uint32_t* out_free_blocks) {
+    if (out_base) {
+        *out_base = heap_base;
+    }
+    if (out_end) {
+        *out_end = heap_end;
+    }
+
+    uint32_t free_bytes = 0;
+    uint32_t free_blocks = 0;
+    block_header_t* b = free_list;
+    while (b) {
+        free_blocks++;
+        free_bytes += b->size;
+        b = b->next_free;
+    }
+
+    if (out_free_bytes) {
+        *out_free_bytes = free_bytes;
+    }
+    if (out_free_blocks) {
+        *out_free_blocks = free_blocks;
+    }
+}

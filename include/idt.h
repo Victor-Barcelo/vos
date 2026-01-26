@@ -27,4 +27,7 @@ void idt_set_gate(uint8_t num, uint32_t base, uint16_t selector, uint8_t flags);
 // Assembly functions (defined in boot.asm)
 extern void idt_flush(uint32_t);
 
+// Introspection for sysview
+void idt_get_info(uint32_t* out_base, uint32_t* out_count);
+
 #endif

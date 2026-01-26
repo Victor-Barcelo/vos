@@ -209,6 +209,7 @@ static uint32_t tick_div = 0;
 static uint32_t next_kstack_region = KSTACK_REGION_BASE;
 static uint32_t tty_foreground_pgid = 0;
 static bool reap_pending = false;
+static uint32_t context_switch_count = 0;
 
 // Sentinel value used to wait for "any child" in waitpid-style syscalls.
 #define WAIT_ANY_PID 0xFFFFFFFFu
@@ -1291,6 +1292,43 @@ bool tasking_get_task_info(uint32_t index, task_info_t* out) {
     return false;
 }
 
+uint32_t tasking_context_switch_count(void) {
+    return context_switch_count;
+}
+
+void tasking_get_state_counts(uint32_t* runnable, uint32_t* sleeping,
+                              uint32_t* waiting, uint32_t* zombie) {
+    uint32_t r = 0, s = 0, w = 0, z = 0;
+
+    uint32_t flags = irq_save();
+
+    if (current_task) {
+        task_t* t = current_task;
+        for (uint32_t i = 0; i < TASK_MAX_SCAN; i++) {
+            if (!t) {
+                break;
+            }
+            switch (t->state) {
+                case TASK_STATE_RUNNABLE: r++; break;
+                case TASK_STATE_SLEEPING: s++; break;
+                case TASK_STATE_WAITING:  w++; break;
+                case TASK_STATE_ZOMBIE:   z++; break;
+            }
+            t = t->next;
+            if (t == current_task) {
+                break;
+            }
+        }
+    }
+
+    irq_restore(flags);
+
+    if (runnable) *runnable = r;
+    if (sleeping) *sleeping = s;
+    if (waiting) *waiting = w;
+    if (zombie) *zombie = z;
+}
+
 static void wake_sleepers(uint32_t now_ticks) {
     if (!current_task) {
         return;
@@ -1517,6 +1555,7 @@ interrupt_frame_t* tasking_on_timer_tick(interrupt_frame_t* frame) {
         return frame;
     }
 
+    context_switch_count++;
     current_task = next;
     tss_set_kernel_stack(current_task->kstack_top);
     paging_switch_directory(current_task->page_directory);
@@ -1536,6 +1575,7 @@ interrupt_frame_t* tasking_yield(interrupt_frame_t* frame) {
         return frame;
     }
 
+    context_switch_count++;
     current_task = next;
     tss_set_kernel_stack(current_task->kstack_top);
     paging_switch_directory(current_task->page_directory);

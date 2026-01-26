@@ -54,6 +54,11 @@ int32_t tasking_setgid(uint32_t gid);
 uint32_t tasking_task_count(void);
 bool tasking_get_task_info(uint32_t index, task_info_t* out);
 
+// Introspection for sysview
+uint32_t tasking_context_switch_count(void);
+void tasking_get_state_counts(uint32_t* runnable, uint32_t* sleeping,
+                              uint32_t* waiting, uint32_t* zombie);
+
 // Check whether the current task has a deferred kill pending.
 // If true, *out_exit_code receives the exit code to use.
 bool tasking_current_should_exit(int32_t* out_exit_code);

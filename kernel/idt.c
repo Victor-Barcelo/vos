@@ -91,3 +91,12 @@ void idt_init(void) {
     // Load the IDT
     idt_flush((uint32_t)&idtp);
 }
+
+void idt_get_info(uint32_t* out_base, uint32_t* out_count) {
+    if (out_base) {
+        *out_base = idtp.base;
+    }
+    if (out_count) {
+        *out_count = sizeof(idt) / sizeof(idt[0]);
+    }
+}

@@ -5,8 +5,10 @@
 #include "task.h"
 #include "screen.h"
 #include "usercopy.h"
+#include "string.h"
 
 static irq_handler_t irq_handlers[16] = {0};
+static uint32_t irq_counts[16] = {0};
 
 static void pic_send_eoi(uint8_t irq) {
     if (irq >= 8) {
@@ -162,6 +164,7 @@ interrupt_frame_t* interrupt_handler(interrupt_frame_t* frame) {
 
     if (frame->int_no >= 32 && frame->int_no < 48) {
         uint8_t irq = (uint8_t)(frame->int_no - 32);
+        irq_counts[irq]++;
         irq_handler_t handler = irq_handlers[irq];
         if (handler) {
             handler(frame);
@@ -175,4 +178,10 @@ interrupt_frame_t* interrupt_handler(interrupt_frame_t* frame) {
     }
 
     return tasking_deliver_pending_signals(frame);
+}
+
+void irq_get_counts(uint32_t out[16]) {
+    if (out) {
+        memcpy(out, irq_counts, sizeof(irq_counts));
+    }
 }

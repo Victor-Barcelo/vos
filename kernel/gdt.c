@@ -96,3 +96,16 @@ void gdt_init(void) {
     gdt_flush((uint32_t)&gdtp);
     tss_flush(0x28);
 }
+
+void gdt_get_info(uint32_t* out_base, uint32_t* out_count) {
+    if (out_base) {
+        *out_base = gdtp.base;
+    }
+    if (out_count) {
+        *out_count = sizeof(gdt) / sizeof(gdt[0]);
+    }
+}
+
+uint32_t tss_get_esp0(void) {
+    return tss.esp0;
+}

@@ -38,6 +38,47 @@ typedef struct vos_statfs {
     uint32_t bavail;
 } vos_statfs_t;
 
+// Sysview introspection structures
+typedef struct vos_pmm_info {
+    uint32_t total_frames;
+    uint32_t free_frames;
+    uint32_t page_size;
+} vos_pmm_info_t;
+
+typedef struct vos_heap_info {
+    uint32_t heap_base;
+    uint32_t heap_end;
+    uint32_t total_free_bytes;
+    uint32_t free_block_count;
+} vos_heap_info_t;
+
+typedef struct vos_timer_info {
+    uint32_t ticks;
+    uint32_t hz;
+    uint32_t uptime_ms;
+} vos_timer_info_t;
+
+typedef struct vos_irq_stats {
+    uint32_t counts[16];
+} vos_irq_stats_t;
+
+typedef struct vos_sched_stats {
+    uint32_t context_switches;
+    uint32_t task_count;
+    uint32_t runnable;
+    uint32_t sleeping;
+    uint32_t waiting;
+    uint32_t zombie;
+} vos_sched_stats_t;
+
+typedef struct vos_descriptor_info {
+    uint32_t gdt_base;
+    uint32_t gdt_entries;
+    uint32_t idt_base;
+    uint32_t idt_entries;
+    uint32_t tss_esp0;
+} vos_descriptor_info_t;
+
 enum {
     SYS_WRITE = 0,
     SYS_EXIT = 1,
@@ -111,6 +152,12 @@ enum {
     SYS_EXECVE = 69,
     SYS_WAITPID = 70,
     SYS_STATFS = 71,
+    SYS_PMM_INFO = 72,
+    SYS_HEAP_INFO = 73,
+    SYS_TIMER_INFO = 74,
+    SYS_IRQ_STATS = 75,
+    SYS_SCHED_STATS = 76,
+    SYS_DESCRIPTOR_INFO = 77,
 };
 
 static inline int sys_write(int fd, const char* buf, uint32_t len) {
@@ -592,6 +639,73 @@ static inline int sys_setgid(uint32_t gid) {
         "int $0x80"
         : "=a"(ret)
         : "a"(SYS_SETGID), "b"(gid)
+        : "memory"
+    );
+    return ret;
+}
+
+// Sysview introspection syscalls
+static inline int sys_pmm_info(vos_pmm_info_t* out) {
+    int ret;
+    __asm__ volatile (
+        "int $0x80"
+        : "=a"(ret)
+        : "a"(SYS_PMM_INFO), "b"(out)
+        : "memory"
+    );
+    return ret;
+}
+
+static inline int sys_heap_info(vos_heap_info_t* out) {
+    int ret;
+    __asm__ volatile (
+        "int $0x80"
+        : "=a"(ret)
+        : "a"(SYS_HEAP_INFO), "b"(out)
+        : "memory"
+    );
+    return ret;
+}
+
+static inline int sys_timer_info(vos_timer_info_t* out) {
+    int ret;
+    __asm__ volatile (
+        "int $0x80"
+        : "=a"(ret)
+        : "a"(SYS_TIMER_INFO), "b"(out)
+        : "memory"
+    );
+    return ret;
+}
+
+static inline int sys_irq_stats(vos_irq_stats_t* out) {
+    int ret;
+    __asm__ volatile (
+        "int $0x80"
+        : "=a"(ret)
+        : "a"(SYS_IRQ_STATS), "b"(out)
+        : "memory"
+    );
+    return ret;
+}
+
+static inline int sys_sched_stats(vos_sched_stats_t* out) {
+    int ret;
+    __asm__ volatile (
+        "int $0x80"
+        : "=a"(ret)
+        : "a"(SYS_SCHED_STATS), "b"(out)
+        : "memory"
+    );
+    return ret;
+}
+
+static inline int sys_descriptor_info(vos_descriptor_info_t* out) {
+    int ret;
+    __asm__ volatile (
+        "int $0x80"
+        : "=a"(ret)
+        : "a"(SYS_DESCRIPTOR_INFO), "b"(out)
         : "memory"
     );
     return ret;

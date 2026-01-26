@@ -10,6 +10,10 @@
 #include "system.h"
 #include "kheap.h"
 #include "string.h"
+#include "pmm.h"
+#include "interrupts.h"
+#include "gdt.h"
+#include "idt.h"
 
 // Keep syscall argv marshalling bounded (argv strings are copied into
 // kernel memory before switching address spaces for exec/spawn).
@@ -89,6 +93,12 @@ enum {
     SYS_EXECVE = 69,
     SYS_WAITPID = 70,
     SYS_STATFS = 71,
+    SYS_PMM_INFO = 72,
+    SYS_HEAP_INFO = 73,
+    SYS_TIMER_INFO = 74,
+    SYS_IRQ_STATS = 75,
+    SYS_SCHED_STATS = 76,
+    SYS_DESCRIPTOR_INFO = 77,
 };
 
 typedef struct vos_task_info_user {
@@ -109,6 +119,47 @@ typedef struct vos_font_info_user {
     uint32_t width;
     uint32_t height;
 } vos_font_info_user_t;
+
+// Sysview introspection structures
+typedef struct vos_pmm_info_user {
+    uint32_t total_frames;
+    uint32_t free_frames;
+    uint32_t page_size;
+} vos_pmm_info_user_t;
+
+typedef struct vos_heap_info_user {
+    uint32_t heap_base;
+    uint32_t heap_end;
+    uint32_t total_free_bytes;
+    uint32_t free_block_count;
+} vos_heap_info_user_t;
+
+typedef struct vos_timer_info_user {
+    uint32_t ticks;
+    uint32_t hz;
+    uint32_t uptime_ms;
+} vos_timer_info_user_t;
+
+typedef struct vos_irq_stats_user {
+    uint32_t counts[16];
+} vos_irq_stats_user_t;
+
+typedef struct vos_sched_stats_user {
+    uint32_t context_switches;
+    uint32_t task_count;
+    uint32_t runnable;
+    uint32_t sleeping;
+    uint32_t waiting;
+    uint32_t zombie;
+} vos_sched_stats_user_t;
+
+typedef struct vos_descriptor_info_user {
+    uint32_t gdt_base;
+    uint32_t gdt_entries;
+    uint32_t idt_base;
+    uint32_t idt_entries;
+    uint32_t tss_esp0;
+} vos_descriptor_info_user_t;
 
 static int32_t copy_kernel_string_to_user(char* dst_user, uint32_t cap, const char* src) {
     if (cap == 0) {
@@ -1096,6 +1147,109 @@ interrupt_frame_t* syscall_handle(interrupt_frame_t* frame) {
             frame->eax = (uint32_t)tasking_setpgid(pid, pgid);
             return frame;
         }
+
+        // Sysview introspection syscalls
+        case SYS_PMM_INFO: {
+            vos_pmm_info_user_t* info_user = (vos_pmm_info_user_t*)frame->ebx;
+            if (!info_user) {
+                frame->eax = (uint32_t)-EFAULT;
+                return frame;
+            }
+            vos_pmm_info_user_t info;
+            info.total_frames = pmm_total_frames();
+            info.free_frames = pmm_free_frames();
+            info.page_size = 4096;
+            if (!copy_to_user(info_user, &info, sizeof(info))) {
+                frame->eax = (uint32_t)-EFAULT;
+                return frame;
+            }
+            frame->eax = 0;
+            return frame;
+        }
+        case SYS_HEAP_INFO: {
+            vos_heap_info_user_t* info_user = (vos_heap_info_user_t*)frame->ebx;
+            if (!info_user) {
+                frame->eax = (uint32_t)-EFAULT;
+                return frame;
+            }
+            vos_heap_info_user_t info;
+            kheap_get_info(&info.heap_base, &info.heap_end,
+                           &info.total_free_bytes, &info.free_block_count);
+            if (!copy_to_user(info_user, &info, sizeof(info))) {
+                frame->eax = (uint32_t)-EFAULT;
+                return frame;
+            }
+            frame->eax = 0;
+            return frame;
+        }
+        case SYS_TIMER_INFO: {
+            vos_timer_info_user_t* info_user = (vos_timer_info_user_t*)frame->ebx;
+            if (!info_user) {
+                frame->eax = (uint32_t)-EFAULT;
+                return frame;
+            }
+            vos_timer_info_user_t info;
+            info.ticks = timer_get_ticks();
+            info.hz = timer_get_hz();
+            info.uptime_ms = timer_uptime_ms();
+            if (!copy_to_user(info_user, &info, sizeof(info))) {
+                frame->eax = (uint32_t)-EFAULT;
+                return frame;
+            }
+            frame->eax = 0;
+            return frame;
+        }
+        case SYS_IRQ_STATS: {
+            vos_irq_stats_user_t* stats_user = (vos_irq_stats_user_t*)frame->ebx;
+            if (!stats_user) {
+                frame->eax = (uint32_t)-EFAULT;
+                return frame;
+            }
+            vos_irq_stats_user_t stats;
+            irq_get_counts(stats.counts);
+            if (!copy_to_user(stats_user, &stats, sizeof(stats))) {
+                frame->eax = (uint32_t)-EFAULT;
+                return frame;
+            }
+            frame->eax = 0;
+            return frame;
+        }
+        case SYS_SCHED_STATS: {
+            vos_sched_stats_user_t* stats_user = (vos_sched_stats_user_t*)frame->ebx;
+            if (!stats_user) {
+                frame->eax = (uint32_t)-EFAULT;
+                return frame;
+            }
+            vos_sched_stats_user_t stats;
+            stats.context_switches = tasking_context_switch_count();
+            stats.task_count = tasking_task_count();
+            tasking_get_state_counts(&stats.runnable, &stats.sleeping,
+                                     &stats.waiting, &stats.zombie);
+            if (!copy_to_user(stats_user, &stats, sizeof(stats))) {
+                frame->eax = (uint32_t)-EFAULT;
+                return frame;
+            }
+            frame->eax = 0;
+            return frame;
+        }
+        case SYS_DESCRIPTOR_INFO: {
+            vos_descriptor_info_user_t* info_user = (vos_descriptor_info_user_t*)frame->ebx;
+            if (!info_user) {
+                frame->eax = (uint32_t)-EFAULT;
+                return frame;
+            }
+            vos_descriptor_info_user_t info;
+            gdt_get_info(&info.gdt_base, &info.gdt_entries);
+            idt_get_info(&info.idt_base, &info.idt_entries);
+            info.tss_esp0 = tss_get_esp0();
+            if (!copy_to_user(info_user, &info, sizeof(info))) {
+                frame->eax = (uint32_t)-EFAULT;
+                return frame;
+            }
+            frame->eax = 0;
+            return frame;
+        }
+
         default:
             frame->eax = (uint32_t)-1;
             return frame;

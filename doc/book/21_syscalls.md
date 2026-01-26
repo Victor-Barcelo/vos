@@ -340,15 +340,17 @@ int32_t sys_mmap(void *addr, size_t length, int prot, int flags,
 
 ## Summary
 
-VOS provides 71 system calls enabling:
+VOS provides 91 system calls enabling:
 
-1. **File I/O** - open, read, write, close, seek, stat
+1. **File I/O** - open, read, write, close, seek, stat, access
 2. **Directories** - mkdir, rmdir, readdir, chdir
 3. **Processes** - fork, execve, wait, exit
 4. **Memory** - sbrk, mmap, munmap
 5. **Signals** - kill, signal, sigaction
-6. **Time** - time, nanosleep, clock_gettime
-7. **Terminal** - tcgetattr, tcsetattr, ioctl
+6. **Time** - gettimeofday, clock_gettime, nanosleep
+7. **Terminal** - tcgetattr, tcsetattr, ioctl, isatty
+8. **I/O Multiplexing** - select, poll
+9. **System Info** - uname
 
 This comprehensive syscall set enables running real UNIX-like programs.
 

@@ -3898,6 +3898,44 @@ int32_t tasking_lstat(const char* path, void* st_user) {
     return 0;
 }
 
+// access() modes
+#define VOS_F_OK 0
+#define VOS_R_OK 4
+#define VOS_W_OK 2
+#define VOS_X_OK 1
+
+int32_t tasking_access(const char* path, int32_t mode) {
+    if (!current_task || !path) {
+        return -EINVAL;
+    }
+
+    vfs_stat_t st;
+    int32_t rc = vfs_stat_path(current_task->cwd, path, &st);
+    if (rc < 0) {
+        return rc;  // File doesn't exist or other error
+    }
+
+    // F_OK just checks existence
+    if (mode == VOS_F_OK) {
+        return 0;
+    }
+
+    // Check permission bits (simplified - VOS doesn't have real uid/gid checks)
+    uint16_t file_mode = st.mode;
+
+    if ((mode & VOS_R_OK) && !(file_mode & 0444)) {
+        return -EACCES;
+    }
+    if ((mode & VOS_W_OK) && !(file_mode & 0222)) {
+        return -EACCES;
+    }
+    if ((mode & VOS_X_OK) && !(file_mode & 0111)) {
+        return -EACCES;
+    }
+
+    return 0;
+}
+
 int32_t tasking_statfs(const char* path, void* st_user) {
     if (!current_task || !path || !st_user) {
         return -EINVAL;
@@ -4487,6 +4525,31 @@ int32_t tasking_fd_is_writable(int32_t fd) {
             irq_restore(irq_flags);
             return -1;
     }
+}
+
+int32_t tasking_fd_isatty(int32_t fd) {
+    if (!current_task) {
+        return 0;
+    }
+    if (fd < 0 || fd >= (int32_t)TASK_MAX_FDS) {
+        return 0;
+    }
+
+    uint32_t irq_flags = irq_save();
+    fd_entry_t* ent = &current_task->fds[fd];
+    fd_kind_t kind = ent->kind;
+    irq_restore(irq_flags);
+
+    // stdin, stdout, stderr, and /dev/tty are TTYs
+    return (kind == FD_KIND_STDIN || kind == FD_KIND_STDOUT ||
+            kind == FD_KIND_STDERR || kind == FD_KIND_TTY) ? 1 : 0;
+}
+
+const char* tasking_get_cwd(void) {
+    if (!current_task) {
+        return "/";
+    }
+    return current_task->cwd;
 }
 
 int32_t tasking_pipe(void* pipefds_user) {

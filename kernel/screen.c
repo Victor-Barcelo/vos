@@ -60,6 +60,7 @@ typedef enum {
     ANSI_STATE_NONE = 0,
     ANSI_STATE_ESC,
     ANSI_STATE_CSI,
+    ANSI_STATE_CHARSET,  // ESC ( or ESC ) for character set selection
 } ansi_state_t;
 
 static ansi_state_t ansi_state = ANSI_STATE_NONE;
@@ -1457,7 +1458,21 @@ static bool ansi_handle_char(char c) {
             ansi_reset();
             return true;
         }
+        if (c == '(' || c == ')') {
+            // Character set selection: ESC ( X or ESC ) X
+            // Used by termbox2 and other TUI libraries
+            ansi_state = ANSI_STATE_CHARSET;
+            return true;
+        }
 
+        ansi_reset();
+        return true;
+    }
+
+    // Character set selection - consume the designator character
+    if (ansi_state == ANSI_STATE_CHARSET) {
+        // Common designators: B=ASCII, 0=DEC Special Graphics
+        // We ignore the actual selection since VOS only supports ASCII
         ansi_reset();
         return true;
     }
@@ -2400,8 +2415,7 @@ void screen_refresh(void) {
         // Redraw all cells
         for (int y = 0; y < rows; y++) {
             for (int x = 0; x < cols; x++) {
-                fb_cell_t cell = fb_cells[y * cols + x];
-                fb_draw_cell_at(x, y, cell);
+                fb_render_cell(x, y);
             }
         }
 

@@ -107,7 +107,14 @@ enum {
     SYS_THEME_GET = 81,
     SYS_THEME_INFO = 82,
     SYS_THEME_SET = 83,
-    SYS_MAX = 84,
+    SYS_GETTIMEOFDAY = 84,
+    SYS_CLOCK_GETTIME = 85,
+    SYS_NANOSLEEP = 86,
+    SYS_ACCESS = 87,
+    SYS_ISATTY = 88,
+    SYS_UNAME = 89,
+    SYS_POLL = 90,
+    SYS_MAX = 91,
 };
 
 // Syscall counters - track how many times each syscall is invoked
@@ -199,6 +206,13 @@ static const char* syscall_names[SYS_MAX] = {
     [SYS_THEME_GET] = "theme_get",
     [SYS_THEME_INFO] = "theme_info",
     [SYS_THEME_SET] = "theme_set",
+    [SYS_GETTIMEOFDAY] = "gettimeofday",
+    [SYS_CLOCK_GETTIME] = "clock_gettime",
+    [SYS_NANOSLEEP] = "nanosleep",
+    [SYS_ACCESS] = "access",
+    [SYS_ISATTY] = "isatty",
+    [SYS_UNAME] = "uname",
+    [SYS_POLL] = "poll",
 };
 
 typedef struct vos_task_info_user {
@@ -294,6 +308,44 @@ static inline void fd_set_clr(vos_fd_set_t* set, int fd) {
     if (!set || fd < 0 || fd >= VOS_FD_SETSIZE) return;
     set->bits[fd / 32] &= ~(1u << (fd % 32));
 }
+
+// For clock_gettime / nanosleep
+typedef struct vos_timespec {
+    int32_t tv_sec;
+    int32_t tv_nsec;
+} vos_timespec_t;
+
+// Clock IDs for clock_gettime
+#define VOS_CLOCK_REALTIME  0
+#define VOS_CLOCK_MONOTONIC 1
+
+// For access() syscall
+#define VOS_F_OK 0  // Test for existence
+#define VOS_R_OK 4  // Test for read permission
+#define VOS_W_OK 2  // Test for write permission
+#define VOS_X_OK 1  // Test for execute permission
+
+// For uname() syscall
+typedef struct vos_utsname {
+    char sysname[65];
+    char nodename[65];
+    char release[65];
+    char version[65];
+    char machine[65];
+} vos_utsname_t;
+
+// For poll() syscall
+typedef struct vos_pollfd {
+    int32_t fd;
+    int16_t events;
+    int16_t revents;
+} vos_pollfd_t;
+
+#define VOS_POLLIN   0x0001
+#define VOS_POLLOUT  0x0004
+#define VOS_POLLERR  0x0008
+#define VOS_POLLHUP  0x0010
+#define VOS_POLLNVAL 0x0020
 
 static int32_t copy_kernel_string_to_user(char* dst_user, uint32_t cap, const char* src) {
     if (cap == 0) {
@@ -1531,6 +1583,353 @@ interrupt_frame_t* syscall_handle(interrupt_frame_t* frame) {
                 }
 
                 // Wait a bit before checking again (yield to other tasks)
+                __asm__ volatile ("sti; hlt; cli");
+            }
+        }
+
+        // Color theme syscalls
+        case SYS_THEME_COUNT: {
+            frame->eax = (uint32_t)screen_theme_count();
+            return frame;
+        }
+        case SYS_THEME_GET: {
+            frame->eax = (uint32_t)screen_theme_get_current();
+            return frame;
+        }
+        case SYS_THEME_INFO: {
+            uint32_t idx = frame->ebx;
+            char* name_user = (char*)frame->ecx;
+            uint32_t name_cap = frame->edx;
+
+            char name[64];
+            int32_t rc = screen_theme_get_info((int)idx, name, sizeof(name));
+            if (rc < 0) {
+                frame->eax = (uint32_t)rc;
+                return frame;
+            }
+
+            if (name_user && name_cap > 0) {
+                rc = copy_kernel_string_to_user(name_user, name_cap, name);
+                if (rc < 0) {
+                    frame->eax = (uint32_t)rc;
+                    return frame;
+                }
+            }
+            frame->eax = 0;
+            return frame;
+        }
+        case SYS_THEME_SET: {
+            uint32_t idx = frame->ebx;
+            int32_t rc = screen_theme_set((int)idx);
+            frame->eax = (uint32_t)rc;
+            return frame;
+        }
+
+        // gettimeofday(tv, tz) - tz is ignored
+        case SYS_GETTIMEOFDAY: {
+            vos_timeval_t* tv_user = (vos_timeval_t*)frame->ebx;
+            if (!tv_user) {
+                frame->eax = (uint32_t)-EINVAL;
+                return frame;
+            }
+
+            rtc_datetime_t dt;
+            if (!rtc_read_datetime(&dt)) {
+                frame->eax = (uint32_t)-EIO;
+                return frame;
+            }
+
+            // Convert to Unix timestamp (seconds since 1970-01-01)
+            // Simplified calculation - days since epoch
+            int32_t days = 0;
+            for (uint16_t y = 1970; y < dt.year; y++) {
+                days += (y % 4 == 0 && (y % 100 != 0 || y % 400 == 0)) ? 366 : 365;
+            }
+            static const int32_t mdays[] = {0,31,59,90,120,151,181,212,243,273,304,334};
+            days += mdays[dt.month - 1];
+            if (dt.month > 2 && (dt.year % 4 == 0 && (dt.year % 100 != 0 || dt.year % 400 == 0))) {
+                days++;
+            }
+            days += dt.day - 1;
+
+            int32_t secs = days * 86400 + dt.hour * 3600 + dt.minute * 60 + dt.second;
+
+            // Get microseconds from uptime (approximate sub-second precision)
+            uint32_t uptime_ms = timer_uptime_ms();
+            int32_t usec = (uptime_ms % 1000) * 1000;
+
+            vos_timeval_t tv;
+            tv.tv_sec = secs;
+            tv.tv_usec = usec;
+
+            if (!copy_to_user(tv_user, &tv, sizeof(tv))) {
+                frame->eax = (uint32_t)-EFAULT;
+                return frame;
+            }
+            frame->eax = 0;
+            return frame;
+        }
+
+        // clock_gettime(clockid, tp)
+        case SYS_CLOCK_GETTIME: {
+            int32_t clockid = (int32_t)frame->ebx;
+            vos_timespec_t* tp_user = (vos_timespec_t*)frame->ecx;
+
+            if (!tp_user) {
+                frame->eax = (uint32_t)-EINVAL;
+                return frame;
+            }
+
+            vos_timespec_t ts;
+
+            if (clockid == VOS_CLOCK_MONOTONIC) {
+                // Monotonic clock: uptime since boot
+                uint32_t uptime_ms = timer_uptime_ms();
+                ts.tv_sec = (int32_t)(uptime_ms / 1000);
+                ts.tv_nsec = (int32_t)((uptime_ms % 1000) * 1000000);
+            } else if (clockid == VOS_CLOCK_REALTIME) {
+                // Real time: wall clock
+                rtc_datetime_t dt;
+                if (!rtc_read_datetime(&dt)) {
+                    frame->eax = (uint32_t)-EIO;
+                    return frame;
+                }
+
+                // Same Unix timestamp calculation as gettimeofday
+                int32_t days = 0;
+                for (uint16_t y = 1970; y < dt.year; y++) {
+                    days += (y % 4 == 0 && (y % 100 != 0 || y % 400 == 0)) ? 366 : 365;
+                }
+                static const int32_t mdays[] = {0,31,59,90,120,151,181,212,243,273,304,334};
+                days += mdays[dt.month - 1];
+                if (dt.month > 2 && (dt.year % 4 == 0 && (dt.year % 100 != 0 || dt.year % 400 == 0))) {
+                    days++;
+                }
+                days += dt.day - 1;
+
+                ts.tv_sec = days * 86400 + dt.hour * 3600 + dt.minute * 60 + dt.second;
+                uint32_t uptime_ms = timer_uptime_ms();
+                ts.tv_nsec = (int32_t)((uptime_ms % 1000) * 1000000);
+            } else {
+                frame->eax = (uint32_t)-EINVAL;
+                return frame;
+            }
+
+            if (!copy_to_user(tp_user, &ts, sizeof(ts))) {
+                frame->eax = (uint32_t)-EFAULT;
+                return frame;
+            }
+            frame->eax = 0;
+            return frame;
+        }
+
+        // nanosleep(req, rem)
+        case SYS_NANOSLEEP: {
+            const vos_timespec_t* req_user = (const vos_timespec_t*)frame->ebx;
+            vos_timespec_t* rem_user = (vos_timespec_t*)frame->ecx;
+
+            if (!req_user) {
+                frame->eax = (uint32_t)-EINVAL;
+                return frame;
+            }
+
+            vos_timespec_t req;
+            if (!copy_from_user(&req, req_user, sizeof(req))) {
+                frame->eax = (uint32_t)-EFAULT;
+                return frame;
+            }
+
+            if (req.tv_sec < 0 || req.tv_nsec < 0 || req.tv_nsec >= 1000000000) {
+                frame->eax = (uint32_t)-EINVAL;
+                return frame;
+            }
+
+            // Convert to milliseconds
+            uint32_t ms = (uint32_t)(req.tv_sec * 1000 + req.tv_nsec / 1000000);
+            if (ms == 0 && (req.tv_sec > 0 || req.tv_nsec > 0)) {
+                ms = 1;  // At least 1ms if any sleep was requested
+            }
+
+            if (ms == 0) {
+                frame->eax = 0;
+                return frame;
+            }
+
+            uint32_t hz = timer_get_hz();
+            if (hz == 0) {
+                frame->eax = (uint32_t)-EIO;
+                return frame;
+            }
+
+            uint32_t ticks_to_wait = (ms * hz + 999u) / 1000u;
+            if (ticks_to_wait == 0) {
+                ticks_to_wait = 1;
+            }
+            uint32_t wake = timer_get_ticks() + ticks_to_wait;
+
+            // If interrupted, write remaining time to rem
+            if (rem_user) {
+                vos_timespec_t rem = {0, 0};
+                (void)copy_to_user(rem_user, &rem, sizeof(rem));
+            }
+
+            frame->eax = 0;
+            return tasking_sleep_until(frame, wake);
+        }
+
+        // access(path, mode)
+        case SYS_ACCESS: {
+            const char* path_user = (const char*)frame->ebx;
+            int32_t mode = (int32_t)frame->ecx;
+
+            char path[256];
+            if (!copy_user_cstring(path, sizeof(path), path_user)) {
+                frame->eax = (uint32_t)-EFAULT;
+                return frame;
+            }
+
+            int32_t rc = tasking_access(path, mode);
+            frame->eax = (uint32_t)rc;
+            return frame;
+        }
+
+        // isatty(fd)
+        case SYS_ISATTY: {
+            int32_t fd = (int32_t)frame->ebx;
+            int32_t rc = tasking_fd_isatty(fd);
+            frame->eax = (uint32_t)rc;
+            return frame;
+        }
+
+        // uname(buf)
+        case SYS_UNAME: {
+            vos_utsname_t* buf_user = (vos_utsname_t*)frame->ebx;
+            if (!buf_user) {
+                frame->eax = (uint32_t)-EINVAL;
+                return frame;
+            }
+
+            vos_utsname_t uts;
+            memset(&uts, 0, sizeof(uts));
+            strncpy(uts.sysname, "VOS", sizeof(uts.sysname) - 1);
+            strncpy(uts.nodename, "vos", sizeof(uts.nodename) - 1);
+            strncpy(uts.release, "1.0.0", sizeof(uts.release) - 1);
+            strncpy(uts.version, "VOS 1.0.0", sizeof(uts.version) - 1);
+            strncpy(uts.machine, "i686", sizeof(uts.machine) - 1);
+
+            if (!copy_to_user(buf_user, &uts, sizeof(uts))) {
+                frame->eax = (uint32_t)-EFAULT;
+                return frame;
+            }
+            frame->eax = 0;
+            return frame;
+        }
+
+        // poll(fds, nfds, timeout_ms)
+        case SYS_POLL: {
+            vos_pollfd_t* fds_user = (vos_pollfd_t*)frame->ebx;
+            uint32_t nfds = frame->ecx;
+            int32_t timeout_ms = (int32_t)frame->edx;
+
+            if (nfds > VOS_FD_SETSIZE) {
+                frame->eax = (uint32_t)-EINVAL;
+                return frame;
+            }
+
+            if (nfds == 0) {
+                // Just sleep if timeout > 0
+                if (timeout_ms > 0) {
+                    uint32_t hz = timer_get_hz();
+                    if (hz > 0) {
+                        uint32_t ticks = ((uint32_t)timeout_ms * hz + 999u) / 1000u;
+                        uint32_t wake = timer_get_ticks() + ticks;
+                        frame->eax = 0;
+                        return tasking_sleep_until(frame, wake);
+                    }
+                }
+                frame->eax = 0;
+                return frame;
+            }
+
+            // Copy pollfds from user
+            vos_pollfd_t fds[VOS_FD_SETSIZE];
+            uint32_t copy_size = nfds * sizeof(vos_pollfd_t);
+            if (!copy_from_user(fds, fds_user, copy_size)) {
+                frame->eax = (uint32_t)-EFAULT;
+                return frame;
+            }
+
+            // Calculate deadline
+            uint32_t start_tick = timer_get_ticks();
+            uint32_t hz = timer_get_hz();
+            uint32_t deadline = 0;
+            if (timeout_ms > 0 && hz > 0) {
+                deadline = start_tick + ((uint32_t)timeout_ms * hz + 999u) / 1000u;
+            }
+
+            for (;;) {
+                int32_t nready = 0;
+
+                // Check each fd
+                for (uint32_t i = 0; i < nfds; i++) {
+                    fds[i].revents = 0;
+                    int32_t fd = fds[i].fd;
+
+                    if (fd < 0) {
+                        continue;  // Negative fd is ignored
+                    }
+
+                    // Check if fd is valid
+                    int32_t readable = tasking_fd_is_readable(fd);
+                    int32_t writable = tasking_fd_is_writable(fd);
+
+                    if (readable < 0 && writable < 0) {
+                        fds[i].revents = VOS_POLLNVAL;
+                        nready++;
+                        continue;
+                    }
+
+                    if ((fds[i].events & VOS_POLLIN) && readable > 0) {
+                        fds[i].revents |= VOS_POLLIN;
+                        nready++;
+                    }
+                    if ((fds[i].events & VOS_POLLOUT) && writable > 0) {
+                        fds[i].revents |= VOS_POLLOUT;
+                        nready++;
+                    }
+                }
+
+                if (nready > 0 || timeout_ms == 0) {
+                    // Copy results back
+                    if (!copy_to_user(fds_user, fds, copy_size)) {
+                        frame->eax = (uint32_t)-EFAULT;
+                        return frame;
+                    }
+                    frame->eax = (uint32_t)nready;
+                    return frame;
+                }
+
+                // Check for timeout
+                if (timeout_ms > 0) {
+                    uint32_t now = timer_get_ticks();
+                    if (now >= deadline) {
+                        // Copy results back (all revents should be 0)
+                        if (!copy_to_user(fds_user, fds, copy_size)) {
+                            frame->eax = (uint32_t)-EFAULT;
+                            return frame;
+                        }
+                        frame->eax = 0;
+                        return frame;
+                    }
+                }
+
+                // Check for signals
+                if (tasking_current_should_interrupt()) {
+                    frame->eax = (uint32_t)-EINTR;
+                    return frame;
+                }
+
+                // Wait a bit before checking again
                 __asm__ volatile ("sti; hlt; cli");
             }
         }

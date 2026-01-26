@@ -146,6 +146,17 @@ int32_t tasking_fd_is_readable(int32_t fd);
 // Returns 1 if writable, 0 if not, -1 if fd invalid.
 int32_t tasking_fd_is_writable(int32_t fd);
 
+// Check if an fd refers to a terminal (TTY).
+// Returns 1 if TTY, 0 if not.
+int32_t tasking_fd_isatty(int32_t fd);
+
+// Get the current working directory of the current task.
+const char* tasking_get_cwd(void);
+
+// Check file access permissions (access syscall).
+// mode: F_OK=0, R_OK=4, W_OK=2, X_OK=1
+int32_t tasking_access(const char* path, int32_t mode);
+
 // Virtual memory mappings (mmap-style).
 int32_t tasking_mmap(uint32_t addr_hint, uint32_t length, uint32_t prot, uint32_t flags, int32_t fd, uint32_t offset, uint32_t* out_addr);
 int32_t tasking_munmap(uint32_t addr, uint32_t length);

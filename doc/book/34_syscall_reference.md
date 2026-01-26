@@ -391,17 +391,110 @@ int _open(const char *name, int flags, int mode) {
 }
 ```
 
+## New POSIX Syscalls (84-90)
+
+| # | Name | Args | Returns | Description |
+|---|------|------|---------|-------------|
+| 84 | gettimeofday | tv*, tz* | 0/-1 | Get wall clock time |
+| 85 | clock_gettime | clockid, tp* | 0/-1 | Get clock (realtime/monotonic) |
+| 86 | nanosleep | req*, rem* | 0/-1 | Sleep with nanosecond precision |
+| 87 | access | path, mode | 0/-1 | Check file access permissions |
+| 88 | isatty | fd | 1/0 | Check if fd is a terminal |
+| 89 | uname | buf* | 0/-1 | Get system information |
+| 90 | poll | fds*, nfds, timeout | nready/-1 | Wait on multiple file descriptors |
+
+### gettimeofday (84)
+
+```c
+int gettimeofday(struct timeval *tv, void *tz);
+```
+
+Get wall clock time. `tz` is ignored. Returns Unix timestamp in `tv`.
+
+### clock_gettime (85)
+
+```c
+int clock_gettime(clockid_t clk_id, struct timespec *tp);
+```
+
+Clock IDs:
+- `CLOCK_REALTIME` (0): Wall clock time
+- `CLOCK_MONOTONIC` (1): Time since boot (unaffected by clock changes)
+
+### nanosleep (86)
+
+```c
+int nanosleep(const struct timespec *req, struct timespec *rem);
+```
+
+Sleep for specified duration. If interrupted, remaining time written to `rem`.
+
+### access (87)
+
+```c
+int access(const char *path, int mode);
+```
+
+Mode flags:
+- `F_OK` (0): Check existence
+- `R_OK` (4): Check read permission
+- `W_OK` (2): Check write permission
+- `X_OK` (1): Check execute permission
+
+### isatty (88)
+
+```c
+int isatty(int fd);
+```
+
+Returns 1 if `fd` refers to a terminal, 0 otherwise.
+
+### uname (89)
+
+```c
+struct utsname {
+    char sysname[65];   // "VOS"
+    char nodename[65];  // "vos"
+    char release[65];   // "1.0.0"
+    char version[65];   // "VOS 1.0.0"
+    char machine[65];   // "i686"
+};
+
+int uname(struct utsname *buf);
+```
+
+### poll (90)
+
+```c
+struct pollfd {
+    int fd;
+    short events;
+    short revents;
+};
+
+int poll(struct pollfd *fds, nfds_t nfds, int timeout);
+```
+
+Event flags:
+- `POLLIN` (0x0001): Data available to read
+- `POLLOUT` (0x0004): Writing won't block
+- `POLLERR` (0x0008): Error condition
+- `POLLHUP` (0x0010): Hang up
+- `POLLNVAL` (0x0020): Invalid fd
+
 ## Summary
 
-VOS provides 71+ system calls covering:
+VOS provides 91 system calls covering:
 
 1. **Process management** (fork, exec, wait, exit)
-2. **File operations** (open, read, write, close)
+2. **File operations** (open, read, write, close, access)
 3. **Memory management** (sbrk, mmap)
 4. **Signals** (kill, signal, sigaction)
-5. **Time** (clock_gettime, nanosleep)
-6. **Terminal I/O** (tcgetattr, ioctl)
-7. **VOS-specific** (graphics, fonts, process list)
+5. **Time** (gettimeofday, clock_gettime, nanosleep)
+6. **Terminal I/O** (tcgetattr, ioctl, isatty)
+7. **I/O multiplexing** (select, poll)
+8. **System info** (uname)
+9. **VOS-specific** (graphics, fonts, process list, introspection)
 
 Use this reference when developing VOS applications or extending the kernel.
 

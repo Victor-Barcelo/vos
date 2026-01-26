@@ -167,6 +167,17 @@ enum {
     SYS_DESCRIPTOR_INFO = 77,
     SYS_SYSCALL_STATS = 78,
     SYS_SELECT = 79,
+    SYS_THEME_COUNT = 80,
+    SYS_THEME_GET = 81,
+    SYS_THEME_INFO = 82,
+    SYS_THEME_SET = 83,
+    SYS_GETTIMEOFDAY = 84,
+    SYS_CLOCK_GETTIME = 85,
+    SYS_NANOSLEEP = 86,
+    SYS_ACCESS = 87,
+    SYS_ISATTY = 88,
+    SYS_UNAME = 89,
+    SYS_POLL = 90,
 };
 
 // For select() syscall
@@ -184,6 +195,44 @@ typedef struct vos_fd_set {
 #define VOS_FD_SET(fd, set) do { if ((fd) >= 0 && (fd) < VOS_FD_SETSIZE) (set)->bits[(fd)/32] |= (1u << ((fd)%32)); } while(0)
 #define VOS_FD_CLR(fd, set) do { if ((fd) >= 0 && (fd) < VOS_FD_SETSIZE) (set)->bits[(fd)/32] &= ~(1u << ((fd)%32)); } while(0)
 #define VOS_FD_ISSET(fd, set) (((fd) >= 0 && (fd) < VOS_FD_SETSIZE) ? ((set)->bits[(fd)/32] & (1u << ((fd)%32))) != 0 : 0)
+
+// For clock_gettime / nanosleep
+typedef struct vos_timespec {
+    int32_t tv_sec;
+    int32_t tv_nsec;
+} vos_timespec_t;
+
+// Clock IDs for clock_gettime
+#define VOS_CLOCK_REALTIME  0
+#define VOS_CLOCK_MONOTONIC 1
+
+// For access() syscall
+#define VOS_F_OK 0
+#define VOS_R_OK 4
+#define VOS_W_OK 2
+#define VOS_X_OK 1
+
+// For uname() syscall
+typedef struct vos_utsname {
+    char sysname[65];
+    char nodename[65];
+    char release[65];
+    char version[65];
+    char machine[65];
+} vos_utsname_t;
+
+// For poll() syscall
+typedef struct vos_pollfd {
+    int32_t fd;
+    int16_t events;
+    int16_t revents;
+} vos_pollfd_t;
+
+#define VOS_POLLIN   0x0001
+#define VOS_POLLOUT  0x0004
+#define VOS_POLLERR  0x0008
+#define VOS_POLLHUP  0x0010
+#define VOS_POLLNVAL 0x0020
 
 static inline int sys_write(int fd, const char* buf, uint32_t len) {
     int ret;
@@ -754,6 +803,131 @@ static inline int sys_select(int nfds, vos_fd_set_t* readfds, vos_fd_set_t* writ
         "int $0x80"
         : "=a"(ret)
         : "a"(SYS_SELECT), "b"(nfds), "c"(readfds), "d"(writefds), "S"(exceptfds), "D"(timeout)
+        : "memory"
+    );
+    return ret;
+}
+
+// Color theme syscalls
+static inline int sys_theme_count(void) {
+    int ret;
+    __asm__ volatile (
+        "int $0x80"
+        : "=a"(ret)
+        : "a"(SYS_THEME_COUNT)
+        : "memory"
+    );
+    return ret;
+}
+
+static inline int sys_theme_get_current(void) {
+    int ret;
+    __asm__ volatile (
+        "int $0x80"
+        : "=a"(ret)
+        : "a"(SYS_THEME_GET)
+        : "memory"
+    );
+    return ret;
+}
+
+static inline int sys_theme_info(uint32_t index, char* name, uint32_t name_cap) {
+    int ret;
+    __asm__ volatile (
+        "int $0x80"
+        : "=a"(ret)
+        : "a"(SYS_THEME_INFO), "b"(index), "c"(name), "d"(name_cap)
+        : "memory"
+    );
+    return ret;
+}
+
+static inline int sys_theme_set(uint32_t index) {
+    int ret;
+    __asm__ volatile (
+        "int $0x80"
+        : "=a"(ret)
+        : "a"(SYS_THEME_SET), "b"(index)
+        : "memory"
+    );
+    return ret;
+}
+
+// New POSIX-like syscalls
+
+static inline int sys_gettimeofday(vos_timeval_t* tv, void* tz) {
+    (void)tz;  // timezone ignored
+    int ret;
+    __asm__ volatile (
+        "int $0x80"
+        : "=a"(ret)
+        : "a"(SYS_GETTIMEOFDAY), "b"(tv)
+        : "memory"
+    );
+    return ret;
+}
+
+static inline int sys_clock_gettime(int clockid, vos_timespec_t* tp) {
+    int ret;
+    __asm__ volatile (
+        "int $0x80"
+        : "=a"(ret)
+        : "a"(SYS_CLOCK_GETTIME), "b"(clockid), "c"(tp)
+        : "memory"
+    );
+    return ret;
+}
+
+static inline int sys_nanosleep(const vos_timespec_t* req, vos_timespec_t* rem) {
+    int ret;
+    __asm__ volatile (
+        "int $0x80"
+        : "=a"(ret)
+        : "a"(SYS_NANOSLEEP), "b"(req), "c"(rem)
+        : "memory"
+    );
+    return ret;
+}
+
+static inline int sys_access(const char* path, int mode) {
+    int ret;
+    __asm__ volatile (
+        "int $0x80"
+        : "=a"(ret)
+        : "a"(SYS_ACCESS), "b"(path), "c"(mode)
+        : "memory"
+    );
+    return ret;
+}
+
+static inline int sys_isatty(int fd) {
+    int ret;
+    __asm__ volatile (
+        "int $0x80"
+        : "=a"(ret)
+        : "a"(SYS_ISATTY), "b"(fd)
+        : "memory"
+    );
+    return ret;
+}
+
+static inline int sys_uname(vos_utsname_t* buf) {
+    int ret;
+    __asm__ volatile (
+        "int $0x80"
+        : "=a"(ret)
+        : "a"(SYS_UNAME), "b"(buf)
+        : "memory"
+    );
+    return ret;
+}
+
+static inline int sys_poll(vos_pollfd_t* fds, uint32_t nfds, int timeout_ms) {
+    int ret;
+    __asm__ volatile (
+        "int $0x80"
+        : "=a"(ret)
+        : "a"(SYS_POLL), "b"(fds), "c"(nfds), "d"(timeout_ms)
         : "memory"
     );
     return ret;

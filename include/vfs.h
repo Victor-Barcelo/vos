@@ -7,6 +7,10 @@
 void vfs_init(const multiboot_info_t* mbi);
 bool vfs_is_ready(void);
 
+// pivot_root: make MinixFS the root filesystem, initramfs moves to /initramfs
+bool vfs_pivot_root(void);
+bool vfs_is_pivoted(void);
+
 uint32_t vfs_file_count(void);
 const char* vfs_file_name(uint32_t idx);
 uint32_t vfs_file_size(uint32_t idx);

@@ -207,6 +207,7 @@ enum {
     SYS_GFX_DOUBLE_BUFFER = 99,
     SYS_DISK_INFO = 100,
     SYS_SET_CONSOLE = 101,
+    SYS_PIVOT_ROOT = 102,
 };
 
 // For select() syscall
@@ -1056,6 +1057,18 @@ static inline int sys_set_console(int console) {
         "int $0x80"
         : "=a"(ret)
         : "a"(SYS_SET_CONSOLE), "b"(console)
+        : "memory"
+    );
+    return ret;
+}
+
+// pivot_root: make MinixFS the root filesystem, initramfs moves to /initramfs
+static inline int sys_pivot_root(void) {
+    int ret;
+    __asm__ volatile (
+        "int $0x80"
+        : "=a"(ret)
+        : "a"(SYS_PIVOT_ROOT)
         : "memory"
     );
     return ret;

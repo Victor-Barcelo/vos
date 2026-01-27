@@ -227,24 +227,7 @@ int SDL_Error(SDL_errorcode code) {
     }
 }
 
-/* Delay function */
-void SDL_Delay(Uint32 ms) {
-    sys_sleep(ms);
-}
-
-/* Get ticks (milliseconds since SDL init) */
-Uint32 SDL_GetTicks(void) {
-    return sys_uptime_ms();
-}
-
-/* Get high-resolution counter */
-Uint64 SDL_GetPerformanceCounter(void) {
-    return (Uint64)SDL_GetTicks() * 1000;
-}
-
-Uint64 SDL_GetPerformanceFrequency(void) {
-    return 1000000;  /* Microseconds */
-}
+/* Timer functions are in SDL_timer.c */
 
 /* Environment variable functions */
 char *SDL_getenv(const char *name) {
@@ -268,18 +251,35 @@ void SDL_SetWindowIcon(SDL_Window *window, SDL_Surface *icon) {
     /* No-op on VOS */
 }
 
-/* Message box stub - print to stderr on VOS */
+/* Message box - display on VOS console */
 int SDL_ShowSimpleMessageBox(Uint32 flags, const char *title,
                              const char *message, SDL_Window *window) {
-    (void)flags;
     (void)window;
-    /* Print to stderr since we don't have GUI message boxes */
-    /* Note: In VOS environment this would use sys_write to stderr */
-    if (title) {
-        /* Could use sys_write here but keeping it simple */
+
+    /* Determine message type prefix */
+    const char *prefix = "[INFO]";
+    if (flags & SDL_MESSAGEBOX_ERROR) {
+        prefix = "[ERROR]";
+    } else if (flags & SDL_MESSAGEBOX_WARNING) {
+        prefix = "[WARNING]";
     }
-    if (message) {
-        /* Could use sys_write here but keeping it simple */
+
+    /* Output to stderr using VOS syscall */
+    /* stderr is fd 2 in POSIX */
+    if (title && message) {
+        /* Format: [TYPE] Title: Message\n */
+        sys_write(2, prefix, strlen(prefix));
+        sys_write(2, " ", 1);
+        sys_write(2, title, strlen(title));
+        sys_write(2, ": ", 2);
+        sys_write(2, message, strlen(message));
+        sys_write(2, "\n", 1);
+    } else if (message) {
+        sys_write(2, prefix, strlen(prefix));
+        sys_write(2, " ", 1);
+        sys_write(2, message, strlen(message));
+        sys_write(2, "\n", 1);
     }
+
     return 0;
 }

@@ -142,7 +142,8 @@ enum {
     SYS_GFX_DOUBLE_BUFFER = 99,
     SYS_DISK_INFO = 100,
     SYS_SET_CONSOLE = 101,
-    SYS_MAX = 102,
+    SYS_PIVOT_ROOT = 102,
+    SYS_MAX = 103,
 };
 
 // Syscall counters - track how many times each syscall is invoked
@@ -252,6 +253,7 @@ static const char* syscall_names[SYS_MAX] = {
     [SYS_GFX_DOUBLE_BUFFER] = "gfx_double_buffer",
     [SYS_DISK_INFO] = "disk_info",
     [SYS_SET_CONSOLE] = "set_console",
+    [SYS_PIVOT_ROOT] = "pivot_root",
 };
 
 typedef struct vos_task_info_user {
@@ -2281,6 +2283,13 @@ interrupt_frame_t* syscall_handle(interrupt_frame_t* frame) {
             int console = (int)frame->ebx;
             int result = tasking_set_console(console);
             frame->eax = (uint32_t)result;
+            return frame;
+        }
+
+        case SYS_PIVOT_ROOT: {
+            // pivot_root: make MinixFS the root, initramfs moves to /initramfs
+            bool ok = vfs_pivot_root();
+            frame->eax = ok ? 0 : (uint32_t)-1;
             return frame;
         }
 

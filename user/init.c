@@ -492,6 +492,16 @@ int main(int argc, char** argv) {
         setup_ram_homes();
     }
 
+    // Pivot root: make MinixFS the root filesystem
+    // After this, / is the disk and /initramfs has the boot files
+    if (!g_live_mode && have_disk) {
+        if (sys_pivot_root() == 0) {
+            tag("[init] ", CLR_CYAN);
+            tag("pivot_root: ", CLR_GREEN);
+            printf("MinixFS is now root filesystem\n");
+        }
+    }
+
     // Clear screen
     printf("\x1b[2J\x1b[H");
     fflush(stdout);

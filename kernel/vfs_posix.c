@@ -82,6 +82,9 @@ typedef enum {
     VFS_BACKEND_MINIXFS = 2,
 } vfs_backend_t;
 
+// pivot_root state: when true, MinixFS becomes root and initramfs moves to /initramfs
+static bool g_root_pivoted = false;
+
 typedef enum {
     VFS_HANDLE_FILE = 0,
     VFS_HANDLE_DIR = 1,
@@ -172,6 +175,19 @@ static bool abs_is_mount(const char* abs, const char* mount) {
     return next == '\0' || next == '/';
 }
 
+// pivot_root functions
+bool vfs_pivot_root(void) {
+    if (!minixfs_is_ready()) {
+        return false;
+    }
+    g_root_pivoted = true;
+    return true;
+}
+
+bool vfs_is_pivoted(void) {
+    return g_root_pivoted;
+}
+
 static bool abs_alias_to(const char* abs, const char* mount, const char* target, char out[VFS_PATH_MAX]) {
     if (!out) {
         return false;
@@ -216,17 +232,9 @@ static bool vfs_path_exists_raw(const char* path) {
     return ramfs_stat_ex(path, &is_dir, NULL, NULL, NULL);
 }
 
-// Convenience aliases so userland can use Linux-like paths while we keep the
-// actual mountpoints simple:
-//   /usr  -> /disk/usr   (toolchains, headers, libs)
-//   /etc  -> /disk/etc   (persistent config)
-//   /home -> /disk/home  (user homes)
-//   /var  -> /disk/var   (logs/state; optional)
-//   /tmp  -> /ram/tmp    (ephemeral scratch)
-//
-// These aliases use overlay semantics: if the destination path doesn't exist
-// in RAMFS, we fall back to the original path (which may resolve to initramfs).
-// This allows initramfs defaults to be overridden by persistent storage.
+// Convenience aliases so userland can use Linux-like paths.
+// After pivot_root: MinixFS is root, initramfs at /initramfs
+// Before pivot_root: traditional aliases (/home -> /disk/home, etc.)
 static const char* abs_apply_posix_aliases(const char* abs, char tmp[VFS_PATH_MAX]) {
     if (!abs || !tmp) {
         return abs;
@@ -237,18 +245,46 @@ static const char* abs_apply_posix_aliases(const char* abs, char tmp[VFS_PATH_MA
         return tmp;
     }
 
-    // /etc -> /ram/etc (always; init populates from initramfs + /disk/etc overlay)
+    // After pivot_root: MinixFS is the root filesystem
+    if (g_root_pivoted) {
+        // /initramfs/* -> access old initramfs (no translation, handled specially)
+        if (abs_is_mount(abs, "/initramfs")) {
+            return abs;  // handled by vfs_lstat_abs etc.
+        }
+        // /ram/* -> still goes to RAMFS
+        if (abs_is_mount(abs, "/ram")) {
+            return abs;
+        }
+        // /disk/* -> translate to MinixFS path (backwards compat)
+        if (abs_is_mount(abs, "/disk")) {
+            // /disk/foo -> /foo (MinixFS root)
+            const char* rel = abs + 5;
+            if (*rel == '\0') {
+                strncpy(tmp, "/", VFS_PATH_MAX - 1);
+            } else {
+                strncpy(tmp, rel, VFS_PATH_MAX - 1);
+            }
+            tmp[VFS_PATH_MAX - 1] = '\0';
+            return tmp;
+        }
+        // /etc -> /ram/etc (still use RAM overlay for etc)
+        if (abs_alias_to(abs, "/etc", "/ram/etc", tmp)) {
+            return tmp;
+        }
+        // Everything else: already points to MinixFS root
+        return abs;
+    }
+
+    // Before pivot_root: traditional alias system
+    // /etc -> /ram/etc (init populates from initramfs + /disk/etc overlay)
     if (abs_alias_to(abs, "/etc", "/ram/etc", tmp)) {
         return tmp;
     }
 
     // For persistent aliases: alias to disk if the specific path exists there,
     // or if the parent directory exists on disk (allows creating new files).
-    // This allows initramfs defaults to be accessible at standard paths,
-    // while disk files can override them when present.
     if (abs_alias_to(abs, "/usr", "/disk/usr", tmp)) {
-        if (vfs_path_exists_raw(tmp)) return tmp;  // specific path exists on disk
-        // Check if parent exists on disk (allows file creation)
+        if (vfs_path_exists_raw(tmp)) return tmp;
         char parent[VFS_PATH_MAX];
         strncpy(parent, tmp, sizeof(parent) - 1);
         parent[sizeof(parent) - 1] = '\0';
@@ -709,6 +745,41 @@ static int32_t vfs_lstat_abs(const char* abs_path, vfs_stat_t* out) {
         return -EINVAL;
     }
     memset(out, 0, sizeof(*out));
+
+    // After pivot_root: /initramfs/* goes to old initramfs
+    if (g_root_pivoted && abs_is_mount(abs_path, "/initramfs")) {
+        const char* rel = abs_path + 10;  // skip "/initramfs"
+        if (*rel == '\0') rel = "/";
+        // Use initramfs (original vfs.c functions)
+        uint32_t size = 0;
+        bool found = vfs_read_file(rel, NULL, &size);
+        if (!found) {
+            return -ENOENT;
+        }
+        out->is_dir = 0;  // initramfs is flat
+        out->size = size;
+        out->mode = 0644;
+        return 0;
+    }
+
+    // After pivot_root: most paths go to MinixFS
+    if (g_root_pivoted && !abs_is_mount(abs_path, "/ram") && !abs_is_mount(abs_path, "/disk")) {
+        if (!minixfs_is_ready()) {
+            return -EIO;
+        }
+        minixfs_stat_t mst;
+        if (!minixfs_stat(abs_path, &mst)) {
+            return -ENOENT;
+        }
+        out->is_dir = MINIX_S_ISDIR(mst.mode) ? 1u : 0u;
+        out->is_symlink = MINIX_S_ISLNK(mst.mode) ? 1u : 0u;
+        out->size = mst.size;
+        out->mode = (uint16_t)(mst.mode & 07777u);
+        out->uid = mst.uid;
+        out->gid = mst.gid;
+        unix_to_fat_ts(mst.mtime, &out->wtime, &out->wdate);
+        return 0;
+    }
 
     // /disk uses Minix filesystem for persistent storage
     if (abs_is_mount(abs_path, "/disk")) {
@@ -1676,6 +1747,69 @@ int32_t vfs_open_path(const char* cwd, const char* path, uint32_t flags, vfs_han
         eff[pos] = '\0';
     } else if (rc < 0) {
         return rc;
+    }
+
+    // After pivot_root: /initramfs/* goes to initramfs, most paths go to MinixFS
+    if (g_root_pivoted) {
+        // /initramfs/* -> read-only initramfs
+        if (abs_is_mount(eff, "/initramfs")) {
+            if (want_write || (flags & VFS_O_CREAT)) {
+                return -EROFS;
+            }
+            const char* rel = eff + 10;  // skip "/initramfs"
+            if (*rel == '\0') rel = "/";
+
+            vfs_stat_t st;
+            int32_t stat_rc = initramfs_stat_abs(rel, &st);
+            if (stat_rc < 0) return stat_rc;
+            if (want_dir && !st.is_dir) return -ENOTDIR;
+            if (st.is_dir) return open_dir_handle(VFS_BACKEND_INITRAMFS, eff, flags, out);
+
+            const uint8_t* data = NULL;
+            uint32_t size = 0;
+            if (!vfs_read_file(rel, &data, &size) || !data) return -ENOENT;
+            return open_file_handle(VFS_BACKEND_INITRAMFS, eff, flags, data, size, out);
+        }
+
+        // /ram/* still goes to RAMFS (handled below)
+        // Everything else (including /, /bin, /home, etc.) -> MinixFS
+        if (!abs_is_mount(eff, "/ram")) {
+            if (!minixfs_is_ready()) return -EIO;
+
+            bool is_dir = minixfs_is_dir(eff);
+            bool is_file = minixfs_is_file(eff);
+
+            if (is_dir || is_file) {
+                if (want_dir && !is_dir) return -ENOTDIR;
+                if (is_dir) {
+                    if (want_write) return -EISDIR;
+                    return open_dir_handle(VFS_BACKEND_MINIXFS, eff, flags, out);
+                }
+                if ((flags & VFS_O_CREAT) && (flags & VFS_O_EXCL)) return -EEXIST;
+                if (want_write && (flags & VFS_O_TRUNC)) {
+                    if (!minixfs_write_file(eff, NULL, 0)) return -EIO;
+                }
+            } else {
+                if (want_dir) return -ENOENT;
+                if ((flags & VFS_O_CREAT) == 0) return -ENOENT;
+                if (!minixfs_write_file(eff, NULL, 0)) return -EIO;
+            }
+
+            uint8_t* data = NULL;
+            uint32_t size = 0;
+            if ((flags & VFS_O_TRUNC) == 0) {
+                data = minixfs_read_file(eff, &size);
+            }
+            rc = open_file_handle(VFS_BACKEND_MINIXFS, eff, flags, data, size, out);
+            if (rc < 0) {
+                if (data) kfree(data);
+                return rc;
+            }
+            (*out)->buf = data;
+            (*out)->cap = size;
+            (*out)->ro_data = (*out)->buf;
+            return 0;
+        }
     }
 
     // /disk (minixfs)

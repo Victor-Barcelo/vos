@@ -735,10 +735,10 @@ $(ISO): $(KERNEL) $(USER_BINS) $(INITRAMFS_FILES) $(INITRAMFS_DIRS) $(TCC_LIBTCC
 	cp $(USER_SDLTEST) $(INITRAMFS_ROOT)/bin/sdltest
 	@# Klystrack chiptune tracker
 	cp $(THIRD_PARTY_DIR)/klystrack/bin.vos/klystrack $(INITRAMFS_ROOT)/bin/klystrack
-	mkdir -p $(INITRAMFS_ROOT)/res
-	cp -r $(THIRD_PARTY_DIR)/klystrack/res/* $(INITRAMFS_ROOT)/res/
-	mkdir -p $(INITRAMFS_ROOT)/key
-	cp -r $(THIRD_PARTY_DIR)/klystrack/key/* $(INITRAMFS_ROOT)/key/
+	mkdir -p $(INITRAMFS_ROOT)/res/klystrack/res
+	mkdir -p $(INITRAMFS_ROOT)/res/klystrack/key
+	cp -r $(THIRD_PARTY_DIR)/klystrack/res/* $(INITRAMFS_ROOT)/res/klystrack/res/
+	cp -r $(THIRD_PARTY_DIR)/klystrack/key/* $(INITRAMFS_ROOT)/res/klystrack/key/
 	for b in $(SBASE_TOOLS); do cp $(SBASE_BIN_DIR)/$$b.elf $(INITRAMFS_ROOT)/bin/$$b; done
 	@# Include TCC sysroot in initramfs - will be copied to /disk on first boot
 	mkdir -p $(INITRAMFS_ROOT)/sysroot/usr/lib/tcc/include

@@ -86,6 +86,24 @@ typedef struct vos_syscall_stats {
     char names[VOS_SYSCALL_STATS_MAX][16];  // Name of each syscall
 } vos_syscall_stats_t;
 
+// Disk/mount information for sysview
+#define VOS_MAX_DISKS 8
+typedef struct vos_disk_info {
+    char mount_point[32];      // e.g., "/", "/disk", "/ram"
+    char fs_type[16];          // e.g., "ramfs", "minix", "fat"
+    uint32_t total_kb;         // Total size in KB
+    uint32_t used_kb;          // Used size in KB
+    uint32_t free_kb;          // Free size in KB
+    uint32_t block_size;       // Block size in bytes
+    uint32_t total_inodes;     // Total inodes (if applicable)
+    uint32_t free_inodes;      // Free inodes (if applicable)
+} vos_disk_info_t;
+
+typedef struct vos_disks_info {
+    uint32_t count;                         // Number of mounted filesystems
+    vos_disk_info_t disks[VOS_MAX_DISKS];   // Info for each mount
+} vos_disks_info_t;
+
 enum {
     SYS_WRITE = 0,
     SYS_EXIT = 1,
@@ -185,6 +203,9 @@ enum {
     SYS_CHOWN = 95,
     SYS_FCHOWN = 96,
     SYS_LCHOWN = 97,
+    SYS_GFX_FLIP = 98,
+    SYS_GFX_DOUBLE_BUFFER = 99,
+    SYS_DISK_INFO = 100,
 };
 
 // For select() syscall
@@ -559,6 +580,30 @@ static inline int sys_gfx_blit_rgba(int32_t x, int32_t y, uint32_t w, uint32_t h
     return ret;
 }
 
+// Double buffering: copy backbuffer to visible framebuffer
+static inline int sys_gfx_flip(void) {
+    int ret;
+    __asm__ volatile (
+        "int $0x80"
+        : "=a"(ret)
+        : "a"(SYS_GFX_FLIP)
+        : "memory"
+    );
+    return ret;
+}
+
+// Enable or disable double buffering (0=disable, 1=enable)
+static inline int sys_gfx_double_buffer(int enable) {
+    int ret;
+    __asm__ volatile (
+        "int $0x80"
+        : "=a"(ret)
+        : "a"(SYS_GFX_DOUBLE_BUFFER), "b"(enable)
+        : "memory"
+    );
+    return ret;
+}
+
 static inline uint32_t sys_mem_total_kb(void) {
     uint32_t ret;
     __asm__ volatile (
@@ -798,6 +843,17 @@ static inline int sys_syscall_stats(vos_syscall_stats_t* out) {
         "int $0x80"
         : "=a"(ret)
         : "a"(SYS_SYSCALL_STATS), "b"(out)
+        : "memory"
+    );
+    return ret;
+}
+
+static inline int sys_disk_info(vos_disks_info_t* out) {
+    int ret;
+    __asm__ volatile (
+        "int $0x80"
+        : "=a"(ret)
+        : "a"(SYS_DISK_INFO), "b"(out)
         : "memory"
     );
     return ret;

@@ -118,6 +118,13 @@ bool screen_graphics_putpixel(int32_t x, int32_t y, uint8_t vga_color);
 bool screen_graphics_line(int32_t x0, int32_t y0, int32_t x1, int32_t y1, uint8_t vga_color);
 bool screen_graphics_blit_rgba(int32_t x, int32_t y, uint32_t w, uint32_t h, const uint8_t* rgba, uint32_t stride_bytes);
 
+// Double buffering support for flicker-free graphics.
+// When enabled, all drawing goes to an off-screen buffer.
+// Call screen_gfx_flip() to copy the buffer to the visible screen.
+bool screen_gfx_set_double_buffering(bool enabled);
+bool screen_gfx_is_double_buffered(void);
+bool screen_gfx_flip(void);
+
 // Simple scrollback support (framebuffer text console only).
 bool screen_scrollback_active(void);
 void screen_scrollback_lines(int32_t delta);

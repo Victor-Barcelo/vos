@@ -300,7 +300,7 @@ bool paging_user_accessible_range(uint32_t vaddr, uint32_t size, bool write) {
     if (vaddr < USER_BASE) {
         return false;
     }
-    if (end > 0xC0000000u) {
+    if (end > USER_LIMIT) {
         return false;
     }
 

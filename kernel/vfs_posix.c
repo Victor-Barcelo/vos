@@ -242,20 +242,54 @@ static const char* abs_apply_posix_aliases(const char* abs, char tmp[VFS_PATH_MA
         return tmp;
     }
 
-    // For persistent aliases: if the base target directory exists on disk,
-    // always apply the alias (even for paths that don't exist yet, e.g. for creation).
-    // This allows creating files/dirs under /home, /var, etc. when disk is available.
+    // For persistent aliases: alias to disk if the specific path exists there,
+    // or if the parent directory exists on disk (allows creating new files).
+    // This allows initramfs defaults to be accessible at standard paths,
+    // while disk files can override them when present.
     if (abs_alias_to(abs, "/usr", "/disk/usr", tmp)) {
-        if (vfs_path_exists_raw("/disk/usr")) return tmp;
+        if (vfs_path_exists_raw(tmp)) return tmp;  // specific path exists on disk
+        // Check if parent exists on disk (allows file creation)
+        char parent[VFS_PATH_MAX];
+        strncpy(parent, tmp, sizeof(parent) - 1);
+        parent[sizeof(parent) - 1] = '\0';
+        char* last_slash = strrchr(parent, '/');
+        if (last_slash && last_slash != parent) {
+            *last_slash = '\0';
+            if (vfs_path_exists_raw(parent)) return tmp;
+        }
     }
     if (abs_alias_to(abs, "/home", "/disk/home", tmp)) {
-        if (vfs_path_exists_raw("/disk/home")) return tmp;
+        if (vfs_path_exists_raw(tmp)) return tmp;
+        char parent[VFS_PATH_MAX];
+        strncpy(parent, tmp, sizeof(parent) - 1);
+        parent[sizeof(parent) - 1] = '\0';
+        char* last_slash = strrchr(parent, '/');
+        if (last_slash && last_slash != parent) {
+            *last_slash = '\0';
+            if (vfs_path_exists_raw(parent)) return tmp;
+        }
     }
     if (abs_alias_to(abs, "/var", "/disk/var", tmp)) {
-        if (vfs_path_exists_raw("/disk/var")) return tmp;
+        if (vfs_path_exists_raw(tmp)) return tmp;
+        char parent[VFS_PATH_MAX];
+        strncpy(parent, tmp, sizeof(parent) - 1);
+        parent[sizeof(parent) - 1] = '\0';
+        char* last_slash = strrchr(parent, '/');
+        if (last_slash && last_slash != parent) {
+            *last_slash = '\0';
+            if (vfs_path_exists_raw(parent)) return tmp;
+        }
     }
     if (abs_alias_to(abs, "/root", "/disk/root", tmp)) {
-        if (vfs_path_exists_raw("/disk/root")) return tmp;
+        if (vfs_path_exists_raw(tmp)) return tmp;
+        char parent[VFS_PATH_MAX];
+        strncpy(parent, tmp, sizeof(parent) - 1);
+        parent[sizeof(parent) - 1] = '\0';
+        char* last_slash = strrchr(parent, '/');
+        if (last_slash && last_slash != parent) {
+            *last_slash = '\0';
+            if (vfs_path_exists_raw(parent)) return tmp;
+        }
     }
 
     return abs;

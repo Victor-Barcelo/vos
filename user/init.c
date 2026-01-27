@@ -203,8 +203,8 @@ static void create_system_config(void) {
         "# /etc/profile - system-wide shell configuration\n"
         "\n"
         "export PATH=/bin:/usr/bin:/disk/bin\n"
-        "export TERM=vt100\n"
-        "export EDITOR=edit\n"
+        "export TERM=xterm\n"
+        "export EDITOR=vi\n"
         "\n"
         "# Color prompt: user@vos:dir$ (red for root)\n"
         "if [ \"$USER\" = \"root\" ]; then\n"
@@ -369,9 +369,21 @@ static void setup_ram_etc(void) {
             "victor::1000:victor\n";
         write_file("/ram/etc/group", group, 0644);
     } else {
-        // Copy from persistent storage
-        copy_file("/disk/etc/passwd", "/ram/etc/passwd");
-        copy_file("/disk/etc/group", "/ram/etc/group");
+        // Copy from persistent storage, with fallback if copy fails
+        if (copy_file("/disk/etc/passwd", "/ram/etc/passwd") != 0) {
+            // Fallback: create default passwd
+            const char* default_passwd =
+                "root::0:0:System Administrator:/root:/bin/dash\n"
+                "victor::1000:1000:Victor:/home/victor:/bin/dash\n";
+            write_file("/ram/etc/passwd", default_passwd, 0644);
+        }
+        if (copy_file("/disk/etc/group", "/ram/etc/group") != 0) {
+            // Fallback: create default group
+            const char* default_group =
+                "root:x:0:\n"
+                "victor:x:1000:\n";
+            write_file("/ram/etc/group", default_group, 0644);
+        }
     }
 
     // Always create /etc/profile in RAM
@@ -380,7 +392,7 @@ static void setup_ram_etc(void) {
     const char* profile =
         "# /etc/profile\n"
         "export PATH=/bin:/usr/bin:/disk/bin\n"
-        "export TERM=vt100\n"
+        "export TERM=xterm\n"
         "if [ \"$USER\" = \"root\" ]; then\n"
         "    PS1='\x1b[1;31mroot\x1b[0m@\x1b[1;36mvos\x1b[0m:\x1b[1;33m$PWD\x1b[0m# '\n"
         "else\n"

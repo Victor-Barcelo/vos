@@ -18,6 +18,7 @@
 #include "serial.h"
 #include "speaker.h"
 #include "sb16.h"
+#include "minixfs.h"
 
 // Keep syscall argv marshalling bounded (argv strings are copied into
 // kernel memory before switching address spaces for exec/spawn).
@@ -137,7 +138,10 @@ enum {
     SYS_CHOWN = 95,
     SYS_FCHOWN = 96,
     SYS_LCHOWN = 97,
-    SYS_MAX = 98,
+    SYS_GFX_FLIP = 98,
+    SYS_GFX_DOUBLE_BUFFER = 99,
+    SYS_DISK_INFO = 100,
+    SYS_MAX = 101,
 };
 
 // Syscall counters - track how many times each syscall is invoked
@@ -243,6 +247,9 @@ static const char* syscall_names[SYS_MAX] = {
     [SYS_CHOWN] = "chown",
     [SYS_FCHOWN] = "fchown",
     [SYS_LCHOWN] = "lchown",
+    [SYS_GFX_FLIP] = "gfx_flip",
+    [SYS_GFX_DOUBLE_BUFFER] = "gfx_double_buffer",
+    [SYS_DISK_INFO] = "disk_info",
 };
 
 typedef struct vos_task_info_user {
@@ -311,6 +318,24 @@ typedef struct vos_syscall_stats_user {
     uint32_t counts[VOS_SYSCALL_STATS_MAX]; // Count for each syscall
     char names[VOS_SYSCALL_STATS_MAX][16];  // Name of each syscall (truncated)
 } vos_syscall_stats_user_t;
+
+// Disk/mount information structures
+#define VOS_MAX_DISKS 8
+typedef struct vos_disk_info_user {
+    char mount_point[32];
+    char fs_type[16];
+    uint32_t total_kb;
+    uint32_t used_kb;
+    uint32_t free_kb;
+    uint32_t block_size;
+    uint32_t total_inodes;
+    uint32_t free_inodes;
+} vos_disk_info_user_t;
+
+typedef struct vos_disks_info_user {
+    uint32_t count;
+    vos_disk_info_user_t disks[VOS_MAX_DISKS];
+} vos_disks_info_user_t;
 
 // For select() syscall
 typedef struct vos_timeval {
@@ -2166,6 +2191,86 @@ interrupt_frame_t* syscall_handle(interrupt_frame_t* frame) {
 
             int32_t rc = tasking_lchown(path, uid, gid);
             frame->eax = (uint32_t)rc;
+            return frame;
+        }
+
+        case SYS_GFX_FLIP: {
+            if (!screen_is_framebuffer()) {
+                frame->eax = (uint32_t)-ENODEV;
+                return frame;
+            }
+            bool ok = screen_gfx_flip();
+            frame->eax = ok ? 0u : (uint32_t)-EINVAL;
+            return frame;
+        }
+
+        case SYS_GFX_DOUBLE_BUFFER: {
+            if (!screen_is_framebuffer()) {
+                frame->eax = (uint32_t)-ENODEV;
+                return frame;
+            }
+            bool enable = (frame->ebx != 0);
+            bool ok = screen_gfx_set_double_buffering(enable);
+            frame->eax = ok ? 0u : (uint32_t)-ENOMEM;
+            return frame;
+        }
+
+        case SYS_DISK_INFO: {
+            vos_disks_info_user_t* info_user = (vos_disks_info_user_t*)frame->ebx;
+            if (!info_user) {
+                frame->eax = (uint32_t)-EFAULT;
+                return frame;
+            }
+            vos_disks_info_user_t info;
+            memset(&info, 0, sizeof(info));
+
+            // Mount point 1: / (initramfs - read-only boot archive)
+            vfs_statfs_t st;
+            if (vfs_statfs_path("/", "/", &st) == 0) {
+                strncpy(info.disks[info.count].mount_point, "/", 31);
+                strncpy(info.disks[info.count].fs_type, "initramfs", 15);  // Read-only boot image
+                info.disks[info.count].block_size = st.bsize;
+                info.disks[info.count].total_kb = (st.blocks * st.bsize) / 1024;
+                info.disks[info.count].free_kb = (st.bfree * st.bsize) / 1024;
+                info.disks[info.count].used_kb = info.disks[info.count].total_kb - info.disks[info.count].free_kb;
+                info.count++;
+            }
+
+            // Mount point 2: /disk (Minix filesystem)
+            if (minixfs_is_ready()) {
+                uint32_t total_blocks = 0, free_blocks = 0, total_inodes = 0, free_inodes = 0;
+                if (minixfs_statfs(&total_blocks, &free_blocks, &total_inodes, &free_inodes)) {
+                    strncpy(info.disks[info.count].mount_point, "/disk", 31);
+                    strncpy(info.disks[info.count].fs_type, "minix", 15);
+                    info.disks[info.count].block_size = 1024;  // Minix block size
+                    info.disks[info.count].total_kb = total_blocks;  // blocks are 1KB
+                    info.disks[info.count].free_kb = free_blocks;
+                    info.disks[info.count].used_kb = total_blocks - free_blocks;
+                    info.disks[info.count].total_inodes = total_inodes;
+                    info.disks[info.count].free_inodes = free_inodes;
+                    info.count++;
+                }
+            }
+
+            // Mount point 3: /ram (RAM tmpfs - use PMM stats directly)
+            {
+                uint32_t total_frames = pmm_total_frames();
+                uint32_t free_frames = pmm_free_frames();
+                strncpy(info.disks[info.count].mount_point, "/ram", 31);
+                strncpy(info.disks[info.count].fs_type, "tmpfs", 15);
+                info.disks[info.count].block_size = 4096;  // PAGE_SIZE
+                // Use frames * 4 to get KB (4096 bytes / 1024 = 4 KB per frame)
+                info.disks[info.count].total_kb = total_frames * 4;
+                info.disks[info.count].free_kb = free_frames * 4;
+                info.disks[info.count].used_kb = (total_frames - free_frames) * 4;
+                info.count++;
+            }
+
+            if (!copy_to_user(info_user, &info, sizeof(info))) {
+                frame->eax = (uint32_t)-EFAULT;
+                return frame;
+            }
+            frame->eax = 0;
             return frame;
         }
 

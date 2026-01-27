@@ -80,6 +80,11 @@ VJSON_DEMO_SRC="$ROOT_DIR/user/json.c"
 VNEOFETCH_SRC="$ROOT_DIR/user/neofetch.c"
 VSYSVIEW_SRC="$ROOT_DIR/user/sysview.c"
 
+# Game development libraries directory
+VGAMEDEV_DIR="$ROOT_DIR/gameResources"
+VGAMEDEV_EXAMPLES="$ROOT_DIR/gameResources/gameExamples"
+VGAMEDEV_DOCS="$ROOT_DIR/gameResources/doc"
+
 if [[ ! -f "$DISK_IMG" ]]; then
   echo "error: disk image not found: $DISK_IMG" >&2
   echo "hint: run 'make vos-disk.img' to create one." >&2
@@ -377,6 +382,51 @@ victor::1000:1000:/home/victor:/bin/sh
 EOF
   mcopy -i "$DISK_IMG" -o "$PASSWD_TMP" ::/etc/passwd >/dev/null
   rm -f "$PASSWD_TMP"
+fi
+
+# Game development libraries and examples
+if [[ -d "$VGAMEDEV_DIR" ]]; then
+  echo "  installing game development libraries..."
+
+  # Create directories for gamedev resources
+  mkdir_usr ::/usr/include/gamedev
+  mkdir_usr ::/usr/share/gamedev
+  mkdir_usr ::/usr/share/gamedev/doc
+  mkdir_usr ::/home/victor/examples/gamedev
+
+  # Copy header files (*.h) to /usr/include/gamedev/
+  for f in "$VGAMEDEV_DIR"/*.h; do
+    if [[ -f "$f" ]]; then
+      copy_one "$f" "::/usr/include/gamedev/$(basename "$f")"
+    fi
+  done
+
+  # Copy source files (*.c) to /usr/include/gamedev/
+  for f in "$VGAMEDEV_DIR"/*.c; do
+    if [[ -f "$f" ]]; then
+      copy_one "$f" "::/usr/include/gamedev/$(basename "$f")"
+    fi
+  done
+
+  # Copy documentation to /usr/share/gamedev/doc/
+  if [[ -d "$VGAMEDEV_DOCS" ]]; then
+    for f in "$VGAMEDEV_DOCS"/*.md; do
+      if [[ -f "$f" ]]; then
+        copy_one "$f" "::/usr/share/gamedev/doc/$(basename "$f")"
+      fi
+    done
+  fi
+
+  # Copy examples to /home/victor/examples/gamedev/
+  if [[ -d "$VGAMEDEV_EXAMPLES" ]]; then
+    for f in "$VGAMEDEV_EXAMPLES"/*.c; do
+      if [[ -f "$f" ]]; then
+        copy_one "$f" "::/home/victor/examples/gamedev/$(basename "$f")"
+      fi
+    done
+  fi
+
+  echo "  game development libraries installed"
 fi
 
 echo "Done."

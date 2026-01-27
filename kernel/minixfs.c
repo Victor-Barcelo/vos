@@ -1133,15 +1133,21 @@ bool minixfs_mkdir(const char* path) {
     if (g_fs.name_len == 30) {
         minix_dir_entry_30_t* de = (minix_dir_entry_30_t*)block_buf;
         de[0].inode = (uint16_t)ino;
-        strcpy(de[0].name, ".");
+        memset(de[0].name, 0, sizeof(de[0].name));
+        de[0].name[0] = '.';
         de[1].inode = (uint16_t)parent_ino;
-        strcpy(de[1].name, "..");
+        memset(de[1].name, 0, sizeof(de[1].name));
+        de[1].name[0] = '.';
+        de[1].name[1] = '.';
     } else {
         minix_dir_entry_14_t* de = (minix_dir_entry_14_t*)block_buf;
         de[0].inode = (uint16_t)ino;
-        strcpy(de[0].name, ".");
+        memset(de[0].name, 0, sizeof(de[0].name));
+        de[0].name[0] = '.';
         de[1].inode = (uint16_t)parent_ino;
-        strcpy(de[1].name, "..");
+        memset(de[1].name, 0, sizeof(de[1].name));
+        de[1].name[0] = '.';
+        de[1].name[1] = '.';
     }
 
     if (!write_block(zone, block_buf)) {

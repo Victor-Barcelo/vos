@@ -335,7 +335,7 @@ QEMU_YRES ?= 1080
 
 # Persistent Minix disk image (mounted at /disk in VOS).
 DISK_IMG ?= vos-disk.img
-DISK_SIZE_MB ?= 512
+DISK_SIZE_MB ?= 4096
 
 # Host helper to install a sysroot into $(DISK_IMG) under /usr.
 SYSROOT_SCRIPT = $(TOOLS_DIR)/install_sysroot.sh
@@ -734,10 +734,12 @@ $(DISK_IMG):
 	@echo "(Requires sudo for loop device access)"
 
 # Format the Minix partition (requires sudo)
+# Partition starts at sector 2048, extends to end of disk
+DISK_SECTORS = $(shell echo $$(($(DISK_SIZE_MB) * 2048)))
+PART_SECTORS = $(shell echo $$(($(DISK_SIZE_MB) * 2048 - 2048)))
 format-disk: $(DISK_IMG)
-	@echo "Formatting Minix partition..."
-	@# Partition starts at sector 2048, size 1046528 sectors
-	sudo losetup -o $$((2048*512)) --sizelimit $$((1046528*512)) /dev/loop0 $(DISK_IMG)
+	@echo "Formatting Minix partition ($(PART_SECTORS) sectors)..."
+	sudo losetup -o $$((2048*512)) --sizelimit $$(($(PART_SECTORS)*512)) /dev/loop0 $(DISK_IMG)
 	sudo mkfs.minix -2 -n 30 /dev/loop0
 	sudo losetup -d /dev/loop0
 	@echo "Minix filesystem created on $(DISK_IMG)"
@@ -763,13 +765,13 @@ clean:
 
 # Run in QEMU (includes Sound Blaster 16 audio support and persistent disk)
 run: $(ISO) $(DISK_IMG)
-	qemu-system-i386 -cdrom $(ISO) -vga none -device bochs-display,xres=$(QEMU_XRES),yres=$(QEMU_YRES) \
+	qemu-system-i386 -m 4096 -cdrom $(ISO) -vga none -device bochs-display,xres=$(QEMU_XRES),yres=$(QEMU_YRES) \
 		-drive file=$(DISK_IMG),format=raw,if=ide \
 		-device sb16,audiodev=snd0 -audiodev pa,id=snd0
 
 # Run in QEMU with debug output
 debug: $(ISO) $(DISK_IMG)
-	qemu-system-i386 -cdrom $(ISO) -vga none -device bochs-display,xres=$(QEMU_XRES),yres=$(QEMU_YRES) \
+	qemu-system-i386 -m 4096 -cdrom $(ISO) -vga none -device bochs-display,xres=$(QEMU_XRES),yres=$(QEMU_YRES) \
 		-drive file=$(DISK_IMG),format=raw,if=ide \
 		-device sb16,audiodev=snd0 -audiodev pa,id=snd0 -d int -no-reboot
 

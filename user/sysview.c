@@ -46,13 +46,14 @@ typedef enum {
     VIEW_PROCESSES,
     VIEW_INTERRUPTS,
     VIEW_SYSCALLS,
+    VIEW_DISKS,
     VIEW_HELP,
     VIEW_COUNT
 } view_t;
 
 static view_t current_view = VIEW_DASHBOARD;
 static const char* view_names[] = {
-    "Dashboard", "Memory", "Processes", "Interrupts", "Syscalls", "Help"
+    "Dashboard", "Memory", "Processes", "Interrupts", "Syscalls", "Disks", "Help"
 };
 
 // Previous syscall stats for delta
@@ -486,6 +487,89 @@ static void draw_syscalls(void) {
     have_prev_stats = 1;
 }
 
+// Draw disks view
+static void draw_disks(void) {
+    vos_disks_info_t disks;
+    sys_disk_info(&disks);
+
+    int row = 3;
+    draw_box(1, row, width - 2, height - 4, C_BOX, "MOUNTED FILESYSTEMS");
+
+    draw_fmt(3, row + 1, C_LABEL, "Total Mounts:");
+    draw_fmt(18, row + 1, C_VALUE, "%lu", (unsigned long)disks.count);
+
+    draw_str(3, row + 3, C_DIM, "Mount Point      Type       Total       Used       Free      Use%");
+    draw_hline(3, row + 4, 70, C_DIM);
+
+    for (uint32_t i = 0; i < disks.count && i < VOS_MAX_DISKS; i++) {
+        vos_disk_info_t* d = &disks.disks[i];
+        char total_str[16], used_str[16], free_str[16];
+
+        format_size(d->total_kb, total_str, sizeof(total_str));
+        format_size(d->used_kb, used_str, sizeof(used_str));
+        format_size(d->free_kb, free_str, sizeof(free_str));
+
+        uint32_t pct = d->total_kb > 0 ? (d->used_kb * 100) / d->total_kb : 0;
+        uintattr_t pct_color = C_GOOD;
+        if (pct >= 90) pct_color = C_BAD;
+        else if (pct >= 70) pct_color = C_WARN;
+
+        draw_fmt(3, row + 5 + (int)i, C_VALUE, "%-16s", d->mount_point);
+        draw_fmt(20, row + 5 + (int)i, C_DIM, "%-10s", d->fs_type);
+        draw_fmt(31, row + 5 + (int)i, C_VALUE, "%10s", total_str);
+        draw_fmt(42, row + 5 + (int)i, C_WARN, "%10s", used_str);
+        draw_fmt(53, row + 5 + (int)i, C_GOOD, "%10s", free_str);
+        // Show R/O for initramfs instead of percentage
+        if (strcmp(d->fs_type, "initramfs") == 0) {
+            draw_str(64, row + 5 + (int)i, C_DIM, " R/O");
+        } else {
+            draw_fmt(64, row + 5 + (int)i, pct_color, "%4lu%%", (unsigned long)pct);
+        }
+    }
+
+    // Draw detailed info for each disk
+    int detail_row = row + 6 + (int)disks.count + 1;
+
+    for (uint32_t i = 0; i < disks.count && detail_row < height - 6; i++) {
+        vos_disk_info_t* d = &disks.disks[i];
+
+        draw_fmt(3, detail_row, C_LABEL, "[%s]", d->mount_point);
+        detail_row++;
+
+        // Show description for special filesystems
+        if (strcmp(d->fs_type, "initramfs") == 0) {
+            draw_str(5, detail_row, C_DIM, "Read-only boot archive (system binaries, libs)");
+            detail_row++;
+        } else if (strcmp(d->fs_type, "tmpfs") == 0) {
+            draw_str(5, detail_row, C_DIM, "RAM-backed temporary storage (lost on reboot)");
+            detail_row++;
+        } else if (strcmp(d->fs_type, "minix") == 0) {
+            draw_str(5, detail_row, C_DIM, "Persistent disk storage (survives reboot)");
+            detail_row++;
+        }
+
+        draw_fmt(5, detail_row, C_DIM, "Block size: %lu bytes", (unsigned long)d->block_size);
+        detail_row++;
+
+        if (d->total_inodes > 0) {
+            uint32_t inode_pct = (d->total_inodes - d->free_inodes) * 100 / d->total_inodes;
+            draw_fmt(5, detail_row, C_DIM, "Inodes: %lu total, %lu free (%lu%% used)",
+                     (unsigned long)d->total_inodes, (unsigned long)d->free_inodes,
+                     (unsigned long)inode_pct);
+            detail_row++;
+        }
+
+        // Visual usage bar (skip for read-only initramfs)
+        if (strcmp(d->fs_type, "initramfs") != 0) {
+            int bar_w = 40;
+            draw_str(5, detail_row, C_DIM, "Usage: ");
+            draw_bar(12, detail_row, bar_w, d->used_kb, d->total_kb);
+            detail_row++;
+        }
+        detail_row++;
+    }
+}
+
 // Draw help view
 static void draw_help(void) {
     int row = 3;
@@ -517,8 +601,13 @@ static void draw_help(void) {
     draw_str(3, y++, C_DIM, "Examples: read(), write(), fork(), execve(), mmap()");
     y++;
 
+    draw_str(3, y++, C_LABEL, "[DISKS & FILESYSTEMS]");
+    draw_str(3, y++, C_DIM, "VOS mounts: / (initramfs), /disk (Minix persistent), /ram (tmpfs).");
+    draw_str(3, y++, C_DIM, "The /disk filesystem persists data across reboots.");
+    y++;
+
     draw_str(3, y++, C_LABEL, "[KEYBOARD SHORTCUTS]");
-    draw_str(3, y++, C_VALUE, "1-6: Switch views   Tab: Next view   q: Quit");
+    draw_str(3, y++, C_VALUE, "1-7: Switch views   Tab: Next view   q: Quit");
 }
 
 int main(int argc, char** argv) {
@@ -550,6 +639,7 @@ int main(int argc, char** argv) {
             case VIEW_PROCESSES:  draw_processes(); break;
             case VIEW_INTERRUPTS: draw_interrupts(); break;
             case VIEW_SYSCALLS:   draw_syscalls(); break;
+            case VIEW_DISKS:      draw_disks(); break;
             case VIEW_HELP:       draw_help(); break;
             default: break;
         }
@@ -564,7 +654,7 @@ int main(int argc, char** argv) {
                     running = 0;
                 } else if (ev.key == TB_KEY_TAB) {
                     current_view = (view_t)((current_view + 1) % VIEW_COUNT);
-                } else if (ev.ch >= '1' && ev.ch <= '6') {
+                } else if (ev.ch >= '1' && ev.ch <= '7') {
                     current_view = (view_t)(ev.ch - '1');
                 }
             } else if (ev.type == TB_EVENT_RESIZE) {

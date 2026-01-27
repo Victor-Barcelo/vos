@@ -49,7 +49,7 @@ const TOOLS: Tool[] = [
         },
         memory: {
           type: "string",
-          description: "RAM size (default: 256M)",
+          description: "RAM size (default: 4096M)",
         },
         resolution: {
           type: "string",
@@ -282,7 +282,7 @@ class VosMcpServer {
 
   private async handleStart(args: Record<string, unknown>): Promise<string> {
     const isoPath = (args.iso_path as string) || DEFAULT_VOS_ISO;
-    const memory = (args.memory as string) || "256M";
+    const memory = (args.memory as string) || "4096M";
     const resolution = (args.resolution as string) || "1920x1080";
 
     // Check if ISO exists

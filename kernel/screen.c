@@ -2049,6 +2049,7 @@ static void fb_put_pixel(uint32_t x, uint32_t y, uint32_t pixel) {
     }
     // Use backbuffer if double buffering is active, otherwise write directly to framebuffer
     uint8_t* target = (fb_double_buffering && fb_backbuffer) ? fb_backbuffer : fb_addr;
+    if (!target) return;
     uint8_t* p = target + y * fb_pitch + x * (uint32_t)fb_bytes_per_pixel;
     switch (fb_bytes_per_pixel) {
         case 4:
@@ -2085,6 +2086,7 @@ static void fb_fill_rect(uint32_t x, uint32_t y, uint32_t w, uint32_t h, uint32_
 
     // Use backbuffer if double buffering is active
     uint8_t* target = (fb_double_buffering && fb_backbuffer) ? fb_backbuffer : fb_addr;
+    if (!target) return;
 
     for (uint32_t yy = 0; yy < h; yy++) {
         uint8_t* row = target + (y + yy) * fb_pitch;
@@ -3835,6 +3837,7 @@ bool screen_graphics_blit_rgba(int32_t x, int32_t y, uint32_t w, uint32_t h, con
 
     // Use backbuffer if double buffering is active
     uint8_t* target = (fb_double_buffering && fb_backbuffer) ? fb_backbuffer : fb_addr;
+    if (!target) return false;
 
     for (uint32_t yy = 0; yy < h; yy++) {
         const uint8_t* src = rgba + yy * stride_bytes;
@@ -3886,6 +3889,73 @@ bool screen_graphics_blit_rgba(int32_t x, int32_t y, uint32_t w, uint32_t h, con
     }
 
     return true;
+}
+
+// =============================================================================
+// Double Buffering Support
+// =============================================================================
+
+bool screen_gfx_flip(void) {
+    if (backend != SCREEN_BACKEND_FRAMEBUFFER) {
+        return false;
+    }
+    if (!fb_double_buffering || !fb_backbuffer || !fb_addr) {
+        return false;
+    }
+    if (fb_buffer_size == 0) {
+        return false;
+    }
+
+    // Copy entire backbuffer to framebuffer in one operation
+    memcpy(fb_addr, fb_backbuffer, fb_buffer_size);
+    return true;
+}
+
+bool screen_gfx_set_double_buffering(bool enabled) {
+    if (backend != SCREEN_BACKEND_FRAMEBUFFER) {
+        return false;
+    }
+
+    if (enabled && !fb_backbuffer) {
+        // Allocate backbuffer if not already allocated
+        // Check for overflow before multiplication
+        if (fb_height > 0 && fb_pitch > 0xFFFFFFFFu / fb_height) {
+            return false;  // Would overflow
+        }
+        fb_buffer_size = fb_pitch * fb_height;
+        if (fb_buffer_size == 0) {
+            return false;
+        }
+        fb_backbuffer = (uint8_t*)kmalloc(fb_buffer_size);
+        if (!fb_backbuffer) {
+            fb_buffer_size = 0;
+            return false;
+        }
+        // Initialize backbuffer with current framebuffer content
+        if (!fb_addr) {
+            kfree(fb_backbuffer);
+            fb_backbuffer = NULL;
+            fb_buffer_size = 0;
+            return false;
+        }
+        memcpy(fb_backbuffer, fb_addr, fb_buffer_size);
+        serial_write_string("[GFX] Double buffering enabled, backbuffer allocated: ");
+        serial_write_dec((int32_t)(fb_buffer_size / 1024));
+        serial_write_string(" KB\n");
+    }
+
+    if (!enabled && fb_backbuffer) {
+        kfree(fb_backbuffer);
+        fb_backbuffer = NULL;
+        fb_buffer_size = 0;
+    }
+
+    fb_double_buffering = enabled;
+    return true;
+}
+
+bool screen_gfx_is_double_buffered(void) {
+    return fb_double_buffering && fb_backbuffer != NULL;
 }
 
 // =============================================================================

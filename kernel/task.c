@@ -2902,14 +2902,19 @@ int32_t tasking_execve(interrupt_frame_t* frame, const char* path, const char* c
     if (ok) {
         ok = elf_setup_user_stack(&user_esp, kargv, kargc, envp, envc);
     }
-    paging_switch_directory(prev_dir);
     irq_restore(irq_flags);
 
     kfree(image);
 
     if (!ok) {
+        // Loading failed - switch back to previous directory and clean up.
+        paging_switch_directory(prev_dir);
+        free_user_pages_in_directory(user_dir);
         return -ENOEXEC;
     }
+
+    // Success - stay in user_dir (we're already switched to it) and update
+    // current_task->page_directory atomically with the switch we already made.
 
     // Close file descriptors flagged close-on-exec.
     task_close_cloexec_fds();
@@ -2932,9 +2937,8 @@ int32_t tasking_execve(interrupt_frame_t* frame, const char* path, const char* c
     current_task->wait_status_user = NULL;
     current_task->wait_return_pid = false;
 
-    // Switch to the new address space and update the user context to start
-    // executing the new program.
-    paging_switch_directory(user_dir);
+    // Update the user context to start executing the new program.
+    // (We're already in user_dir from the ELF loading above.)
     frame->eax = 0;
     frame->eip = entry;
     frame_set_user_esp(frame, user_esp);

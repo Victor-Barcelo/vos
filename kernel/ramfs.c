@@ -4,8 +4,8 @@
 #include "string.h"
 #include "ctype.h"
 
-#define RAMFS_MAX_FILES 128
-#define RAMFS_MAX_DIRS  128
+#define RAMFS_MAX_FILES 512
+#define RAMFS_MAX_DIRS  256
 
 typedef struct ramfs_file {
     char* path;       // canonical, no leading '/'
@@ -703,8 +703,9 @@ bool ramfs_write_file(const char* path, const uint8_t* data, uint32_t size, bool
     uint32_t alloc_size = size ? size : 1u;
     uint8_t* buf = (uint8_t*)kmalloc(alloc_size);
     if (!buf) {
-        if (idx >= 0 && files[idx].data == NULL && files[idx].size == 0) {
-            // keep path allocated
+        if (idx >= 0 && files[idx].path) {
+            kfree(files[idx].path);
+            files[idx].path = NULL;
         }
         return false;
     }

@@ -232,6 +232,9 @@ void* kmalloc(size_t size) {
         while (b) {
             if (b->used == 0 && b->size >= total) {
                 free_list_remove(b);
+                // Remove the ORIGINAL block size from free bytes count
+                uint32_t original_size = b->size;
+                cached_free_bytes -= original_size;
 
                 uint32_t remaining = b->size - total;
                 if (remaining >= block_min_size()) {
@@ -245,12 +248,13 @@ void* kmalloc(size_t size) {
                     split->prev_free = NULL;
                     write_footer(split);
                     free_list_insert(split);
+                    // Add split block back to free bytes
+                    cached_free_bytes += split->size;
                 }
 
                 b->used = 1;
                 write_footer(b);
                 heap_alloc_count++;
-                cached_free_bytes -= b->size;
                 return (uint8_t*)b + sizeof(block_header_t);
             }
             b = b->next_free;

@@ -16,6 +16,7 @@
 #include "idt.h"
 #include "keyboard.h"
 #include "serial.h"
+#include "speaker.h"
 
 // Keep syscall argv marshalling bounded (argv strings are copied into
 // kernel memory before switching address spaces for exec/spawn).
@@ -114,7 +115,8 @@ enum {
     SYS_ISATTY = 88,
     SYS_UNAME = 89,
     SYS_POLL = 90,
-    SYS_MAX = 91,
+    SYS_BEEP = 91,
+    SYS_MAX = 92,
 };
 
 // Syscall counters - track how many times each syscall is invoked
@@ -213,6 +215,7 @@ static const char* syscall_names[SYS_MAX] = {
     [SYS_ISATTY] = "isatty",
     [SYS_UNAME] = "uname",
     [SYS_POLL] = "poll",
+    [SYS_BEEP] = "beep",
 };
 
 typedef struct vos_task_info_user {
@@ -1932,6 +1935,14 @@ interrupt_frame_t* syscall_handle(interrupt_frame_t* frame) {
                 // Wait a bit before checking again
                 __asm__ volatile ("sti; hlt; cli");
             }
+        }
+
+        case SYS_BEEP: {
+            uint32_t freq = frame->ebx;
+            uint32_t duration_ms = frame->ecx;
+            speaker_beep(freq, duration_ms);
+            frame->eax = 0;
+            return frame;
         }
 
         default:

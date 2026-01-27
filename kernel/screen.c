@@ -489,6 +489,65 @@ static uint32_t scrollback_view_offset = 0;
 static int scrollback_cols = 0;
 static bool cursor_force_hidden = false;
 
+// =============================================================================
+// Virtual Console Support
+// =============================================================================
+#define VC_MAX_CONSOLES 4
+
+typedef struct {
+    // Screen buffer
+    fb_cell_t cells[FB_MAX_COLS * FB_MAX_ROWS];
+    uint32_t emoji_codepoints[FB_MAX_COLS * FB_MAX_ROWS];
+
+    // Cursor state
+    int cursor_x;
+    int cursor_y;
+    bool cursor_enabled;
+    bool cursor_vt_hidden;
+    bool cursor_wrap_pending;
+
+    // Color state
+    uint8_t current_fg;
+    uint8_t current_bg;
+    bool sgr_reverse_video;
+
+    // ANSI parser state
+    ansi_state_t ansi_state;
+    int ansi_params[32];
+    int ansi_param_count;
+    int ansi_current;
+    bool ansi_private;
+    int ansi_saved_x;
+    int ansi_saved_y;
+    int ansi_scroll_top;
+    int ansi_scroll_bottom;
+
+    // VT mouse mode
+    uint8_t vt_mouse_mode_mask;
+    bool vt_mouse_sgr;
+
+    // UTF-8 decoder state
+    utf8_state_t utf8_state;
+
+    // Scrollback (per-console)
+    fb_cell_t scrollback[SCROLLBACK_MAX_LINES * FB_MAX_COLS];
+    uint32_t scrollback_head;
+    uint32_t scrollback_count;
+    uint32_t scrollback_view_offset;
+
+    // Is this console initialized?
+    bool initialized;
+} virtual_console_t;
+
+static virtual_console_t vc_consoles[VC_MAX_CONSOLES];
+static int vc_active = 0;
+static bool vc_enabled = false;  // Only enable after first switch
+
+// Forward declarations for VC functions
+static void vc_save_state(int console);
+static void vc_restore_state(int console);
+static void vc_init_console(int console);
+
 // Color theme system - mutable palette that can be switched at runtime
 static uint8_t vga_palette_rgb[16][3] = {
     {0, 0, 0},       // 0 black
@@ -1985,7 +2044,10 @@ static void fb_fill_rect(uint32_t x, uint32_t y, uint32_t w, uint32_t h, uint32_
     }
 }
 
-// Render emoji sprite at cell position, scaled to fit cell size
+// Marker for second half of double-width emoji
+#define EMOJI_CONTINUATION_MARKER 0xFFFFFFFFu
+
+// Render emoji sprite at cell position - spans 2 cells (double-width)
 static void fb_render_emoji(int x, int y, uint32_t codepoint, uint32_t bg_px) {
     const uint32_t* sprite = emoji_lookup(codepoint);
     if (!sprite) {
@@ -1996,18 +2058,22 @@ static void fb_render_emoji(int x, int y, uint32_t codepoint, uint32_t bg_px) {
     uint32_t base_x = fb_origin_x + (uint32_t)x * fb_font.width;
     uint32_t base_y = fb_origin_y + (uint32_t)y * fb_font.height;
 
-    // Center emoji in cell
-    int offset_x = ((int)fb_font.width - emoji_size) / 2;
-    int offset_y = ((int)fb_font.height - emoji_size) / 2;
+    // Emoji spans 2 cells (2 * font.width pixels wide)
+    uint32_t cell_width = fb_font.width * 2;
+    uint32_t cell_height = fb_font.height;
+
+    // Center emoji in the double-width cell
+    int offset_x = ((int)cell_width - emoji_size) / 2;
+    int offset_y = ((int)cell_height - emoji_size) / 2;
     if (offset_x < 0) offset_x = 0;
     if (offset_y < 0) offset_y = 0;
 
-    // First fill background
-    fb_fill_rect(base_x, base_y, fb_font.width, fb_font.height, bg_px);
+    // First fill background for both cells
+    fb_fill_rect(base_x, base_y, cell_width, cell_height, bg_px);
 
     // Then render emoji with alpha blending
-    for (int sy = 0; sy < emoji_size && (uint32_t)(offset_y + sy) < fb_font.height; sy++) {
-        for (int sx = 0; sx < emoji_size && (uint32_t)(offset_x + sx) < fb_font.width; sx++) {
+    for (int sy = 0; sy < emoji_size && (uint32_t)(offset_y + sy) < cell_height; sy++) {
+        for (int sx = 0; sx < emoji_size && (uint32_t)(offset_x + sx) < cell_width; sx++) {
             uint32_t pixel = sprite[sy * emoji_size + sx];
             uint8_t a = (pixel >> 24) & 0xFF;
             uint8_t r = (pixel >> 16) & 0xFF;
@@ -2047,6 +2113,10 @@ static void fb_render_entry(int x, int y, fb_cell_t entry) {
 
     // Check if this cell has an emoji
     uint32_t emoji_cp = fb_emoji_codepoints[y * screen_cols_value + x];
+    if (emoji_cp == EMOJI_CONTINUATION_MARKER) {
+        // This is the second half of a double-width emoji, already rendered
+        return;
+    }
     if (emoji_cp != 0) {
         uint8_t bg = fb_cell_bg(entry);
         uint32_t bg_px = fb_color_from_xterm(bg);
@@ -2940,21 +3010,44 @@ static void screen_put_codepoint(uint32_t cp) {
             if (emoji_is_emoji(cp) && emoji_lookup(cp) != NULL) {
                 fb_emoji_codepoints[cell_idx] = cp;
                 fb_cells[cell_idx] = fb_cell_make((uint8_t)' ', sgr_effective_fg(), sgr_effective_bg());
+                // Mark second cell as continuation (emoji is double-width)
+                if (cursor_x + 1 < screen_cols_value) {
+                    int cell_idx2 = cursor_y * screen_cols_value + cursor_x + 1;
+                    fb_emoji_codepoints[cell_idx2] = EMOJI_CONTINUATION_MARKER;
+                    fb_cells[cell_idx2] = fb_cell_make((uint8_t)' ', sgr_effective_fg(), sgr_effective_bg());
+                }
+                if (render_now) {
+                    fb_render_cell(cursor_x, cursor_y);
+                    if (cursor_x + 1 < screen_cols_value) {
+                        fb_render_cell(cursor_x + 1, cursor_y);
+                    }
+                }
+                // Advance cursor by 2 for double-width emoji
+                if (cursor_x >= screen_cols_value - 2) {
+                    cursor_wrap_pending = true;
+                    cursor_x = screen_cols_value - 1;
+                } else {
+                    cursor_x += 2;
+                }
             } else {
                 fb_emoji_codepoints[cell_idx] = 0;
                 fb_cells[cell_idx] = fb_cell_make(glyph, sgr_effective_fg(), sgr_effective_bg());
-            }
-            if (render_now) {
-                fb_render_cell(cursor_x, cursor_y);
+                if (render_now) {
+                    fb_render_cell(cursor_x, cursor_y);
+                }
+                if (cursor_x >= screen_cols_value - 1) {
+                    cursor_wrap_pending = true;
+                } else {
+                    cursor_x++;
+                }
             }
         } else {
             VGA_BUFFER[screen_phys_y(cursor_y) * VGA_WIDTH + screen_phys_x(cursor_x)] = vga_entry((char)glyph, current_color);
-        }
-
-        if (cursor_x >= screen_cols_value - 1) {
-            cursor_wrap_pending = true;
-        } else {
-            cursor_x++;
+            if (cursor_x >= screen_cols_value - 1) {
+                cursor_wrap_pending = true;
+            } else {
+                cursor_x++;
+            }
         }
     }
 
@@ -3214,6 +3307,27 @@ void screen_render_row(int y) {
         fb_fill_rect(0, row_y, fb_width, row_h, bg_px);
 
         // Then render all character cells on top
+        for (int x = 0; x < screen_cols_value; x++) {
+            fb_render_cell_base(x, y);
+        }
+
+        // Re-apply overlays if on this row
+        if (!cursor_force_hidden && !cursor_vt_hidden && cursor_enabled && cursor_y == y) {
+            fb_draw_cursor_overlay(cursor_x, y);
+        }
+        if (mouse_cursor_enabled && mouse_cursor_y == y) {
+            fb_draw_mouse_cursor_overlay(mouse_cursor_x, y);
+        }
+    }
+}
+
+// Render row without clearing first (for status bar - avoids flicker)
+void screen_render_row_noclear(int y) {
+    if (y < 0 || y >= screen_rows_value) {
+        return;
+    }
+    if (backend == SCREEN_BACKEND_FRAMEBUFFER && fb_addr) {
+        // Render all character cells directly (each cell fills its own background)
         for (int x = 0; x < screen_cols_value; x++) {
             fb_render_cell_base(x, y);
         }
@@ -3630,4 +3744,208 @@ bool screen_graphics_blit_rgba(int32_t x, int32_t y, uint32_t w, uint32_t h, con
     }
 
     return true;
+}
+
+// =============================================================================
+// Virtual Console Implementation
+// =============================================================================
+
+static void vc_init_console(int console) {
+    if (console < 0 || console >= VC_MAX_CONSOLES) return;
+    virtual_console_t* vc = &vc_consoles[console];
+
+    // Clear cells
+    fb_cell_t blank = fb_cell_make(' ', default_fg, default_bg);
+    for (int i = 0; i < FB_MAX_COLS * FB_MAX_ROWS; i++) {
+        vc->cells[i] = blank;
+        vc->emoji_codepoints[i] = 0;
+    }
+
+    // Initialize cursor
+    vc->cursor_x = 0;
+    vc->cursor_y = 0;
+    vc->cursor_enabled = true;
+    vc->cursor_vt_hidden = false;
+    vc->cursor_wrap_pending = false;
+
+    // Initialize colors
+    vc->current_fg = default_fg;
+    vc->current_bg = default_bg;
+    vc->sgr_reverse_video = false;
+
+    // Initialize ANSI state
+    vc->ansi_state = ANSI_STATE_NONE;
+    vc->ansi_param_count = 0;
+    vc->ansi_current = -1;
+    vc->ansi_private = false;
+    vc->ansi_saved_x = 0;
+    vc->ansi_saved_y = 0;
+    vc->ansi_scroll_top = 0;
+    vc->ansi_scroll_bottom = 0;
+
+    // Initialize VT mouse
+    vc->vt_mouse_mode_mask = 0;
+    vc->vt_mouse_sgr = false;
+
+    // Initialize UTF-8 state
+    vc->utf8_state.codepoint = 0;
+    vc->utf8_state.min = 0;
+    vc->utf8_state.remaining = 0;
+
+    // Initialize scrollback
+    vc->scrollback_head = 0;
+    vc->scrollback_count = 0;
+    vc->scrollback_view_offset = 0;
+
+    vc->initialized = true;
+}
+
+static void vc_save_state(int console) {
+    if (console < 0 || console >= VC_MAX_CONSOLES) return;
+    virtual_console_t* vc = &vc_consoles[console];
+
+    // Save screen buffer
+    memcpy(vc->cells, fb_cells, sizeof(fb_cells));
+    memcpy(vc->emoji_codepoints, fb_emoji_codepoints, sizeof(fb_emoji_codepoints));
+
+    // Save cursor state
+    vc->cursor_x = cursor_x;
+    vc->cursor_y = cursor_y;
+    vc->cursor_enabled = cursor_enabled;
+    vc->cursor_vt_hidden = cursor_vt_hidden;
+    vc->cursor_wrap_pending = cursor_wrap_pending;
+
+    // Save color state
+    vc->current_fg = current_fg;
+    vc->current_bg = current_bg;
+    vc->sgr_reverse_video = sgr_reverse_video;
+
+    // Save ANSI state
+    vc->ansi_state = ansi_state;
+    memcpy(vc->ansi_params, ansi_params, sizeof(ansi_params));
+    vc->ansi_param_count = ansi_param_count;
+    vc->ansi_current = ansi_current;
+    vc->ansi_private = ansi_private;
+    vc->ansi_saved_x = ansi_saved_x;
+    vc->ansi_saved_y = ansi_saved_y;
+    vc->ansi_scroll_top = ansi_scroll_top;
+    vc->ansi_scroll_bottom = ansi_scroll_bottom;
+
+    // Save VT mouse state
+    vc->vt_mouse_mode_mask = vt_mouse_mode_mask;
+    vc->vt_mouse_sgr = vt_mouse_sgr;
+
+    // Save UTF-8 state
+    vc->utf8_state = utf8_state;
+
+    // Save scrollback
+    memcpy(vc->scrollback, scrollback_cells, sizeof(scrollback_cells));
+    vc->scrollback_head = scrollback_head;
+    vc->scrollback_count = scrollback_count;
+    vc->scrollback_view_offset = scrollback_view_offset;
+
+    vc->initialized = true;
+}
+
+static void vc_restore_state(int console) {
+    if (console < 0 || console >= VC_MAX_CONSOLES) return;
+    virtual_console_t* vc = &vc_consoles[console];
+
+    if (!vc->initialized) {
+        vc_init_console(console);
+    }
+
+    // Restore screen buffer
+    memcpy(fb_cells, vc->cells, sizeof(fb_cells));
+    memcpy(fb_emoji_codepoints, vc->emoji_codepoints, sizeof(fb_emoji_codepoints));
+
+    // Restore cursor state
+    cursor_x = vc->cursor_x;
+    cursor_y = vc->cursor_y;
+    cursor_enabled = vc->cursor_enabled;
+    cursor_vt_hidden = vc->cursor_vt_hidden;
+    cursor_wrap_pending = vc->cursor_wrap_pending;
+
+    // Restore color state
+    current_fg = vc->current_fg;
+    current_bg = vc->current_bg;
+    sgr_reverse_video = vc->sgr_reverse_video;
+
+    // Restore ANSI state
+    ansi_state = vc->ansi_state;
+    memcpy(ansi_params, vc->ansi_params, sizeof(ansi_params));
+    ansi_param_count = vc->ansi_param_count;
+    ansi_current = vc->ansi_current;
+    ansi_private = vc->ansi_private;
+    ansi_saved_x = vc->ansi_saved_x;
+    ansi_saved_y = vc->ansi_saved_y;
+    ansi_scroll_top = vc->ansi_scroll_top;
+    ansi_scroll_bottom = vc->ansi_scroll_bottom;
+
+    // Restore VT mouse state
+    vt_mouse_mode_mask = vc->vt_mouse_mode_mask;
+    vt_mouse_sgr = vc->vt_mouse_sgr;
+
+    // Restore UTF-8 state
+    utf8_state = vc->utf8_state;
+
+    // Restore scrollback
+    memcpy(scrollback_cells, vc->scrollback, sizeof(scrollback_cells));
+    scrollback_head = vc->scrollback_head;
+    scrollback_count = vc->scrollback_count;
+    scrollback_view_offset = vc->scrollback_view_offset;
+}
+
+int screen_console_count(void) {
+    return VC_MAX_CONSOLES;
+}
+
+int screen_console_active(void) {
+    return vc_active;
+}
+
+void screen_console_switch(int console) {
+    if (console < 0 || console >= VC_MAX_CONSOLES) return;
+    if (console == vc_active && vc_enabled) return;
+
+    if (backend != SCREEN_BACKEND_FRAMEBUFFER) {
+        // VGA text mode - simpler handling could be added later
+        return;
+    }
+
+    // Save current console state
+    if (vc_enabled) {
+        vc_save_state(vc_active);
+    }
+
+    // Switch to new console
+    vc_active = console;
+    vc_enabled = true;
+
+    // Restore new console state
+    vc_restore_state(console);
+
+    // Redraw entire screen
+    for (int y = 0; y < screen_rows_value; y++) {
+        for (int x = 0; x < screen_cols_value; x++) {
+            fb_render_cell(x, y);
+        }
+    }
+
+    // Update cursor
+    cursor_drawn_x = -1;
+    cursor_drawn_y = -1;
+    update_cursor();
+
+    // Refresh status bar to show console number
+    statusbar_refresh();
+}
+
+void screen_console_init(void) {
+    // Initialize all consoles
+    for (int i = 0; i < VC_MAX_CONSOLES; i++) {
+        vc_consoles[i].initialized = false;
+    }
+    vc_active = 0;
+    vc_enabled = false;
 }

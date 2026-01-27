@@ -20,7 +20,8 @@ static volatile size_t buffer_end = 0;
 // Key states
 static bool shift_pressed = false;
 static bool ctrl_pressed = false;
-static bool altgr_pressed = false;
+static bool alt_pressed = false;    // Left Alt (for console switching)
+static bool altgr_pressed = false;  // Right Alt (AltGr for special chars)
 static bool caps_lock = false;
 static bool extended_key = false;
 
@@ -160,6 +161,10 @@ void keyboard_handler(void) {
         else if (scancode == 0x1D) {
             ctrl_pressed = false;
         }
+        // Left Alt released
+        else if (scancode == 0x38) {
+            alt_pressed = false;
+        }
     } else {
         // Key press
         // Function keys (set 1 scancodes).
@@ -189,6 +194,15 @@ void keyboard_handler(void) {
         } else if (scancode == 0x1D) {
             // Left Ctrl pressed
             ctrl_pressed = true;
+        } else if (scancode == 0x38) {
+            // Left Alt pressed
+            alt_pressed = true;
+        } else if (alt_pressed && scancode >= 0x02 && scancode <= 0x05) {
+            // Alt+1/2/3/4 - switch virtual console
+            int console = scancode - 0x02;  // 0x02='1' -> console 0, etc.
+            screen_console_switch(console);
+            outb(0x20, 0x20);
+            return;
         } else if (scancode == 0x3A) {
             // Caps lock toggled
             caps_lock = !caps_lock;

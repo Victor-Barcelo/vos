@@ -21,6 +21,7 @@
 #include "fatdisk.h"
 #include "string.h"
 #include "statusbar.h"
+#include "speaker.h"
 
 // Multiboot magic number
 #define MULTIBOOT_MAGIC 0x2BADB002
@@ -271,6 +272,8 @@ void kernel_main(uint32_t magic, uint32_t* mboot_info) {
     screen_println("Keyboard initialized");
 
     mouse_init();
+
+    speaker_init();
 
     tasking_init();
 

@@ -78,6 +78,7 @@ void screen_fill_row_full(int y, char c, uint8_t color);  // Fills entire pixel 
 // Batch mode for flicker-free updates (write all cells, then render once).
 void screen_write_char_at_batch(int x, int y, char c, uint8_t color);
 void screen_render_row(int y);
+void screen_render_row_noclear(int y);  // For status bar - no clear first
 
 // Enable/disable the VGA hardware cursor.
 void screen_cursor_set_enabled(bool enabled);
@@ -130,5 +131,11 @@ void screen_mouse_set_pos(int x, int y);
 bool screen_vt_mouse_reporting_enabled(void);
 bool screen_vt_mouse_reporting_sgr(void);
 bool screen_vt_mouse_reporting_wheel(void);
+
+// Virtual console support (Alt+1/2/3/4 to switch).
+void screen_console_init(void);
+int screen_console_count(void);
+int screen_console_active(void);
+void screen_console_switch(int console);
 
 #endif

@@ -20,6 +20,7 @@
 #include "microrl.h"
 #include "fatdisk.h"
 #include "kheap.h"
+#include "speaker.h"
 
 #define MAX_COMMAND_LENGTH 256
 #define BASIC_PROGRAM_SIZE 4096
@@ -63,6 +64,7 @@ static void cmd_mkdir(const char* args);
 static void cmd_cp(const char* args);
 static void cmd_mv(const char* args);
 static void cmd_nano(const char* args);
+static void cmd_beep(const char* args);
 
 static void execute_command(char* input);
 
@@ -195,6 +197,7 @@ static char** shell_complete_commands(const char* prefix) {
         "reboot",
         "halt",
         "shutdown",
+        "beep",
         NULL,
     };
 
@@ -910,6 +913,8 @@ static void execute_command(char* input) {
         cmd_mv(args);
     } else if (strcmp(input, "nano") == 0 || strcmp(input, "edit") == 0) {
         cmd_nano(args);
+    } else if (strcmp(input, "beep") == 0) {
+        cmd_beep(args);
     } else {
         screen_set_color(VGA_LIGHT_RED, VGA_BLUE);
         screen_print("Unknown command: ");
@@ -948,6 +953,7 @@ static void cmd_help(void) {
     print_help_cmd("wait <pid>", "Wait for a task to exit");
     print_help_cmd("color <0-15>", "Change text color");
     print_help_cmd("basic", "Start BASIC interpreter");
+    print_help_cmd("beep [freq] [ms]", "Play a tone (default: 440 Hz, 200 ms)");
     print_help_cmd("reboot", "Reboot the system");
     print_help_cmd("halt", "Halt the system");
 }
@@ -2185,6 +2191,36 @@ static void cmd_nano(const char* args) {
     screen_set_color(VGA_WHITE, VGA_BLUE);
     screen_clear();
     statusbar_refresh();
+}
+
+static void cmd_beep(const char* args) {
+    uint32_t freq = 440;      // Default: A4 (440 Hz)
+    uint32_t duration = 200;  // Default: 200 ms
+
+    if (args && args[0] != '\0') {
+        // Parse frequency
+        freq = (uint32_t)atoi(args);
+        if (freq == 0) {
+            freq = 440;
+        }
+
+        // Look for second argument (duration)
+        const char* p = args;
+        while (*p && !isspace((unsigned char)*p)) {
+            p++;
+        }
+        while (*p && isspace((unsigned char)*p)) {
+            p++;
+        }
+        if (*p) {
+            duration = (uint32_t)atoi(p);
+            if (duration == 0) {
+                duration = 200;
+            }
+        }
+    }
+
+    speaker_beep(freq, duration);
 }
 
 static void cmd_cat(const char* args) {

@@ -47,7 +47,7 @@ static void put_char(int x, int y, char c, uint8_t color) {
 static int put_str(int x, int y, const char* s, uint8_t color) {
     int cols = screen_cols();
     while (*s && x < cols) {
-        screen_write_char_at(x++, y, *s++, color);
+        screen_write_char_at_batch(x++, y, *s++, color);
     }
     return x;
 }
@@ -211,13 +211,22 @@ static void draw_statusbar(void) {
     x = put_num(x, row, total_tasks, bg);
     x = put_str(x, row, "T", bg);
 
+    put_char(x++, row, ' ', bg);
+    put_char(x++, row, '|', sep);
+    put_char(x++, row, ' ', bg);
+
+    // Virtual console indicator
+    x = put_str(x, row, "VC", accent);
+    int vc = screen_console_active() + 1;  // 1-based for display
+    x = put_num(x, row, (uint32_t)vc, bg);
+
     // Fill remaining columns with spaces (batch mode)
     while (x < cols) {
         put_char(x++, row, ' ', bg);
     }
 
-    // Render the entire row once (flicker-free)
-    screen_render_row(row);
+    // Render cells without clearing first (flicker-free)
+    screen_render_row_noclear(row);
 }
 
 void statusbar_init(void) {
@@ -228,9 +237,9 @@ void statusbar_init(void) {
 }
 
 void statusbar_tick(void) {
-    // Update every ~500ms (50 ticks at 100Hz)
+    // Update every ~1 second (100 ticks at 100Hz)
     uint32_t tick = timer_get_ticks();
-    if (tick - last_drawn_tick < 50) {
+    if (tick - last_drawn_tick < 100) {
         return;
     }
     last_drawn_tick = tick;

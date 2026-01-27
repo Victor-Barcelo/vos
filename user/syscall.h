@@ -178,6 +178,7 @@ enum {
     SYS_ISATTY = 88,
     SYS_UNAME = 89,
     SYS_POLL = 90,
+    SYS_BEEP = 91,
 };
 
 // For select() syscall
@@ -928,6 +929,18 @@ static inline int sys_poll(vos_pollfd_t* fds, uint32_t nfds, int timeout_ms) {
         "int $0x80"
         : "=a"(ret)
         : "a"(SYS_POLL), "b"(fds), "c"(nfds), "d"(timeout_ms)
+        : "memory"
+    );
+    return ret;
+}
+
+// PC speaker beep syscall
+static inline int sys_beep(uint32_t frequency, uint32_t duration_ms) {
+    int ret;
+    __asm__ volatile (
+        "int $0x80"
+        : "=a"(ret)
+        : "a"(SYS_BEEP), "b"(frequency), "c"(duration_ms)
         : "memory"
     );
     return ret;

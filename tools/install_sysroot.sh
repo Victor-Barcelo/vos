@@ -2,9 +2,38 @@
 set -euo pipefail
 
 DISK_IMG="${1:-vos-disk.img}"
+# Optional: if mount point is provided, skip mounting (already mounted by caller)
+PROVIDED_MOUNT="${2:-}"
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CROSS_ROOT="${CROSS_ROOT:-$ROOT_DIR/toolchain/opt/cross}"
+
+# Minix filesystem partition starts at sector 2048 (1 MiB offset)
+PARTITION_OFFSET=$((2048 * 512))
+MOUNT_POINT=""
+LOOP_DEV=""
+SHOULD_CLEANUP=true
+
+# Use sudo only if not already root
+if [[ $EUID -eq 0 ]]; then
+  SUDO=""
+else
+  SUDO="sudo"
+fi
+
+cleanup() {
+  if [[ "$SHOULD_CLEANUP" == "false" ]]; then
+    return
+  fi
+  if [[ -n "$MOUNT_POINT" && -d "$MOUNT_POINT" ]]; then
+    $SUDO umount "$MOUNT_POINT" 2>/dev/null || true
+    rmdir "$MOUNT_POINT" 2>/dev/null || true
+  fi
+  if [[ -n "$LOOP_DEV" ]]; then
+    $SUDO losetup -d "$LOOP_DEV" 2>/dev/null || true
+  fi
+}
+trap cleanup EXIT
 
 NEWLIB_INC="$CROSS_ROOT/i686-elf/include"
 NEWLIB_LIB="$CROSS_ROOT/i686-elf/lib"
@@ -190,34 +219,68 @@ if [[ ! -f "$VTERMBOX2_H" ]]; then
   exit 1
 fi
 
+setup_mount() {
+  if [[ -n "$PROVIDED_MOUNT" ]]; then
+    # Mount point provided by caller (e.g., from make disk-setup)
+    MOUNT_POINT="$PROVIDED_MOUNT"
+    SHOULD_CLEANUP=false
+  else
+    # Self-mount mode
+    MOUNT_POINT=$(mktemp -d)
+    LOOP_DEV=$($SUDO losetup --find --show --offset "$PARTITION_OFFSET" "$DISK_IMG")
+    $SUDO mount -t minix "$LOOP_DEV" "$MOUNT_POINT"
+  fi
+}
+
+# Convert mtools-style path (::/) to real mount path
+to_real_path() {
+  local p="$1"
+  # Strip leading "::" if present
+  p="${p#::}"
+  echo "$MOUNT_POINT$p"
+}
+
 mkdir_usr() {
   local dir="$1"
-  # Avoid mtools' interactive clash prompts in non-interactive installs.
-  mmd -D s -i "$DISK_IMG" "$dir" >/dev/null 2>&1 || true
+  local real_path
+  real_path="$(to_real_path "$dir")"
+  $SUDO mkdir -p "$real_path"
 }
 
 copy_one() {
   local src="$1"
   local dst="$2"
-  mcopy -i "$DISK_IMG" -o "$src" "$dst" >/dev/null
+  local real_dst
+  real_dst="$(to_real_path "$dst")"
+  $SUDO cp "$src" "$real_dst"
 }
 
 copy_tree() {
   local src="$1"
   local dst="$2"
-  mcopy -i "$DISK_IMG" -o -s "$src"/* "$dst" >/dev/null
+  local real_dst
+  real_dst="$(to_real_path "$dst")"
+  # Copy directory contents recursively
+  $SUDO cp -r "$src"/* "$real_dst/"
 }
 
 rm_img_path() {
   local p="$1"
-  mdel -i "$DISK_IMG" "$p" >/dev/null 2>&1 || true
-  mrd -i "$DISK_IMG" "$p" >/dev/null 2>&1 || true
+  local real_path
+  real_path="$(to_real_path "$p")"
+  $SUDO rm -rf "$real_path" 2>/dev/null || true
 }
 
 img_has_file() {
   local p="$1"
-  mtype -i "$DISK_IMG" "$p" >/dev/null 2>&1
+  local real_path
+  real_path="$(to_real_path "$p")"
+  [[ -f "$real_path" ]]
 }
+
+# Mount the Minix partition
+setup_mount
+echo "Mounted $DISK_IMG partition at $MOUNT_POINT"
 
 mkdir_usr ::/usr
 mkdir_usr ::/usr/include
@@ -380,7 +443,7 @@ if ! img_has_file ::/etc/passwd; then
 root:root:0:0:/home/root:/bin/sh
 victor::1000:1000:/home/victor:/bin/sh
 EOF
-  mcopy -i "$DISK_IMG" -o "$PASSWD_TMP" ::/etc/passwd >/dev/null
+  copy_one "$PASSWD_TMP" ::/etc/passwd
   rm -f "$PASSWD_TMP"
 fi
 
@@ -429,4 +492,7 @@ if [[ -d "$VGAMEDEV_DIR" ]]; then
   echo "  game development libraries installed"
 fi
 
+# Sync and cleanup
+echo "Syncing filesystem..."
+$SUDO sync
 echo "Done."

@@ -813,7 +813,46 @@ static bool set_zone_v2(minix_inode_v2_t* inode, uint32_t zone_idx, uint32_t zon
         return write_block(inode->i_zone[7], buf);
     }
 
-    // Double/triple indirect not implemented yet
+    // Double indirect block
+    zone_idx -= ptrs_per_block;
+    if (zone_idx < ptrs_per_block * ptrs_per_block) {
+        uint32_t indirect_idx = zone_idx / ptrs_per_block;
+        uint32_t offset_in_indirect = zone_idx % ptrs_per_block;
+
+        // Allocate double indirect block if needed
+        if (inode->i_zone[8] == 0) {
+            uint32_t dbl_indirect = alloc_zone();
+            if (dbl_indirect == 0) return false;
+            inode->i_zone[8] = dbl_indirect;
+            uint8_t zero[MINIX_BLOCK_SIZE];
+            memset(zero, 0, MINIX_BLOCK_SIZE);
+            if (!write_block(dbl_indirect, zero)) return false;
+        }
+
+        // Read double indirect block
+        uint8_t dbl_buf[MINIX_BLOCK_SIZE];
+        if (!read_block(inode->i_zone[8], dbl_buf)) return false;
+
+        // Get or allocate the secondary indirect block
+        uint32_t* dbl_ptrs = (uint32_t*)dbl_buf;
+        if (dbl_ptrs[indirect_idx] == 0) {
+            uint32_t sec_indirect = alloc_zone();
+            if (sec_indirect == 0) return false;
+            dbl_ptrs[indirect_idx] = sec_indirect;
+            if (!write_block(inode->i_zone[8], dbl_buf)) return false;
+            uint8_t zero[MINIX_BLOCK_SIZE];
+            memset(zero, 0, MINIX_BLOCK_SIZE);
+            if (!write_block(sec_indirect, zero)) return false;
+        }
+
+        // Read secondary indirect block and set the zone pointer
+        uint8_t sec_buf[MINIX_BLOCK_SIZE];
+        if (!read_block(dbl_ptrs[indirect_idx], sec_buf)) return false;
+        ((uint32_t*)sec_buf)[offset_in_indirect] = zone_num;
+        return write_block(dbl_ptrs[indirect_idx], sec_buf);
+    }
+
+    // Triple indirect not implemented
     return false;
 }
 

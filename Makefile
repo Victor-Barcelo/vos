@@ -656,8 +656,8 @@ $(MICRORL_OBJ): $(THIRD_PARTY_DIR)/microrl/microrl.c | $(BUILD_DIR)
 $(KERNEL): $(OBJECTS)
 	$(LD) $(LDFLAGS) $(OBJECTS) -o $@
 
-# Create bootable ISO
-$(ISO): $(KERNEL) $(USER_BINS) $(FAT_IMG) $(INITRAMFS_FILES) $(INITRAMFS_DIRS)
+# Create bootable ISO (includes TCC sysroot in initramfs)
+$(ISO): $(KERNEL) $(USER_BINS) $(FAT_IMG) $(INITRAMFS_FILES) $(INITRAMFS_DIRS) $(TCC_LIBTCC1) $(USER_CRTI_OBJ) $(USER_CRTN_OBJ)
 	mkdir -p $(ISO_DIR)/boot/grub
 	cp $(KERNEL) $(ISO_DIR)/boot/kernel.bin
 	rm -rf $(INITRAMFS_ROOT)
@@ -705,6 +705,26 @@ $(ISO): $(KERNEL) $(USER_BINS) $(FAT_IMG) $(INITRAMFS_FILES) $(INITRAMFS_DIRS)
 	cp $(USER_GROUPADD) $(INITRAMFS_ROOT)/bin/groupadd
 	cp $(USER_GROUPDEL) $(INITRAMFS_ROOT)/bin/groupdel
 	for b in $(SBASE_TOOLS); do cp $(SBASE_BIN_DIR)/$$b.elf $(INITRAMFS_ROOT)/bin/$$b; done
+	@# Include TCC sysroot in initramfs - will be copied to /disk on first boot
+	mkdir -p $(INITRAMFS_ROOT)/sysroot/usr/lib/tcc/include
+	mkdir -p $(INITRAMFS_ROOT)/sysroot/usr/include/sys
+	cp $(TCC_LIBTCC1) $(INITRAMFS_ROOT)/sysroot/usr/lib/tcc/libtcc1.a
+	cp -r third_party/tcc/include/* $(INITRAMFS_ROOT)/sysroot/usr/lib/tcc/include/
+	cp $(USER_RUNTIME_LIBS) $(INITRAMFS_ROOT)/sysroot/usr/lib/libvosposix.a
+	cp $(USER_ASM_OBJECTS) $(INITRAMFS_ROOT)/sysroot/usr/lib/crt0.o
+	cp $(USER_ASM_OBJECTS) $(INITRAMFS_ROOT)/sysroot/usr/lib/crt1.o
+	cp $(USER_CRTI_OBJ) $(INITRAMFS_ROOT)/sysroot/usr/lib/crti.o
+	cp $(USER_CRTN_OBJ) $(INITRAMFS_ROOT)/sysroot/usr/lib/crtn.o
+	@# Create patched libc.a without signal objects (they conflict with libvosposix.a)
+	cp $(CROSS_PREFIX)/i686-elf/lib/libc.a $(USER_BUILD_DIR)/libc_patched.a
+	$(CROSS_PREFIX)/bin/i686-elf-ar d $(USER_BUILD_DIR)/libc_patched.a libc_a-signal.o libc_a-signalr.o 2>/dev/null || true
+	cp $(USER_BUILD_DIR)/libc_patched.a $(INITRAMFS_ROOT)/sysroot/usr/lib/libc.a
+	cp $(CROSS_PREFIX)/i686-elf/lib/libm.a $(INITRAMFS_ROOT)/sysroot/usr/lib/libm.a 2>/dev/null || true
+	cp -r $(CROSS_PREFIX)/i686-elf/include/* $(INITRAMFS_ROOT)/sysroot/usr/include/
+	cp $(USER_DIR)/syscall.h $(INITRAMFS_ROOT)/sysroot/usr/include/syscall.h
+	cp $(USER_DIR)/sys/termios.h $(INITRAMFS_ROOT)/sysroot/usr/include/sys/termios.h
+	cp $(USER_DIR)/sys/ioctl.h $(INITRAMFS_ROOT)/sysroot/usr/include/sys/ioctl.h
+	cp $(USER_DIR)/sys/stat_tcc.h $(INITRAMFS_ROOT)/sysroot/usr/include/sys/stat.h
 	tar -C $(INITRAMFS_ROOT) -cf $(INITRAMFS_TAR) .
 	echo 'set timeout=0' > $(ISO_DIR)/boot/grub/grub.cfg
 	echo 'set default=0' >> $(ISO_DIR)/boot/grub/grub.cfg
@@ -737,6 +757,34 @@ $(DISK_IMG):
 # Partition starts at sector 2048, extends to end of disk
 DISK_SECTORS = $(shell echo $$(($(DISK_SIZE_MB) * 2048)))
 PART_SECTORS = $(shell echo $$(($(DISK_SIZE_MB) * 2048 - 2048)))
+PART_OFFSET = 1048576
+
+# Create a fresh disk with Minix filesystem and TCC sysroot installed (ONE command does everything)
+# Usage: make disk-setup
+disk-setup: $(USER_RUNTIME_OBJECTS) $(USER_RUNTIME_LIBS) $(USER_CRTI_OBJ) $(USER_CRTN_OBJ) $(TCC_LIBTCC1) $(USER_TCC) $(USER_OLIVE)
+	@echo "=== VOS Disk Setup (requires sudo) ==="
+	rm -f $(DISK_IMG)
+	@echo "Creating $(DISK_SIZE_MB) MB disk image..."
+	dd if=/dev/zero of=$(DISK_IMG) bs=1M count=$(DISK_SIZE_MB) status=progress
+	@echo "Creating MBR partition table..."
+	echo -e "o\nn\np\n1\n2048\n\nt\n81\na\nw" | fdisk $(DISK_IMG)
+	@echo "Formatting Minix partition..."
+	sudo bash -c '\
+		LOOP=$$(losetup --find --show --offset $(PART_OFFSET) $(DISK_IMG)) && \
+		mkfs.minix -2 -n 30 $$LOOP && \
+		MOUNT=$$(mktemp -d) && \
+		mount -t minix $$LOOP $$MOUNT && \
+		echo "Installing sysroot..." && \
+		bash $(SYSROOT_SCRIPT) $(DISK_IMG) $$MOUNT && \
+		sync && \
+		umount $$MOUNT && \
+		rmdir $$MOUNT && \
+		losetup -d $$LOOP \
+	'
+	@# Fix ownership so user can access the disk (if run via sudo)
+	sudo chown $$(logname):$$(logname) $(DISK_IMG) 2>/dev/null || true
+	@echo "=== Disk setup complete! TCC is ready to use. ==="
+
 format-disk: $(DISK_IMG)
 	@echo "Formatting Minix partition ($(PART_SECTORS) sectors)..."
 	sudo losetup -o $$((2048*512)) --sizelimit $$(($(PART_SECTORS)*512)) /dev/loop0 $(DISK_IMG)
@@ -775,4 +823,4 @@ debug: $(ISO) $(DISK_IMG)
 		-drive file=$(DISK_IMG),format=raw,if=ide \
 		-device sb16,audiodev=snd0 -audiodev pa,id=snd0 -d int -no-reboot
 
-.PHONY: all clean run debug sysroot
+.PHONY: all clean run debug sysroot disk-setup format-disk disk-recreate

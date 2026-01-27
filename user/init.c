@@ -54,10 +54,15 @@ static int copy_file_mode(const char* src, const char* dst, mode_t mode) {
         return -1;
     }
 
-    char buf[1024];
-    int n;
-    while ((n = (int)read(sfd, buf, sizeof(buf))) > 0) {
-        (void)write(dfd, buf, (unsigned int)n);
+    char buf[4096];
+    ssize_t n;
+    while ((n = read(sfd, buf, sizeof(buf))) > 0) {
+        ssize_t written = 0;
+        while (written < n) {
+            ssize_t w = write(dfd, buf + written, n - written);
+            if (w <= 0) break;
+            written += w;
+        }
     }
 
     close(dfd);
@@ -75,6 +80,32 @@ static int write_file(const char* path, const char* content, mode_t mode) {
     if (fd < 0) return -1;
     (void)write(fd, content, strlen(content));
     close(fd);
+    return 0;
+}
+
+// Recursively copy a directory tree
+static int copy_tree(const char* src, const char* dst) {
+    struct stat st;
+    if (stat(src, &st) < 0) return -1;
+
+    if (S_ISDIR(st.st_mode)) {
+        mkdir(dst, st.st_mode & 0777);
+        DIR* d = opendir(src);
+        if (!d) return -1;
+
+        struct dirent* ent;
+        while ((ent = readdir(d)) != NULL) {
+            if (ent->d_name[0] == '.') continue;
+
+            char srcpath[256], dstpath[256];
+            snprintf(srcpath, sizeof(srcpath), "%s/%s", src, ent->d_name);
+            snprintf(dstpath, sizeof(dstpath), "%s/%s", dst, ent->d_name);
+            copy_tree(srcpath, dstpath);
+        }
+        closedir(d);
+    } else if (S_ISREG(st.st_mode)) {
+        copy_file_mode(src, dst, st.st_mode & 0777);
+    }
     return 0;
 }
 
@@ -296,6 +327,14 @@ static void initialize_disk(void) {
 
     // Copy binaries
     copy_binaries();
+
+    // Copy TCC sysroot (headers, libraries) from initramfs
+    struct stat st;
+    if (stat("/sysroot", &st) == 0) {
+        tag("[setup] ", CLR_CYAN);
+        printf("Installing development tools (TCC, libc)...\n");
+        copy_tree("/sysroot/usr", "/disk/usr");
+    }
 
     // Create users
     create_default_users();

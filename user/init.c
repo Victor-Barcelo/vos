@@ -328,6 +328,8 @@ static void initialize_disk(void) {
     mkdir("/disk/usr/dev/game", 0755);
     mkdir("/disk/usr/dev/game/doc", 0755);
     mkdir("/disk/usr/dev/game/examples", 0755);
+    mkdir("/disk/usr/game", 0755);
+    mkdir("/disk/usr/game/roms", 0755);
 
     // Copy binaries
     copy_binaries();
@@ -338,6 +340,13 @@ static void initialize_disk(void) {
         tag("[setup] ", CLR_CYAN);
         printf("Installing development tools (TCC, libc, game libs)...\n");
         copy_tree("/sysroot/usr", "/disk/usr");
+    }
+
+    // Copy ROM files from initramfs to /usr/game/roms
+    if (stat("/res/roms", &st) == 0) {
+        tag("[setup] ", CLR_CYAN);
+        printf("Installing game ROMs...\n");
+        copy_tree("/res/roms", "/disk/usr/game/roms");
     }
 
     // Create users

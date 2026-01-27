@@ -331,9 +331,13 @@ DASH_C_SOURCES = \
 DASH_OBJECTS = $(patsubst $(DASH_DIR)/%.c,$(DASH_BUILD_DIR)/%.o,$(DASH_C_SOURCES))
 USER_DASH = $(USER_BUILD_DIR)/dash.elf
 
+# Klystrack chiptune tracker (built with separate Makefile.vos)
+USER_KLYSTRACK_DIR = $(THIRD_PARTY_DIR)/klystrack
+USER_KLYSTRACK = $(USER_KLYSTRACK_DIR)/bin.vos/klystrack
+
 USER_BINS = $(USER_INIT) $(USER_ELIZA) $(USER_DF) $(USER_TREE) $(USER_UPTIME) $(USER_SETDATE) $(USER_PS) $(USER_TOP) $(USER_SYSVIEW) $(USER_NEOFETCH) $(USER_FONT) $(USER_THEME) $(USER_LS) $(USER_JSON) $(USER_IMG) $(USER_LOGIN) $(USER_S3LCUBE) $(USER_S3LFLY) $(USER_OLIVEDEMO) $(USER_NEXTVI) $(USER_MDVIEW) $(USER_BASIC) $(USER_ZORK) $(USER_TCC) $(USER_GBEMU) $(USER_NESEMU) $(USER_DASH) $(USER_ZIP) $(USER_UNZIP) $(USER_GZIP) $(USER_BEEP) $(USER_MODPLAY) $(USER_MIDIPLAY) $(USER_CHOWN) \
             $(USER_USERADD) $(USER_USERDEL) $(USER_GROUPADD) $(USER_GROUPDEL) \
-            $(USER_SDLTEST) \
+            $(USER_SDLTEST) $(USER_KLYSTRACK) \
             $(SBASE_TOOL_BINS)
 
 # QEMU defaults
@@ -656,6 +660,10 @@ $(NOFRENDO_BUILD_DIR):
 $(USER_SDL2_LIB):
 	$(MAKE) -C $(USER_SDL2_DIR)
 
+# Build klystrack chiptune tracker (uses separate Makefile.vos)
+$(USER_KLYSTRACK): $(USER_SDL2_LIB) $(USER_RUNTIME_LIBS) $(USER_RUNTIME_OBJECTS)
+	$(MAKE) -C $(USER_KLYSTRACK_DIR) -f Makefile.vos
+
 # Compile SDL2 test program
 $(USER_SDLTEST_OBJ): $(USER_SDL2_DIR)/test_sdl.c $(USER_SDL2_LIB) | $(USER_BUILD_DIR)
 	$(CC) -ffreestanding -fno-stack-protector -fno-pie -Wall -Wextra -O2 -I$(USER_DIR) -I$(USER_SDL2_DIR)/include -c $< -o $@
@@ -725,6 +733,12 @@ $(ISO): $(KERNEL) $(USER_BINS) $(INITRAMFS_FILES) $(INITRAMFS_DIRS) $(TCC_LIBTCC
 	cp $(USER_GROUPADD) $(INITRAMFS_ROOT)/bin/groupadd
 	cp $(USER_GROUPDEL) $(INITRAMFS_ROOT)/bin/groupdel
 	cp $(USER_SDLTEST) $(INITRAMFS_ROOT)/bin/sdltest
+	@# Klystrack chiptune tracker
+	cp $(THIRD_PARTY_DIR)/klystrack/bin.vos/klystrack $(INITRAMFS_ROOT)/bin/klystrack
+	mkdir -p $(INITRAMFS_ROOT)/res
+	cp $(THIRD_PARTY_DIR)/klystrack/res/* $(INITRAMFS_ROOT)/res/
+	mkdir -p $(INITRAMFS_ROOT)/key
+	cp $(THIRD_PARTY_DIR)/klystrack/key/* $(INITRAMFS_ROOT)/key/
 	for b in $(SBASE_TOOLS); do cp $(SBASE_BIN_DIR)/$$b.elf $(INITRAMFS_ROOT)/bin/$$b; done
 	@# Include TCC sysroot in initramfs - will be copied to /disk on first boot
 	mkdir -p $(INITRAMFS_ROOT)/sysroot/usr/lib/tcc/include

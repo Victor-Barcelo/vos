@@ -44,6 +44,46 @@ typedef unsigned int nfds_t;
 // Force "C"/ASCII collation for newlib's regex implementation.
 int __collate_load_error = 1;
 
+// BSD-style signal name array (used by dash shell)
+// NSIG is typically 32 on most systems
+#ifndef NSIG
+#define NSIG 32
+#endif
+const char * const sys_siglist[NSIG] = {
+    [0] = "Signal 0",
+    [1] = "Hangup",
+    [2] = "Interrupt",
+    [3] = "Quit",
+    [4] = "Illegal instruction",
+    [5] = "Trace/breakpoint trap",
+    [6] = "Aborted",
+    [7] = "Bus error",
+    [8] = "Floating point exception",
+    [9] = "Killed",
+    [10] = "User defined signal 1",
+    [11] = "Segmentation fault",
+    [12] = "User defined signal 2",
+    [13] = "Broken pipe",
+    [14] = "Alarm clock",
+    [15] = "Terminated",
+    [16] = "Stack fault",
+    [17] = "Child exited",
+    [18] = "Continued",
+    [19] = "Stopped (signal)",
+    [20] = "Stopped",
+    [21] = "Stopped (tty input)",
+    [22] = "Stopped (tty output)",
+    [23] = "Urgent I/O condition",
+    [24] = "CPU time limit exceeded",
+    [25] = "File size limit exceeded",
+    [26] = "Virtual timer expired",
+    [27] = "Profiling timer expired",
+    [28] = "Window changed",
+    [29] = "I/O possible",
+    [30] = "Power failure",
+    [31] = "Bad system call",
+};
+
 ssize_t getdelim(char** lineptr, size_t* n, int delim, FILE* stream) {
     return __getdelim(lineptr, n, delim, stream);
 }
@@ -2962,4 +3002,48 @@ int killpg(pid_t pgrp, int sig) {
     }
     // kill(-pgrp, sig) sends to process group
     return kill(-pgrp, sig);
+}
+
+// BSD wait3 - like waitpid but with resource usage (ignored)
+pid_t wait3(int *status, int options, void *rusage) {
+    (void)rusage;  // VOS doesn't track resource usage
+    return waitpid(-1, status, options);
+}
+
+// BSD wait4 - like waitpid with resource usage (ignored)
+pid_t wait4(pid_t pid, int *status, int options, void *rusage) {
+    (void)rusage;  // VOS doesn't track resource usage
+    return waitpid(pid, status, options);
+}
+
+// vfork - just use fork (VOS doesn't have true vfork semantics)
+pid_t vfork(void) {
+    return fork();
+}
+
+// getgroups - VOS doesn't have supplementary groups
+int getgroups(int size, gid_t list[]) {
+    (void)size;
+    (void)list;
+    return 0;  // No supplementary groups
+}
+
+// times - process times (stub)
+#include <sys/times.h>
+clock_t times(struct tms *buf) {
+    if (buf) {
+        buf->tms_utime = 0;
+        buf->tms_stime = 0;
+        buf->tms_cutime = 0;
+        buf->tms_cstime = 0;
+    }
+    return (clock_t)-1;  // Return -1 to indicate not implemented
+}
+
+// ulimitcmd - dash builtin stub (ulimit not supported in VOS)
+int ulimitcmd(int argc, char **argv) {
+    (void)argc;
+    (void)argv;
+    // Return error - ulimit not supported
+    return 1;
 }

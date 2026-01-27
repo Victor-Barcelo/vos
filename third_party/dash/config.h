@@ -33,9 +33,9 @@
 #define HAVE_GETPWNAM 1
 #define HAVE_ISALPHA 1
 #define HAVE_KILLPG 1
-#define HAVE_MEMPCPY 1
+#undef HAVE_MEMPCPY
 #define HAVE_STPCPY 1
-#define HAVE_STRCHRNUL 1
+#undef HAVE_STRCHRNUL
 #define HAVE_STRTOD 1
 #define HAVE_STRTOIMAX 1
 #define HAVE_STRTOUMAX 1
@@ -45,17 +45,20 @@
 /* Functions NOT available - use dash builtins */
 #undef HAVE_GLOB
 #undef HAVE_GETRLIMIT  /* ulimit won't work fully */
-#undef HAVE_STRSIGNAL
+#define HAVE_STRSIGNAL 1
 
 /* stat64 - VOS uses 32-bit */
 #undef HAVE_STAT64
 
 /* Signal handling */
-#define HAVE_SIGSETMASK 1
+#undef HAVE_SIGSETMASK
 #define signal signal
 
 /* Job control - enable it, we have the syscalls */
 #define JOBS 1
+
+/* BSD compatibility - enables sys/wait.h and related includes */
+#define BSD 1
 
 /* Use small/minimal build - disables history editing (libedit) */
 #define SMALL 1

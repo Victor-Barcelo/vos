@@ -246,6 +246,7 @@ int main(int argc, char** argv) {
     // Clear screen (but content remains in scrollback - user can scroll up)
     // \x1b[2J = clear entire screen, \x1b[H = move cursor to home
     printf("\x1b[2J\x1b[H");
+    fflush(stdout);
 
     // Show neofetch before login prompt
     pid_t neo_pid = fork();
@@ -258,6 +259,7 @@ int main(int argc, char** argv) {
         (void)waitpid(neo_pid, &neo_status, 0);
     }
     printf("\n");
+    fflush(stdout);
 
     // Keep init (PID 1) alive and supervise the user shell.
     for (;;) {

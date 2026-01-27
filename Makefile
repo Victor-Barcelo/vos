@@ -61,7 +61,9 @@ EXTRA_FONT_PSF = \
 	$(FONTS_DIR)/terminus-powerline/ter-powerline-v28b.psf \
 	$(FONTS_DIR)/terminus-powerline/ter-powerline-v32b.psf \
 	$(FONTS_DIR)/gohufont/gohufont-uni-11.psf \
-	$(FONTS_DIR)/gohufont/gohufont-uni-11b.psf
+	$(FONTS_DIR)/gohufont/gohufont-uni-11b.psf \
+	$(FONTS_DIR)/unifont/Uni3-TerminusBold32x16.psf \
+	$(FONTS_DIR)/unifont/Uni2-VGA32x16.psf
 
 EXTRA_FONT_OBJS = $(patsubst $(FONTS_DIR)/%.psf,$(FONTS_BUILD_DIR)/%.o,$(EXTRA_FONT_PSF))
 
@@ -331,7 +333,7 @@ DASH_C_SOURCES = \
 DASH_OBJECTS = $(patsubst $(DASH_DIR)/%.c,$(DASH_BUILD_DIR)/%.o,$(DASH_C_SOURCES))
 USER_DASH = $(USER_BUILD_DIR)/dash.elf
 
-USER_BINS = $(USER_INIT) $(USER_ELIZA) $(USER_LSH) $(USER_SH) $(USER_DF) $(USER_TREE) $(USER_UPTIME) $(USER_DATE) $(USER_SETDATE) $(USER_PS) $(USER_TOP) $(USER_SYSVIEW) $(USER_NEOFETCH) $(USER_FONT) $(USER_THEME) $(USER_LS) $(USER_JSON) $(USER_IMG) $(USER_LOGIN) $(USER_VED) $(USER_S3LCUBE) $(USER_S3LFLY) $(USER_OLIVEDEMO) $(USER_NEXTVI) $(USER_NE) $(USER_BASIC) $(USER_ZORK) $(USER_TCC) $(USER_GBEMU) $(USER_NESEMU) $(USER_DASH) \
+USER_BINS = $(USER_INIT) $(USER_ELIZA) $(USER_LSH) $(USER_SH) $(USER_DF) $(USER_TREE) $(USER_UPTIME) $(USER_DATE) $(USER_SETDATE) $(USER_PS) $(USER_TOP) $(USER_SYSVIEW) $(USER_NEOFETCH) $(USER_FONT) $(USER_THEME) $(USER_LS) $(USER_JSON) $(USER_IMG) $(USER_LOGIN) $(USER_VED) $(USER_S3LCUBE) $(USER_S3LFLY) $(USER_OLIVEDEMO) $(USER_NEXTVI) $(USER_NE) $(USER_BASIC) $(USER_ZORK) $(USER_TCC) $(USER_GBEMU) $(USER_NESEMU) \
             $(SBASE_TOOL_BINS)
 
 # QEMU defaults
@@ -479,7 +481,7 @@ $(USER_NE): $(USER_RUNTIME_OBJECTS) $(NE_OBJECTS) $(USER_RUNTIME_LIBS)
 $(DASH_BUILD_DIR)/%.o: $(DASH_DIR)/%.c | $(USER_BUILD_DIR)
 	mkdir -p $(dir $@)
 	$(CC) -ffreestanding -fno-stack-protector -fno-pie -Wall -Wno-unused-parameter -Wno-sign-compare -O2 \
-		-DHAVE_CONFIG_H -include $(DASH_DIR)/config.h \
+		-DHAVE_CONFIG_H -DSHELL -include $(DASH_DIR)/config.h \
 		-I$(USER_DIR) -I$(DASH_DIR) -c $< -o $@
 
 # Link dash shell
@@ -664,7 +666,6 @@ $(ISO): $(KERNEL) $(USER_BINS) $(FAT_IMG) $(INITRAMFS_FILES) $(INITRAMFS_DIRS)
 	cp $(USER_TCC) $(INITRAMFS_ROOT)/bin/tcc
 	cp $(USER_GBEMU) $(INITRAMFS_ROOT)/bin/gbemu
 	cp $(USER_NESEMU) $(INITRAMFS_ROOT)/bin/nesemu
-	cp $(USER_DASH) $(INITRAMFS_ROOT)/bin/dash
 	for b in $(SBASE_TOOLS); do cp $(SBASE_BIN_DIR)/$$b.elf $(INITRAMFS_ROOT)/bin/$$b; done
 	cp $(USER_LS) $(INITRAMFS_ROOT)/bin/ls
 	tar -C $(INITRAMFS_ROOT) -cf $(INITRAMFS_TAR) .

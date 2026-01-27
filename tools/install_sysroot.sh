@@ -52,8 +52,33 @@ VSMALL3D_H="$ROOT_DIR/third_party/small3dlib/small3d.h"
 VSMALL3DLIB_H="$ROOT_DIR/third_party/small3dlib/small3dlib.h"
 VTERMBOX2_H="$ROOT_DIR/third_party/termbox2.h"
 
+# Additional single-header libraries for TCC development
+VSTB_IMAGE_H="$ROOT_DIR/third_party/stb/stb_image.h"
+VJSMN_H="$ROOT_DIR/third_party/jsmn/jsmn.h"
+VJSON_H="$ROOT_DIR/third_party/sheredom_json/json.h"
+VLINENOISE_H="$ROOT_DIR/third_party/linenoise/linenoise.h"
+VLINENOISE_C="$ROOT_DIR/third_party/linenoise/linenoise.c"
+VPEANUT_GB_H="$ROOT_DIR/third_party/peanut-gb/peanut_gb.h"
+
+# sbase utility headers (hash functions, arg parsing, utf8)
+VSBASE_ARG_H="$ROOT_DIR/third_party/sbase/arg.h"
+VSBASE_UTF_H="$ROOT_DIR/third_party/sbase/utf.h"
+VSBASE_MD5_H="$ROOT_DIR/third_party/sbase/md5.h"
+VSBASE_SHA1_H="$ROOT_DIR/third_party/sbase/sha1.h"
+VSBASE_SHA256_H="$ROOT_DIR/third_party/sbase/sha256.h"
+VSBASE_SHA512_H="$ROOT_DIR/third_party/sbase/sha512.h"
+
+# uBASIC interpreter headers
+VUBASIC_H="$ROOT_DIR/user/basic/ubasic.h"
+VUBASIC_TOK_H="$ROOT_DIR/user/basic/tokenizer.h"
+
 VOLIVEDEMO_SRC="$ROOT_DIR/user/olivedemo.c"
 VS3LCUBE_SRC="$ROOT_DIR/user/s3lcube.c"
+VS3LFLY_SRC="$ROOT_DIR/user/s3lfly.c"
+VELIZA_SRC="$ROOT_DIR/user/eliza.c"
+VJSON_DEMO_SRC="$ROOT_DIR/user/json.c"
+VNEOFETCH_SRC="$ROOT_DIR/user/neofetch.c"
+VSYSVIEW_SRC="$ROOT_DIR/user/sysview.c"
 
 if [[ ! -f "$DISK_IMG" ]]; then
   echo "error: disk image not found: $DISK_IMG" >&2
@@ -288,8 +313,33 @@ copy_one "$VSMALL3D_H" ::/usr/include/small3d.h
 copy_one "$VSMALL3DLIB_H" ::/usr/include/small3dlib.h
 copy_one "$VTERMBOX2_H" ::/usr/include/termbox2.h
 
+# Additional single-header libraries
+copy_one "$VSTB_IMAGE_H" ::/usr/include/stb_image.h
+copy_one "$VJSMN_H" ::/usr/include/jsmn.h
+copy_one "$VJSON_H" ::/usr/include/json.h
+copy_one "$VLINENOISE_H" ::/usr/include/linenoise.h
+copy_one "$VLINENOISE_C" ::/usr/include/linenoise.c
+copy_one "$VPEANUT_GB_H" ::/usr/include/peanut_gb.h
+
+# sbase utility headers
+copy_one "$VSBASE_ARG_H" ::/usr/include/arg.h
+copy_one "$VSBASE_UTF_H" ::/usr/include/utf.h
+copy_one "$VSBASE_MD5_H" ::/usr/include/md5.h
+copy_one "$VSBASE_SHA1_H" ::/usr/include/sha1.h
+copy_one "$VSBASE_SHA256_H" ::/usr/include/sha256.h
+copy_one "$VSBASE_SHA512_H" ::/usr/include/sha512.h
+
+# uBASIC headers
+copy_one "$VUBASIC_H" ::/usr/include/ubasic.h
+copy_one "$VUBASIC_TOK_H" ::/usr/include/tokenizer.h
+
 copy_one "$VOLIVEDEMO_SRC" ::/home/victor/examples/olivedemo.c
 copy_one "$VS3LCUBE_SRC" ::/home/victor/examples/s3lcube.c
+copy_one "$VS3LFLY_SRC" ::/home/victor/examples/s3lfly.c
+copy_one "$VELIZA_SRC" ::/home/victor/examples/eliza.c
+copy_one "$VJSON_DEMO_SRC" ::/home/victor/examples/json.c
+copy_one "$VNEOFETCH_SRC" ::/home/victor/examples/neofetch.c
+copy_one "$VSYSVIEW_SRC" ::/home/victor/examples/sysview.c
 
 # Remove legacy raylib artifacts from older disk images.
 rm_img_path ::/usr/include/raylib.h

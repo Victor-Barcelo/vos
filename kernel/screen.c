@@ -164,6 +164,11 @@ extern const uint8_t _binary_third_party_fonts_gohufont_gohufont_uni_11_psf_star
 extern const uint8_t _binary_third_party_fonts_gohufont_gohufont_uni_11_psf_end[];
 extern const uint8_t _binary_third_party_fonts_gohufont_gohufont_uni_11b_psf_start[];
 extern const uint8_t _binary_third_party_fonts_gohufont_gohufont_uni_11b_psf_end[];
+// Unifont (extended Unicode coverage)
+extern const uint8_t _binary_third_party_fonts_unifont_Uni3_TerminusBold32x16_psf_start[];
+extern const uint8_t _binary_third_party_fonts_unifont_Uni3_TerminusBold32x16_psf_end[];
+extern const uint8_t _binary_third_party_fonts_unifont_Uni2_VGA32x16_psf_start[];
+extern const uint8_t _binary_third_party_fonts_unifont_Uni2_VGA32x16_psf_end[];
 
 typedef struct {
     const char* name;
@@ -205,6 +210,9 @@ enum {
     // Gohufont
     FB_FONT_GOHU_11 = 18,
     FB_FONT_GOHU_11B = 19,
+    // Unifont (extended Unicode)
+    FB_FONT_UNI3_TERM_BOLD_32 = 20,
+    FB_FONT_UNI2_VGA_32 = 21,
 };
 
 static const fb_font_source_t fb_fonts[] = {
@@ -246,6 +254,11 @@ static const fb_font_source_t fb_fonts[] = {
                          _binary_third_party_fonts_gohufont_gohufont_uni_11_psf_end, 0},
     [FB_FONT_GOHU_11B] = {"gohufont-6x11-bold", _binary_third_party_fonts_gohufont_gohufont_uni_11b_psf_start,
                           _binary_third_party_fonts_gohufont_gohufont_uni_11b_psf_end, 0},
+    // Unifont (extended Unicode coverage)
+    [FB_FONT_UNI3_TERM_BOLD_32] = {"unifont-term-16x32", _binary_third_party_fonts_unifont_Uni3_TerminusBold32x16_psf_start,
+                                   _binary_third_party_fonts_unifont_Uni3_TerminusBold32x16_psf_end, 0},
+    [FB_FONT_UNI2_VGA_32] = {"unifont-vga-16x32", _binary_third_party_fonts_unifont_Uni2_VGA32x16_psf_start,
+                             _binary_third_party_fonts_unifont_Uni2_VGA32x16_psf_end, 0},
 };
 
 static int fb_font_count_value(void) {

@@ -36,13 +36,13 @@
 #include <signal.h>
 #include <unistd.h>
 #include <stdlib.h>
+#include <sys/wait.h>
 #ifdef HAVE_PATHS_H
 #include <paths.h>
 #endif
 #include <sys/types.h>
 #include <sys/param.h>
 #ifdef BSD
-#include <sys/wait.h>
 #include <sys/time.h>
 #include <sys/resource.h>
 #endif

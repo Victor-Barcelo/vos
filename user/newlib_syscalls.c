@@ -2871,3 +2871,95 @@ int poll(struct pollfd* fds, nfds_t nfds, int timeout) {
 
     return nready;
 }
+
+// ---------------------------------------------------------------------------
+// Additional POSIX functions for dash shell
+// ---------------------------------------------------------------------------
+
+pid_t tcgetpgrp(int fd) {
+    (void)fd;
+    // Return current process group - good enough for basic job control
+    return getpgrp();
+}
+
+// Resource limits - stub implementation
+// Note: newlib's sys/resource.h doesn't define rlimit, so we define it here
+#ifndef RLIM_INFINITY
+#define RLIM_INFINITY ((rlim_t)-1)
+#endif
+
+typedef unsigned long rlim_t;
+
+struct rlimit {
+    rlim_t rlim_cur;  /* current (soft) limit */
+    rlim_t rlim_max;  /* hard limit */
+};
+
+/* Resource limit types */
+#define RLIMIT_CPU      0   /* CPU time per process */
+#define RLIMIT_FSIZE    1   /* file size */
+#define RLIMIT_DATA     2   /* data segment size */
+#define RLIMIT_STACK    3   /* stack size */
+#define RLIMIT_CORE     4   /* core file size */
+#define RLIMIT_NOFILE   5   /* number of open files */
+#define RLIMIT_AS       6   /* address space (virtual memory) */
+#define RLIMIT_NPROC    7   /* number of processes */
+
+int getrlimit(int resource, struct rlimit *rlp) {
+    if (!rlp) {
+        errno = EFAULT;
+        return -1;
+    }
+    // Return "unlimited" for all resources
+    (void)resource;
+    rlp->rlim_cur = RLIM_INFINITY;
+    rlp->rlim_max = RLIM_INFINITY;
+    return 0;
+}
+
+int setrlimit(int resource, const struct rlimit *rlp) {
+    (void)resource;
+    (void)rlp;
+    // Silently succeed - VOS doesn't enforce resource limits
+    return 0;
+}
+
+int sigsuspend(const sigset_t *mask) {
+    (void)mask;
+    // Stub: just pause briefly and return interrupted
+    // A proper implementation would block until a signal arrives
+    usleep(100000);  // 100ms
+    errno = EINTR;
+    return -1;
+}
+
+int sigsetmask(int mask) {
+    // Old BSD-style signal mask - convert to sigprocmask
+    sigset_t set, oset;
+    sigemptyset(&set);
+    for (int i = 1; i < 32; i++) {
+        if (mask & (1 << (i - 1))) {
+            sigaddset(&set, i);
+        }
+    }
+    if (sigprocmask(SIG_SETMASK, &set, &oset) < 0) {
+        return -1;
+    }
+    // Convert old set back to mask
+    int omask = 0;
+    for (int i = 1; i < 32; i++) {
+        if (sigismember(&oset, i)) {
+            omask |= (1 << (i - 1));
+        }
+    }
+    return omask;
+}
+
+int killpg(pid_t pgrp, int sig) {
+    if (pgrp < 0) {
+        errno = EINVAL;
+        return -1;
+    }
+    // kill(-pgrp, sig) sends to process group
+    return kill(-pgrp, sig);
+}

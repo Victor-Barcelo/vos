@@ -39,6 +39,10 @@ VTERMIOS_H="$ROOT_DIR/user/sys/termios.h"
 VIOCTL_H="$ROOT_DIR/user/sys/ioctl.h"
 VUTSNAME_H="$ROOT_DIR/user/sys/utsname.h"
 VSYSMACROS_H="$ROOT_DIR/user/sys/sysmacros.h"
+VDIRENT_H="$ROOT_DIR/user/sys/dirent.h"
+VMMAN_H="$ROOT_DIR/user/sys/mman.h"
+# Note: VOS sys/stat.h uses #include_next which TCC doesn't support, so we install a merged version
+VSTAT_TCC_H="$ROOT_DIR/user/sys/stat_tcc.h"
 
 VOLIVE="$ROOT_DIR/build/user/libolive.a"
 VOLIVE_H="$ROOT_DIR/third_party/olive/olive.h"
@@ -46,6 +50,7 @@ VOLIVE_C="$ROOT_DIR/third_party/olive/olive.c"
 
 VSMALL3D_H="$ROOT_DIR/third_party/small3dlib/small3d.h"
 VSMALL3DLIB_H="$ROOT_DIR/third_party/small3dlib/small3dlib.h"
+VTERMBOX2_H="$ROOT_DIR/third_party/termbox2.h"
 
 VOLIVEDEMO_SRC="$ROOT_DIR/user/olivedemo.c"
 VS3LCUBE_SRC="$ROOT_DIR/user/s3lcube.c"
@@ -148,6 +153,10 @@ if [[ ! -f "$VOLIVEDEMO_SRC" ]]; then
 fi
 if [[ ! -f "$VS3LCUBE_SRC" ]]; then
   echo "error: small3dlib cube demo not found: $VS3LCUBE_SRC" >&2
+  exit 1
+fi
+if [[ ! -f "$VTERMBOX2_H" ]]; then
+  echo "error: termbox2 header not found: $VTERMBOX2_H" >&2
   exit 1
 fi
 
@@ -268,12 +277,16 @@ copy_one "$VTERMIOS_H" ::/usr/include/sys/termios.h
 copy_one "$VIOCTL_H" ::/usr/include/sys/ioctl.h
 copy_one "$VUTSNAME_H" ::/usr/include/sys/utsname.h
 copy_one "$VSYSMACROS_H" ::/usr/include/sys/sysmacros.h
+copy_one "$VDIRENT_H" ::/usr/include/sys/dirent.h
+copy_one "$VMMAN_H" ::/usr/include/sys/mman.h
+copy_one "$VSTAT_TCC_H" ::/usr/include/sys/stat.h
 
 copy_one "$VOLIVE" ::/usr/lib/libolive.a
 copy_one "$VOLIVE_H" ::/usr/include/olive.h
 copy_one "$VOLIVE_C" ::/usr/include/olive.c
 copy_one "$VSMALL3D_H" ::/usr/include/small3d.h
 copy_one "$VSMALL3DLIB_H" ::/usr/include/small3dlib.h
+copy_one "$VTERMBOX2_H" ::/usr/include/termbox2.h
 
 copy_one "$VOLIVEDEMO_SRC" ::/home/victor/examples/olivedemo.c
 copy_one "$VS3LCUBE_SRC" ::/home/victor/examples/s3lcube.c

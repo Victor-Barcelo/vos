@@ -290,7 +290,48 @@ NOFRENDO_OBJECTS = $(patsubst $(NOFRENDO_DIR)/%.c,$(NOFRENDO_BUILD_DIR)/%.o,$(NO
 USER_NESEMU_OBJ = $(USER_BUILD_DIR)/nesemu.o
 USER_NESEMU = $(USER_BUILD_DIR)/nesemu.elf
 
-USER_BINS = $(USER_INIT) $(USER_ELIZA) $(USER_LSH) $(USER_SH) $(USER_DF) $(USER_TREE) $(USER_UPTIME) $(USER_DATE) $(USER_SETDATE) $(USER_PS) $(USER_TOP) $(USER_SYSVIEW) $(USER_NEOFETCH) $(USER_FONT) $(USER_THEME) $(USER_LS) $(USER_JSON) $(USER_IMG) $(USER_LOGIN) $(USER_VED) $(USER_S3LCUBE) $(USER_S3LFLY) $(USER_OLIVEDEMO) $(USER_NEXTVI) $(USER_NE) $(USER_BASIC) $(USER_ZORK) $(USER_TCC) $(USER_GBEMU) $(USER_NESEMU) \
+# dash (Debian Almquist Shell - POSIX shell)
+DASH_DIR = $(THIRD_PARTY_DIR)/dash
+DASH_BUILD_DIR = $(USER_BUILD_DIR)/dash
+
+DASH_C_SOURCES = \
+	$(DASH_DIR)/alias.c \
+	$(DASH_DIR)/arith_yacc.c \
+	$(DASH_DIR)/arith_yylex.c \
+	$(DASH_DIR)/builtins.c \
+	$(DASH_DIR)/cd.c \
+	$(DASH_DIR)/error.c \
+	$(DASH_DIR)/eval.c \
+	$(DASH_DIR)/exec.c \
+	$(DASH_DIR)/expand.c \
+	$(DASH_DIR)/histedit.c \
+	$(DASH_DIR)/init.c \
+	$(DASH_DIR)/input.c \
+	$(DASH_DIR)/jobs.c \
+	$(DASH_DIR)/mail.c \
+	$(DASH_DIR)/main.c \
+	$(DASH_DIR)/memalloc.c \
+	$(DASH_DIR)/miscbltin.c \
+	$(DASH_DIR)/mystring.c \
+	$(DASH_DIR)/nodes.c \
+	$(DASH_DIR)/options.c \
+	$(DASH_DIR)/output.c \
+	$(DASH_DIR)/parser.c \
+	$(DASH_DIR)/redir.c \
+	$(DASH_DIR)/show.c \
+	$(DASH_DIR)/signames.c \
+	$(DASH_DIR)/syntax.c \
+	$(DASH_DIR)/system.c \
+	$(DASH_DIR)/trap.c \
+	$(DASH_DIR)/var.c \
+	$(DASH_DIR)/bltin/printf.c \
+	$(DASH_DIR)/bltin/test.c \
+	$(DASH_DIR)/bltin/times.c
+
+DASH_OBJECTS = $(patsubst $(DASH_DIR)/%.c,$(DASH_BUILD_DIR)/%.o,$(DASH_C_SOURCES))
+USER_DASH = $(USER_BUILD_DIR)/dash.elf
+
+USER_BINS = $(USER_INIT) $(USER_ELIZA) $(USER_LSH) $(USER_SH) $(USER_DF) $(USER_TREE) $(USER_UPTIME) $(USER_DATE) $(USER_SETDATE) $(USER_PS) $(USER_TOP) $(USER_SYSVIEW) $(USER_NEOFETCH) $(USER_FONT) $(USER_THEME) $(USER_LS) $(USER_JSON) $(USER_IMG) $(USER_LOGIN) $(USER_VED) $(USER_S3LCUBE) $(USER_S3LFLY) $(USER_OLIVEDEMO) $(USER_NEXTVI) $(USER_NE) $(USER_BASIC) $(USER_ZORK) $(USER_TCC) $(USER_GBEMU) $(USER_NESEMU) $(USER_DASH) \
             $(SBASE_TOOL_BINS)
 
 # QEMU defaults
@@ -433,6 +474,17 @@ $(NE_BUILD_DIR)/%.o: $(NE_SRC_DIR)/%.c | $(USER_BUILD_DIR)
 # Link ne editor
 $(USER_NE): $(USER_RUNTIME_OBJECTS) $(NE_OBJECTS) $(USER_RUNTIME_LIBS)
 	$(USER_LINK_CMD_MATH)
+
+# Compile dash sources
+$(DASH_BUILD_DIR)/%.o: $(DASH_DIR)/%.c | $(USER_BUILD_DIR)
+	mkdir -p $(dir $@)
+	$(CC) -ffreestanding -fno-stack-protector -fno-pie -Wall -Wno-unused-parameter -Wno-sign-compare -O2 \
+		-DHAVE_CONFIG_H -include $(DASH_DIR)/config.h \
+		-I$(USER_DIR) -I$(DASH_DIR) -c $< -o $@
+
+# Link dash shell
+$(USER_DASH): $(USER_RUNTIME_OBJECTS) $(DASH_OBJECTS) $(USER_RUNTIME_LIBS)
+	$(USER_LINK_CMD)
 
 # Link userland uptime/date/setdate/ps/top (static, freestanding)
 $(USER_UPTIME): $(USER_RUNTIME_OBJECTS) $(USER_UPTIME_OBJ) $(USER_RUNTIME_LIBS)
@@ -612,6 +664,7 @@ $(ISO): $(KERNEL) $(USER_BINS) $(FAT_IMG) $(INITRAMFS_FILES) $(INITRAMFS_DIRS)
 	cp $(USER_TCC) $(INITRAMFS_ROOT)/bin/tcc
 	cp $(USER_GBEMU) $(INITRAMFS_ROOT)/bin/gbemu
 	cp $(USER_NESEMU) $(INITRAMFS_ROOT)/bin/nesemu
+	cp $(USER_DASH) $(INITRAMFS_ROOT)/bin/dash
 	for b in $(SBASE_TOOLS); do cp $(SBASE_BIN_DIR)/$$b.elf $(INITRAMFS_ROOT)/bin/$$b; done
 	cp $(USER_LS) $(INITRAMFS_ROOT)/bin/ls
 	tar -C $(INITRAMFS_ROOT) -cf $(INITRAMFS_TAR) .

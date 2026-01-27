@@ -243,6 +243,22 @@ int main(int argc, char** argv) {
     posix_selftest();
     posix_process_selftest();
 
+    // Clear screen (but content remains in scrollback - user can scroll up)
+    // \x1b[2J = clear entire screen, \x1b[H = move cursor to home
+    printf("\x1b[2J\x1b[H");
+
+    // Show neofetch before login prompt
+    pid_t neo_pid = fork();
+    if (neo_pid == 0) {
+        char* const argv[] = {"/bin/neofetch", NULL};
+        execve("/bin/neofetch", argv, NULL);
+        _exit(127);
+    } else if (neo_pid > 0) {
+        int neo_status = 0;
+        (void)waitpid(neo_pid, &neo_status, 0);
+    }
+    printf("\n");
+
     // Keep init (PID 1) alive and supervise the user shell.
     for (;;) {
         pid_t pid = fork();

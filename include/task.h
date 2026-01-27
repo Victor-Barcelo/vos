@@ -164,7 +164,8 @@ int32_t tasking_mprotect(uint32_t addr, uint32_t length, uint32_t prot);
 
 // fork/exec (POSIX-ish).
 int32_t tasking_fork(interrupt_frame_t* frame);
-int32_t tasking_execve(interrupt_frame_t* frame, const char* path, const char* const* argv, uint32_t argc);
+int32_t tasking_execve(interrupt_frame_t* frame, const char* path, const char* const* argv, uint32_t argc,
+                       const char* const* envp, uint32_t envc);
 
 // Spawn a new user process by loading an ELF from the VFS, inheriting the
 // caller's cwd/tty settings. Returns pid (>0) on success or -errno.

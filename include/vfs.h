@@ -36,6 +36,9 @@ typedef struct vfs_stat {
     // FAT-style "last write" timestamp (raw on-disk format). 0 means unknown/unset.
     uint16_t wtime;
     uint16_t wdate;
+    // Owner uid/gid.
+    uint32_t uid;
+    uint32_t gid;
 } vfs_stat_t;
 
 typedef struct vfs_dirent {
@@ -48,6 +51,9 @@ typedef struct vfs_dirent {
     // FAT-style "last write" timestamp (raw on-disk format). 0 means unknown/unset.
     uint16_t wtime;
     uint16_t wdate;
+    // Owner uid/gid.
+    uint32_t uid;
+    uint32_t gid;
 } vfs_dirent_t;
 
 typedef struct vfs_statfs {
@@ -70,6 +76,8 @@ int32_t vfs_mkdir_path(const char* cwd, const char* path);
 int32_t vfs_symlink_path(const char* cwd, const char* target, const char* linkpath);
 int32_t vfs_readlink_path(const char* cwd, const char* path, char* out, uint32_t cap);
 int32_t vfs_chmod_path(const char* cwd, const char* path, uint16_t mode);
+int32_t vfs_chown_path(const char* cwd, const char* path, uint32_t uid, uint32_t gid);
+int32_t vfs_lchown_path(const char* cwd, const char* path, uint32_t uid, uint32_t gid);
 int32_t vfs_statfs_path(const char* cwd, const char* path, vfs_statfs_t* out);
 
 // Open/close/read/write/lseek on a VFS handle. Returns 0 on success, or -errno.
@@ -93,6 +101,7 @@ int32_t vfs_truncate_path(const char* cwd, const char* path, uint32_t new_size);
 int32_t vfs_ftruncate(vfs_handle_t* h, uint32_t new_size);
 int32_t vfs_fsync(vfs_handle_t* h);
 int32_t vfs_fchmod(vfs_handle_t* h, uint16_t mode);
+int32_t vfs_fchown(vfs_handle_t* h, uint32_t uid, uint32_t gid);
 
 // Query or update the open flags stored on a VFS handle (used by fcntl()).
 uint32_t vfs_handle_flags(vfs_handle_t* h);

@@ -2374,7 +2374,7 @@ static void cmd_run(const char* args) {
     paging_switch_directory(user_dir);
     bool ok = elf_load_user_image(data, size, &entry, &user_esp, &brk);
     if (ok) {
-        ok = elf_setup_user_stack(&user_esp, uargv, uargc);
+        ok = elf_setup_user_stack(&user_esp, uargv, uargc, NULL, 0);
     }
     paging_switch_directory(paging_kernel_directory());
     irq_restore(flags);

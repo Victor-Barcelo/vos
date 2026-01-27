@@ -228,7 +228,8 @@ SBASE_TOOLS = \
 	cksum md5sum sha1sum sha256sum sha512sum \
 	cmp comm cols dd printenv expr fold join paste split sponge \
 	test tsort unexpand expand \
-	cal date sleep uname whoami logname which kill
+	cal date sleep uname whoami logname which kill \
+	find xargs time env mktemp
 
 SBASE_TOOL_OBJECTS = $(patsubst %,$(SBASE_BUILD_DIR)/%.o,$(SBASE_TOOLS))
 SBASE_TOOL_BINS = $(patsubst %,$(SBASE_BIN_DIR)/%.elf,$(SBASE_TOOLS))

@@ -12,6 +12,9 @@ typedef struct ramfs_dirent {
     // FAT-style "last write" timestamp for the entry (0 means unknown/unset).
     uint16_t wtime;
     uint16_t wdate;
+    // Owner uid/gid.
+    uint32_t uid;
+    uint32_t gid;
 } ramfs_dirent_t;
 
 void ramfs_init(void);
@@ -20,6 +23,8 @@ bool ramfs_is_dir(const char* path);
 bool ramfs_is_file(const char* path);
 bool ramfs_get_meta(const char* path, bool* out_is_symlink, uint16_t* out_mode);
 bool ramfs_set_meta(const char* path, bool is_symlink, uint16_t mode);
+bool ramfs_get_owner(const char* path, uint32_t* out_uid, uint32_t* out_gid);
+bool ramfs_set_owner(const char* path, uint32_t uid, uint32_t gid);
 
 bool ramfs_stat_ex(const char* path, bool* out_is_dir, uint32_t* out_size, uint16_t* out_wtime, uint16_t* out_wdate);
 

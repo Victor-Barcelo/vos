@@ -125,7 +125,7 @@ static void try_start_init(void) {
     bool ok = elf_load_user_image(data, size, &entry, &user_esp, &brk);
     if (ok) {
         const char* const init_argv[] = {"/bin/init"};
-        ok = elf_setup_user_stack(&user_esp, init_argv, 1);
+        ok = elf_setup_user_stack(&user_esp, init_argv, 1, NULL, 0);
     }
     paging_switch_directory(paging_kernel_directory());
     irq_restore(flags);

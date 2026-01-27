@@ -2801,7 +2801,8 @@ static void task_close_cloexec_fds(void) {
     }
 }
 
-int32_t tasking_execve(interrupt_frame_t* frame, const char* path, const char* const* argv, uint32_t argc) {
+int32_t tasking_execve(interrupt_frame_t* frame, const char* path, const char* const* argv, uint32_t argc,
+                       const char* const* envp, uint32_t envc) {
     if (!enabled || !current_task || !frame) {
         return -EINVAL;
     }
@@ -2811,7 +2812,7 @@ int32_t tasking_execve(interrupt_frame_t* frame, const char* path, const char* c
     if (!path) {
         return -EINVAL;
     }
-    if (argc > VOS_EXEC_MAX_ARGS) {
+    if (argc > VOS_EXEC_MAX_ARGS || envc > VOS_EXEC_MAX_ARGS) {
         return -EINVAL;
     }
 
@@ -2892,7 +2893,7 @@ int32_t tasking_execve(interrupt_frame_t* frame, const char* path, const char* c
     paging_switch_directory(user_dir);
     bool ok = elf_load_user_image(image, st.size, &entry, &user_esp, &brk);
     if (ok) {
-        ok = elf_setup_user_stack(&user_esp, kargv, kargc);
+        ok = elf_setup_user_stack(&user_esp, kargv, kargc, envp, envc);
     }
     paging_switch_directory(prev_dir);
     irq_restore(irq_flags);
@@ -3022,7 +3023,7 @@ int32_t tasking_spawn_exec(const char* path, const char* const* argv, uint32_t a
     paging_switch_directory(user_dir);
     bool ok = elf_load_user_image(image, st.size, &entry, &user_esp, &brk);
     if (ok) {
-        ok = elf_setup_user_stack(&user_esp, kargv, kargc);
+        ok = elf_setup_user_stack(&user_esp, kargv, kargc, NULL, 0);
     }
     paging_switch_directory(prev_dir);
     irq_restore(irq_flags);

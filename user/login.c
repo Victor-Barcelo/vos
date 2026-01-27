@@ -254,11 +254,25 @@ int main(int argc, char** argv) {
         // features can work later).
         (void)setpgid(0, 0);
 
-        // Set environment variables for the shell
-        setenv("HOME", user.home, 1);
-        setenv("USER", user.name, 1);
-        setenv("SHELL", user.shell, 1);
-        setenv("PATH", "/bin:/usr/bin", 1);
+        // Build environment for the shell
+        static char env_home[256];
+        static char env_user[64];
+        static char env_shell[256];
+        static char env_term[] = "TERM=xterm-256color";
+        static char env_path[] = "PATH=/bin:/usr/bin";
+
+        snprintf(env_home, sizeof(env_home), "HOME=%s", user.home);
+        snprintf(env_user, sizeof(env_user), "USER=%s", user.name);
+        snprintf(env_shell, sizeof(env_shell), "SHELL=%s", user.shell);
+
+        char* const sh_envp[] = {
+            env_home,
+            env_user,
+            env_shell,
+            env_term,
+            env_path,
+            NULL
+        };
 
         // Create argv[0] with leading '-' to indicate login shell
         // This makes dash read /etc/profile and ~/.profile
@@ -268,7 +282,7 @@ int main(int argc, char** argv) {
         snprintf(login_shell, sizeof(login_shell), "-%s", basename);
 
         char* const sh_argv[] = {login_shell, NULL};
-        execve(user.shell, sh_argv, NULL);
+        execve(user.shell, sh_argv, sh_envp);
         printf("login: exec %s failed: %s\n", user.shell, strerror(errno));
         return 1;
     }

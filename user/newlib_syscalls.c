@@ -1322,12 +1322,13 @@ static inline int vos_sys_fork(void) {
     return ret;
 }
 
-static inline int vos_sys_execve(const char* path, const char* const* argv, unsigned int argc) {
+static inline int vos_sys_execve(const char* path, const char* const* argv, unsigned int argc,
+                                  const char* const* envp, unsigned int envc) {
     int ret;
     __asm__ volatile (
         "int $0x80"
         : "=a"(ret)
-        : "a"(SYS_EXECVE), "b"(path), "c"(argv), "d"(argc)
+        : "a"(SYS_EXECVE), "b"(path), "c"(argv), "d"(argc), "S"(envp), "D"(envc)
         : "memory"
     );
     return ret;
@@ -2595,10 +2596,14 @@ pid_t vfork(void) {
 }
 
 int execve(const char* path, char* const argv[], char* const envp[]) {
-    (void)envp;
     if (!path) {
         errno = EINVAL;
         return -1;
+    }
+
+    // If envp is NULL, use the current environ
+    if (!envp) {
+        envp = environ;
     }
 
     unsigned int argc = 0;
@@ -2611,7 +2616,18 @@ int execve(const char* path, char* const argv[], char* const envp[]) {
         }
     }
 
-    int rc = vos_sys_execve(path, (const char* const*)argv, argc);
+    unsigned int envc = 0;
+    if (envp) {
+        for (; envc < VOS_EXEC_MAX_ARGS && envp[envc]; envc++) {
+        }
+        if (envc == VOS_EXEC_MAX_ARGS && envp[envc]) {
+            errno = E2BIG;
+            return -1;
+        }
+    }
+
+    int rc = vos_sys_execve(path, (const char* const*)argv, argc,
+                            (const char* const*)envp, envc);
     if (rc < 0) {
         errno = -rc;
         return -1;

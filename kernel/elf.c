@@ -140,14 +140,18 @@ static bool push_u32(uint32_t* sp, uint32_t value) {
     return copy_to_user((void*)(*sp), &value, 4u);
 }
 
-bool elf_setup_user_stack(uint32_t* inout_user_esp, const char* const* argv, uint32_t argc) {
+bool elf_setup_user_stack(uint32_t* inout_user_esp, const char* const* argv, uint32_t argc,
+                          const char* const* envp, uint32_t envc) {
     if (!inout_user_esp) {
         return false;
     }
     if (argc > 0 && !argv) {
         return false;
     }
-    if (argc > ELF_ARG_MAX) {
+    if (envc > 0 && !envp) {
+        return false;
+    }
+    if (argc > ELF_ARG_MAX || envc > ELF_ARG_MAX) {
         return false;
     }
 
@@ -161,6 +165,8 @@ bool elf_setup_user_stack(uint32_t* inout_user_esp, const char* const* argv, uin
     }
 
     uint32_t* argv_ptrs = NULL;
+    uint32_t* envp_ptrs = NULL;
+
     if (argc != 0) {
         argv_ptrs = (uint32_t*)kmalloc(argc * (uint32_t)sizeof(*argv_ptrs));
         if (!argv_ptrs) {
@@ -169,6 +175,37 @@ bool elf_setup_user_stack(uint32_t* inout_user_esp, const char* const* argv, uin
         for (uint32_t i = 0; i < argc; i++) {
             argv_ptrs[i] = 0;
         }
+    }
+
+    if (envc != 0) {
+        envp_ptrs = (uint32_t*)kmalloc(envc * (uint32_t)sizeof(*envp_ptrs));
+        if (!envp_ptrs) {
+            if (argv_ptrs) kfree(argv_ptrs);
+            return false;
+        }
+        for (uint32_t i = 0; i < envc; i++) {
+            envp_ptrs[i] = 0;
+        }
+    }
+
+    // Copy environment strings onto the stack (in reverse order).
+    for (uint32_t i = 0; i < envc; i++) {
+        const char* s = envp[envc - 1u - i];
+        if (!s) {
+            s = "";
+        }
+        uint32_t len = (uint32_t)strlen(s) + 1u;
+        if (len == 0) {
+            len = 1u;
+        }
+        if (sp < len || sp - len < stack_bot) {
+            goto fail;
+        }
+        sp -= len;
+        if (!copy_to_user((void*)sp, s, len)) {
+            goto fail;
+        }
+        envp_ptrs[envc - 1u - i] = sp;
     }
 
     // Copy argument strings onto the stack (in reverse order).
@@ -198,7 +235,8 @@ bool elf_setup_user_stack(uint32_t* inout_user_esp, const char* const* argv, uin
     }
 
     // Ensure final SP is 16-byte aligned after pushing argc/argv/envp.
-    uint32_t ptr_bytes = (argc + 3u) * 4u; // argc + argv[argc] + envp[0] + argv pointers
+    // Layout: argc, argv[0..argc-1], NULL, envp[0..envc-1], NULL
+    uint32_t ptr_bytes = (1u + argc + 1u + envc + 1u) * 4u;
     if (sp < ptr_bytes || sp - ptr_bytes < stack_bot) {
         goto fail;
     }
@@ -212,9 +250,16 @@ bool elf_setup_user_stack(uint32_t* inout_user_esp, const char* const* argv, uin
         sp -= padding;
     }
 
-    // envp terminator (no environment)
+    // envp terminator
     if (!push_u32(&sp, 0u)) {
         goto fail;
+    }
+    // envp pointers
+    for (uint32_t i = 0; i < envc; i++) {
+        uint32_t idx = envc - 1u - i;
+        if (!push_u32(&sp, envp_ptrs[idx])) {
+            goto fail;
+        }
     }
     // argv terminator
     if (!push_u32(&sp, 0u)) {
@@ -236,11 +281,17 @@ bool elf_setup_user_stack(uint32_t* inout_user_esp, const char* const* argv, uin
     if (argv_ptrs) {
         kfree(argv_ptrs);
     }
+    if (envp_ptrs) {
+        kfree(envp_ptrs);
+    }
     return true;
 
 fail:
     if (argv_ptrs) {
         kfree(argv_ptrs);
+    }
+    if (envp_ptrs) {
+        kfree(envp_ptrs);
     }
     return false;
 }

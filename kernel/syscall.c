@@ -905,16 +905,24 @@ interrupt_frame_t* syscall_handle(interrupt_frame_t* frame) {
             const char* path_user = (const char*)frame->ebx;
             const char* const* argv_user = (const char* const*)frame->ecx;
             uint32_t argc = frame->edx;
+            const char* const* envp_user = (const char* const*)frame->esi;
+            uint32_t envc = frame->edi;
 
             int32_t rc = 0;
             const char** kargv = NULL;
+            const char** kenvp = NULL;
             uint32_t argv_bytes = 0;
+            uint32_t envp_bytes = 0;
 
-            if (argc > VOS_EXEC_MAX_ARGS) {
+            if (argc > VOS_EXEC_MAX_ARGS || envc > VOS_EXEC_MAX_ARGS) {
                 rc = -EINVAL;
                 goto out_execve;
             }
             if (argc != 0 && !argv_user) {
+                rc = -EFAULT;
+                goto out_execve;
+            }
+            if (envc != 0 && !envp_user) {
                 rc = -EFAULT;
                 goto out_execve;
             }
@@ -925,6 +933,7 @@ interrupt_frame_t* syscall_handle(interrupt_frame_t* frame) {
                 goto out_execve;
             }
 
+            // Copy argv
             if (argc != 0) {
                 kargv = (const char**)kmalloc(argc * (uint32_t)sizeof(*kargv));
                 if (!kargv) {
@@ -959,7 +968,43 @@ interrupt_frame_t* syscall_handle(interrupt_frame_t* frame) {
                 }
             }
 
-            rc = tasking_execve(frame, path, (argc != 0) ? kargv : NULL, argc);
+            // Copy envp
+            if (envc != 0) {
+                kenvp = (const char**)kmalloc(envc * (uint32_t)sizeof(*kenvp));
+                if (!kenvp) {
+                    rc = -ENOMEM;
+                    goto out_execve;
+                }
+
+                for (uint32_t i = 0; i < envc; i++) {
+                    kenvp[i] = NULL;
+                }
+
+                for (uint32_t i = 0; i < envc; i++) {
+                    const char* envp_ptr = NULL;
+                    if (!copy_from_user(&envp_ptr, envp_user + i, (uint32_t)sizeof(envp_ptr))) {
+                        rc = -EFAULT;
+                        goto out_execve;
+                    }
+
+                    char* s = NULL;
+                    uint32_t bytes = 0;
+                    rc = dup_user_cstring(envp_ptr, VOS_EXEC_ARG_STR_MAX, &s, &bytes);
+                    if (rc < 0) {
+                        goto out_execve;
+                    }
+                    if (envp_bytes + bytes > VOS_EXEC_ARG_MAXBYTES) {
+                        kfree(s);
+                        rc = -E2BIG;
+                        goto out_execve;
+                    }
+                    envp_bytes += bytes;
+                    kenvp[i] = s;
+                }
+            }
+
+            rc = tasking_execve(frame, path, (argc != 0) ? kargv : NULL, argc,
+                               (envc != 0) ? kenvp : NULL, envc);
 
         out_execve:
             if (kargv) {
@@ -969,6 +1014,14 @@ interrupt_frame_t* syscall_handle(interrupt_frame_t* frame) {
                     }
                 }
                 kfree(kargv);
+            }
+            if (kenvp) {
+                for (uint32_t i = 0; i < envc; i++) {
+                    if (kenvp[i]) {
+                        kfree((void*)kenvp[i]);
+                    }
+                }
+                kfree(kenvp);
             }
             frame->eax = (uint32_t)rc;
             return frame;

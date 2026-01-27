@@ -15,6 +15,8 @@ typedef struct ramfs_file {
     uint16_t mode; // POSIX permission bits (07777)
     uint16_t wtime;
     uint16_t wdate;
+    uint32_t uid;
+    uint32_t gid;
 } ramfs_file_t;
 
 typedef struct ramfs_dir {
@@ -22,6 +24,8 @@ typedef struct ramfs_dir {
     uint16_t mode; // POSIX permission bits (07777)
     uint16_t wtime;
     uint16_t wdate;
+    uint32_t uid;
+    uint32_t gid;
 } ramfs_dir_t;
 
 static ramfs_file_t files[RAMFS_MAX_FILES];
@@ -433,6 +437,94 @@ bool ramfs_set_meta(const char* path, bool is_symlink, uint16_t mode) {
     return false;
 }
 
+bool ramfs_get_owner(const char* path, uint32_t* out_uid, uint32_t* out_gid) {
+    if (out_uid) *out_uid = 0;
+    if (out_gid) *out_gid = 0;
+
+    if (!ready) {
+        return false;
+    }
+
+    char rel[128];
+    if (!normalize_path(path, rel, sizeof(rel))) {
+        return false;
+    }
+    if (!is_ram_path(rel) || rel[0] == '\0') {
+        return false;
+    }
+
+    int fidx = find_file_rel(rel);
+    if (fidx >= 0) {
+        if (out_uid) *out_uid = files[fidx].uid;
+        if (out_gid) *out_gid = files[fidx].gid;
+        return true;
+    }
+
+    for (int i = 0; i < RAMFS_MAX_DIRS; i++) {
+        if (dirs[i].path && ci_eq(dirs[i].path, rel)) {
+            if (out_uid) *out_uid = dirs[i].uid;
+            if (out_gid) *out_gid = dirs[i].gid;
+            return true;
+        }
+    }
+
+    // Implicit directory (parent of files) - owned by root.
+    if (dir_exists_rel(rel)) {
+        return true;
+    }
+
+    return false;
+}
+
+bool ramfs_set_owner(const char* path, uint32_t uid, uint32_t gid) {
+    if (!ready) {
+        return false;
+    }
+
+    char rel[128];
+    if (!normalize_path(path, rel, sizeof(rel))) {
+        return false;
+    }
+    if (!is_ram_path(rel) || rel[0] == '\0') {
+        return false;
+    }
+
+    int fidx = find_file_rel(rel);
+    if (fidx >= 0) {
+        files[fidx].uid = uid;
+        files[fidx].gid = gid;
+        return true;
+    }
+
+    // For directories, find or create explicit entry.
+    if (dir_exists_rel(rel)) {
+        for (int i = 0; i < RAMFS_MAX_DIRS; i++) {
+            if (dirs[i].path && ci_eq(dirs[i].path, rel)) {
+                dirs[i].uid = uid;
+                dirs[i].gid = gid;
+                return true;
+            }
+        }
+
+        // Create explicit entry.
+        int slot = alloc_dir_slot();
+        if (slot < 0) {
+            return false;
+        }
+        dirs[slot].path = dup_str(rel);
+        if (!dirs[slot].path) {
+            return false;
+        }
+        dirs[slot].mode = 0755;
+        dirs[slot].uid = uid;
+        dirs[slot].gid = gid;
+        ramfs_timestamp_now(&dirs[slot].wtime, &dirs[slot].wdate);
+        return true;
+    }
+
+    return false;
+}
+
 bool ramfs_stat_ex(const char* path, bool* out_is_dir, uint32_t* out_size, uint16_t* out_wtime, uint16_t* out_wdate) {
     if (out_is_dir) *out_is_dir = false;
     if (out_size) *out_size = 0;
@@ -790,7 +882,9 @@ static bool add_unique(ramfs_dirent_t* out,
                        uint16_t mode,
                        uint32_t size,
                        uint16_t wtime,
-                       uint16_t wdate) {
+                       uint16_t wdate,
+                       uint32_t uid,
+                       uint32_t gid) {
     if (!out || !count || !name || name[0] == '\0') {
         return false;
     }
@@ -822,6 +916,8 @@ static bool add_unique(ramfs_dirent_t* out,
     out[*count].size = size;
     out[*count].wtime = wtime;
     out[*count].wdate = wdate;
+    out[*count].uid = uid;
+    out[*count].gid = gid;
     (*count)++;
     return true;
 }
@@ -872,16 +968,19 @@ uint32_t ramfs_list_dir(const char* path, ramfs_dirent_t* out, uint32_t max) {
             (void)dir_time_rel(child, &wtime, &wdate);
         }
         uint16_t mode = 0755u;
+        uint32_t uid = 0, gid = 0;
         // Prefer explicit directory metadata if present.
         for (int di = 0; di < RAMFS_MAX_DIRS; di++) {
             if (dirs[di].path && ci_eq(dirs[di].path, child)) {
                 if (dirs[di].mode) {
                     mode = (uint16_t)(dirs[di].mode & 07777u);
                 }
+                uid = dirs[di].uid;
+                gid = dirs[di].gid;
                 break;
             }
         }
-        add_unique(out, &count, max, seg, true, false, mode, 0, wtime, wdate);
+        add_unique(out, &count, max, seg, true, false, mode, 0, wtime, wdate, uid, gid);
     }
 
     for (int i = 0; i < RAMFS_MAX_FILES; i++) {
@@ -921,7 +1020,7 @@ uint32_t ramfs_list_dir(const char* path, ramfs_dirent_t* out, uint32_t max) {
                     break;
                 }
             }
-            add_unique(out, &count, max, seg, true, false, mode, 0u, wtime, wdate);
+            add_unique(out, &count, max, seg, true, false, mode, 0u, wtime, wdate, 0u, 0u);
         } else {
             uint16_t mode = files[i].mode ? files[i].mode : 0644u;
             add_unique(out,
@@ -933,7 +1032,9 @@ uint32_t ramfs_list_dir(const char* path, ramfs_dirent_t* out, uint32_t max) {
                        mode,
                        files[i].size,
                        files[i].wtime,
-                       files[i].wdate);
+                       files[i].wdate,
+                       files[i].uid,
+                       files[i].gid);
         }
     }
 

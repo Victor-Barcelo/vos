@@ -164,11 +164,57 @@ extern const uint8_t _binary_third_party_fonts_gohufont_gohufont_uni_11_psf_star
 extern const uint8_t _binary_third_party_fonts_gohufont_gohufont_uni_11_psf_end[];
 extern const uint8_t _binary_third_party_fonts_gohufont_gohufont_uni_11b_psf_start[];
 extern const uint8_t _binary_third_party_fonts_gohufont_gohufont_uni_11b_psf_end[];
-// Unifont (extended Unicode coverage)
-extern const uint8_t _binary_third_party_fonts_unifont_Uni3_TerminusBold32x16_psf_start[];
-extern const uint8_t _binary_third_party_fonts_unifont_Uni3_TerminusBold32x16_psf_end[];
+// Unifont (extended Unicode coverage) - Uni1 VGA
+extern const uint8_t _binary_third_party_fonts_unifont_Uni1_VGA28x16_psf_start[];
+extern const uint8_t _binary_third_party_fonts_unifont_Uni1_VGA28x16_psf_end[];
+extern const uint8_t _binary_third_party_fonts_unifont_Uni1_VGA32x16_psf_start[];
+extern const uint8_t _binary_third_party_fonts_unifont_Uni1_VGA32x16_psf_end[];
+// Unifont - Uni2 Terminus
+extern const uint8_t _binary_third_party_fonts_unifont_Uni2_Terminus20x10_psf_start[];
+extern const uint8_t _binary_third_party_fonts_unifont_Uni2_Terminus20x10_psf_end[];
+extern const uint8_t _binary_third_party_fonts_unifont_Uni2_Terminus24x12_psf_start[];
+extern const uint8_t _binary_third_party_fonts_unifont_Uni2_Terminus24x12_psf_end[];
+extern const uint8_t _binary_third_party_fonts_unifont_Uni2_Terminus28x14_psf_start[];
+extern const uint8_t _binary_third_party_fonts_unifont_Uni2_Terminus28x14_psf_end[];
+extern const uint8_t _binary_third_party_fonts_unifont_Uni2_Terminus32x16_psf_start[];
+extern const uint8_t _binary_third_party_fonts_unifont_Uni2_Terminus32x16_psf_end[];
+// Unifont - Uni2 Terminus Bold
+extern const uint8_t _binary_third_party_fonts_unifont_Uni2_TerminusBold20x10_psf_start[];
+extern const uint8_t _binary_third_party_fonts_unifont_Uni2_TerminusBold20x10_psf_end[];
+extern const uint8_t _binary_third_party_fonts_unifont_Uni2_TerminusBold24x12_psf_start[];
+extern const uint8_t _binary_third_party_fonts_unifont_Uni2_TerminusBold24x12_psf_end[];
+extern const uint8_t _binary_third_party_fonts_unifont_Uni2_TerminusBold28x14_psf_start[];
+extern const uint8_t _binary_third_party_fonts_unifont_Uni2_TerminusBold28x14_psf_end[];
+extern const uint8_t _binary_third_party_fonts_unifont_Uni2_TerminusBold32x16_psf_start[];
+extern const uint8_t _binary_third_party_fonts_unifont_Uni2_TerminusBold32x16_psf_end[];
+// Unifont - Uni2 VGA
+extern const uint8_t _binary_third_party_fonts_unifont_Uni2_VGA28x16_psf_start[];
+extern const uint8_t _binary_third_party_fonts_unifont_Uni2_VGA28x16_psf_end[];
 extern const uint8_t _binary_third_party_fonts_unifont_Uni2_VGA32x16_psf_start[];
 extern const uint8_t _binary_third_party_fonts_unifont_Uni2_VGA32x16_psf_end[];
+// Unifont - Uni3 Terminus
+extern const uint8_t _binary_third_party_fonts_unifont_Uni3_Terminus20x10_psf_start[];
+extern const uint8_t _binary_third_party_fonts_unifont_Uni3_Terminus20x10_psf_end[];
+extern const uint8_t _binary_third_party_fonts_unifont_Uni3_Terminus24x12_psf_start[];
+extern const uint8_t _binary_third_party_fonts_unifont_Uni3_Terminus24x12_psf_end[];
+extern const uint8_t _binary_third_party_fonts_unifont_Uni3_Terminus28x14_psf_start[];
+extern const uint8_t _binary_third_party_fonts_unifont_Uni3_Terminus28x14_psf_end[];
+extern const uint8_t _binary_third_party_fonts_unifont_Uni3_Terminus32x16_psf_start[];
+extern const uint8_t _binary_third_party_fonts_unifont_Uni3_Terminus32x16_psf_end[];
+// Unifont - Uni3 Terminus Bold
+extern const uint8_t _binary_third_party_fonts_unifont_Uni3_TerminusBold20x10_psf_start[];
+extern const uint8_t _binary_third_party_fonts_unifont_Uni3_TerminusBold20x10_psf_end[];
+extern const uint8_t _binary_third_party_fonts_unifont_Uni3_TerminusBold24x12_psf_start[];
+extern const uint8_t _binary_third_party_fonts_unifont_Uni3_TerminusBold24x12_psf_end[];
+extern const uint8_t _binary_third_party_fonts_unifont_Uni3_TerminusBold28x14_psf_start[];
+extern const uint8_t _binary_third_party_fonts_unifont_Uni3_TerminusBold28x14_psf_end[];
+extern const uint8_t _binary_third_party_fonts_unifont_Uni3_TerminusBold32x16_psf_start[];
+extern const uint8_t _binary_third_party_fonts_unifont_Uni3_TerminusBold32x16_psf_end[];
+// Cozette (excellent Unicode coverage - 6078 characters)
+extern const uint8_t _binary_third_party_fonts_cozette_cozette_psf_start[];
+extern const uint8_t _binary_third_party_fonts_cozette_cozette_psf_end[];
+extern const uint8_t _binary_third_party_fonts_cozette_cozette_hidpi_psf_start[];
+extern const uint8_t _binary_third_party_fonts_cozette_cozette_hidpi_psf_end[];
 
 typedef struct {
     const char* name;
@@ -210,9 +256,30 @@ enum {
     // Gohufont
     FB_FONT_GOHU_11 = 18,
     FB_FONT_GOHU_11B = 19,
-    // Unifont (extended Unicode)
-    FB_FONT_UNI3_TERM_BOLD_32 = 20,
-    FB_FONT_UNI2_VGA_32 = 21,
+    // Unifont (extended Unicode) - many sizes
+    FB_FONT_UNI1_VGA_28 = 20,
+    FB_FONT_UNI1_VGA_32 = 21,
+    FB_FONT_UNI2_TERM_20 = 22,
+    FB_FONT_UNI2_TERM_24 = 23,
+    FB_FONT_UNI2_TERM_28 = 24,
+    FB_FONT_UNI2_TERM_32 = 25,
+    FB_FONT_UNI2_TERM_BOLD_20 = 26,
+    FB_FONT_UNI2_TERM_BOLD_24 = 27,
+    FB_FONT_UNI2_TERM_BOLD_28 = 28,
+    FB_FONT_UNI2_TERM_BOLD_32 = 29,
+    FB_FONT_UNI2_VGA_28 = 30,
+    FB_FONT_UNI2_VGA_32 = 31,
+    FB_FONT_UNI3_TERM_20 = 32,
+    FB_FONT_UNI3_TERM_24 = 33,
+    FB_FONT_UNI3_TERM_28 = 34,
+    FB_FONT_UNI3_TERM_32 = 35,
+    FB_FONT_UNI3_TERM_BOLD_20 = 36,
+    FB_FONT_UNI3_TERM_BOLD_24 = 37,
+    FB_FONT_UNI3_TERM_BOLD_28 = 38,
+    FB_FONT_UNI3_TERM_BOLD_32 = 39,
+    // Cozette (excellent Unicode - 6078 chars)
+    FB_FONT_COZETTE = 40,
+    FB_FONT_COZETTE_HIDPI = 41,
 };
 
 static const fb_font_source_t fb_fonts[] = {
@@ -254,11 +321,57 @@ static const fb_font_source_t fb_fonts[] = {
                          _binary_third_party_fonts_gohufont_gohufont_uni_11_psf_end, 0},
     [FB_FONT_GOHU_11B] = {"gohufont-6x11-bold", _binary_third_party_fonts_gohufont_gohufont_uni_11b_psf_start,
                           _binary_third_party_fonts_gohufont_gohufont_uni_11b_psf_end, 0},
-    // Unifont (extended Unicode coverage)
-    [FB_FONT_UNI3_TERM_BOLD_32] = {"unifont-term-16x32", _binary_third_party_fonts_unifont_Uni3_TerminusBold32x16_psf_start,
-                                   _binary_third_party_fonts_unifont_Uni3_TerminusBold32x16_psf_end, 0},
-    [FB_FONT_UNI2_VGA_32] = {"unifont-vga-16x32", _binary_third_party_fonts_unifont_Uni2_VGA32x16_psf_start,
+    // Unifont (extended Unicode coverage) - Uni1 VGA
+    [FB_FONT_UNI1_VGA_28] = {"uni1-vga-16x28", _binary_third_party_fonts_unifont_Uni1_VGA28x16_psf_start,
+                             _binary_third_party_fonts_unifont_Uni1_VGA28x16_psf_end, 0},
+    [FB_FONT_UNI1_VGA_32] = {"uni1-vga-16x32", _binary_third_party_fonts_unifont_Uni1_VGA32x16_psf_start,
+                             _binary_third_party_fonts_unifont_Uni1_VGA32x16_psf_end, 0},
+    // Unifont - Uni2 Terminus (various sizes)
+    [FB_FONT_UNI2_TERM_20] = {"uni2-term-10x20", _binary_third_party_fonts_unifont_Uni2_Terminus20x10_psf_start,
+                              _binary_third_party_fonts_unifont_Uni2_Terminus20x10_psf_end, 0},
+    [FB_FONT_UNI2_TERM_24] = {"uni2-term-12x24", _binary_third_party_fonts_unifont_Uni2_Terminus24x12_psf_start,
+                              _binary_third_party_fonts_unifont_Uni2_Terminus24x12_psf_end, 0},
+    [FB_FONT_UNI2_TERM_28] = {"uni2-term-14x28", _binary_third_party_fonts_unifont_Uni2_Terminus28x14_psf_start,
+                              _binary_third_party_fonts_unifont_Uni2_Terminus28x14_psf_end, 0},
+    [FB_FONT_UNI2_TERM_32] = {"uni2-term-16x32", _binary_third_party_fonts_unifont_Uni2_Terminus32x16_psf_start,
+                              _binary_third_party_fonts_unifont_Uni2_Terminus32x16_psf_end, 0},
+    // Unifont - Uni2 Terminus Bold
+    [FB_FONT_UNI2_TERM_BOLD_20] = {"uni2-term-bold-10x20", _binary_third_party_fonts_unifont_Uni2_TerminusBold20x10_psf_start,
+                                   _binary_third_party_fonts_unifont_Uni2_TerminusBold20x10_psf_end, 0},
+    [FB_FONT_UNI2_TERM_BOLD_24] = {"uni2-term-bold-12x24", _binary_third_party_fonts_unifont_Uni2_TerminusBold24x12_psf_start,
+                                   _binary_third_party_fonts_unifont_Uni2_TerminusBold24x12_psf_end, 0},
+    [FB_FONT_UNI2_TERM_BOLD_28] = {"uni2-term-bold-14x28", _binary_third_party_fonts_unifont_Uni2_TerminusBold28x14_psf_start,
+                                   _binary_third_party_fonts_unifont_Uni2_TerminusBold28x14_psf_end, 0},
+    [FB_FONT_UNI2_TERM_BOLD_32] = {"uni2-term-bold-16x32", _binary_third_party_fonts_unifont_Uni2_TerminusBold32x16_psf_start,
+                                   _binary_third_party_fonts_unifont_Uni2_TerminusBold32x16_psf_end, 0},
+    // Unifont - Uni2 VGA
+    [FB_FONT_UNI2_VGA_28] = {"uni2-vga-16x28", _binary_third_party_fonts_unifont_Uni2_VGA28x16_psf_start,
+                             _binary_third_party_fonts_unifont_Uni2_VGA28x16_psf_end, 0},
+    [FB_FONT_UNI2_VGA_32] = {"uni2-vga-16x32", _binary_third_party_fonts_unifont_Uni2_VGA32x16_psf_start,
                              _binary_third_party_fonts_unifont_Uni2_VGA32x16_psf_end, 0},
+    // Unifont - Uni3 Terminus
+    [FB_FONT_UNI3_TERM_20] = {"uni3-term-10x20", _binary_third_party_fonts_unifont_Uni3_Terminus20x10_psf_start,
+                              _binary_third_party_fonts_unifont_Uni3_Terminus20x10_psf_end, 0},
+    [FB_FONT_UNI3_TERM_24] = {"uni3-term-12x24", _binary_third_party_fonts_unifont_Uni3_Terminus24x12_psf_start,
+                              _binary_third_party_fonts_unifont_Uni3_Terminus24x12_psf_end, 0},
+    [FB_FONT_UNI3_TERM_28] = {"uni3-term-14x28", _binary_third_party_fonts_unifont_Uni3_Terminus28x14_psf_start,
+                              _binary_third_party_fonts_unifont_Uni3_Terminus28x14_psf_end, 0},
+    [FB_FONT_UNI3_TERM_32] = {"uni3-term-16x32", _binary_third_party_fonts_unifont_Uni3_Terminus32x16_psf_start,
+                              _binary_third_party_fonts_unifont_Uni3_Terminus32x16_psf_end, 0},
+    // Unifont - Uni3 Terminus Bold
+    [FB_FONT_UNI3_TERM_BOLD_20] = {"uni3-term-bold-10x20", _binary_third_party_fonts_unifont_Uni3_TerminusBold20x10_psf_start,
+                                   _binary_third_party_fonts_unifont_Uni3_TerminusBold20x10_psf_end, 0},
+    [FB_FONT_UNI3_TERM_BOLD_24] = {"uni3-term-bold-12x24", _binary_third_party_fonts_unifont_Uni3_TerminusBold24x12_psf_start,
+                                   _binary_third_party_fonts_unifont_Uni3_TerminusBold24x12_psf_end, 0},
+    [FB_FONT_UNI3_TERM_BOLD_28] = {"uni3-term-bold-14x28", _binary_third_party_fonts_unifont_Uni3_TerminusBold28x14_psf_start,
+                                   _binary_third_party_fonts_unifont_Uni3_TerminusBold28x14_psf_end, 0},
+    [FB_FONT_UNI3_TERM_BOLD_32] = {"uni3-term-bold-16x32", _binary_third_party_fonts_unifont_Uni3_TerminusBold32x16_psf_start,
+                                   _binary_third_party_fonts_unifont_Uni3_TerminusBold32x16_psf_end, 0},
+    // Cozette (excellent Unicode coverage - 6078 characters with symbols, box drawing, etc.)
+    [FB_FONT_COZETTE] = {"cozette-13x13", _binary_third_party_fonts_cozette_cozette_psf_start,
+                         _binary_third_party_fonts_cozette_cozette_psf_end, 0},
+    [FB_FONT_COZETTE_HIDPI] = {"cozette-hidpi-26x26", _binary_third_party_fonts_cozette_cozette_hidpi_psf_start,
+                               _binary_third_party_fonts_cozette_cozette_hidpi_psf_end, 0},
 };
 
 static int fb_font_count_value(void) {

@@ -62,8 +62,28 @@ EXTRA_FONT_PSF = \
 	$(FONTS_DIR)/terminus-powerline/ter-powerline-v32b.psf \
 	$(FONTS_DIR)/gohufont/gohufont-uni-11.psf \
 	$(FONTS_DIR)/gohufont/gohufont-uni-11b.psf \
+	$(FONTS_DIR)/unifont/Uni1-VGA28x16.psf \
+	$(FONTS_DIR)/unifont/Uni1-VGA32x16.psf \
+	$(FONTS_DIR)/unifont/Uni2-Terminus20x10.psf \
+	$(FONTS_DIR)/unifont/Uni2-Terminus24x12.psf \
+	$(FONTS_DIR)/unifont/Uni2-Terminus28x14.psf \
+	$(FONTS_DIR)/unifont/Uni2-Terminus32x16.psf \
+	$(FONTS_DIR)/unifont/Uni2-TerminusBold20x10.psf \
+	$(FONTS_DIR)/unifont/Uni2-TerminusBold24x12.psf \
+	$(FONTS_DIR)/unifont/Uni2-TerminusBold28x14.psf \
+	$(FONTS_DIR)/unifont/Uni2-TerminusBold32x16.psf \
+	$(FONTS_DIR)/unifont/Uni2-VGA28x16.psf \
+	$(FONTS_DIR)/unifont/Uni2-VGA32x16.psf \
+	$(FONTS_DIR)/unifont/Uni3-Terminus20x10.psf \
+	$(FONTS_DIR)/unifont/Uni3-Terminus24x12.psf \
+	$(FONTS_DIR)/unifont/Uni3-Terminus28x14.psf \
+	$(FONTS_DIR)/unifont/Uni3-Terminus32x16.psf \
+	$(FONTS_DIR)/unifont/Uni3-TerminusBold20x10.psf \
+	$(FONTS_DIR)/unifont/Uni3-TerminusBold24x12.psf \
+	$(FONTS_DIR)/unifont/Uni3-TerminusBold28x14.psf \
 	$(FONTS_DIR)/unifont/Uni3-TerminusBold32x16.psf \
-	$(FONTS_DIR)/unifont/Uni2-VGA32x16.psf
+	$(FONTS_DIR)/cozette/cozette.psf \
+	$(FONTS_DIR)/cozette/cozette_hidpi.psf
 
 EXTRA_FONT_OBJS = $(patsubst $(FONTS_DIR)/%.psf,$(FONTS_BUILD_DIR)/%.o,$(EXTRA_FONT_PSF))
 
@@ -666,6 +686,7 @@ $(ISO): $(KERNEL) $(USER_BINS) $(FAT_IMG) $(INITRAMFS_FILES) $(INITRAMFS_DIRS)
 	cp $(USER_TCC) $(INITRAMFS_ROOT)/bin/tcc
 	cp $(USER_GBEMU) $(INITRAMFS_ROOT)/bin/gbemu
 	cp $(USER_NESEMU) $(INITRAMFS_ROOT)/bin/nesemu
+	cp $(USER_DASH) $(INITRAMFS_ROOT)/bin/dash
 	for b in $(SBASE_TOOLS); do cp $(SBASE_BIN_DIR)/$$b.elf $(INITRAMFS_ROOT)/bin/$$b; done
 	cp $(USER_LS) $(INITRAMFS_ROOT)/bin/ls
 	tar -C $(INITRAMFS_ROOT) -cf $(INITRAMFS_TAR) .

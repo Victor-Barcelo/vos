@@ -22,6 +22,7 @@
 #include <termios.h>
 #include <time.h>
 #include <unistd.h>
+#include <sys/times.h>
 
 // poll.h is not in newlib, define here
 #ifndef POLLIN
@@ -2570,6 +2571,11 @@ pid_t fork(void) {
     return (pid_t)rc;
 }
 
+// vfork is just fork on VOS (no separate address space optimization)
+pid_t vfork(void) {
+    return fork();
+}
+
 int execve(const char* path, char* const argv[], char* const envp[]) {
     (void)envp;
     if (!path) {
@@ -2709,6 +2715,31 @@ int setgid(gid_t gid) {
         return -1;
     }
     return 0;
+}
+
+// getgroups - stub returning 0 (no supplementary groups)
+int getgroups(int size, gid_t list[]) {
+    (void)size;
+    (void)list;
+    return 0;  // No supplementary groups
+}
+
+// setgroups - stub
+int setgroups(size_t size, const gid_t *list) {
+    (void)size;
+    (void)list;
+    return 0;
+}
+
+// times - stub (process times not tracked)
+clock_t times(struct tms *buf) {
+    if (buf) {
+        buf->tms_utime = 0;
+        buf->tms_stime = 0;
+        buf->tms_cutime = 0;
+        buf->tms_cstime = 0;
+    }
+    return (clock_t)vos_sys_uptime_ms();
 }
 
 mode_t umask(mode_t mask) {
@@ -3014,36 +3045,4 @@ pid_t wait3(int *status, int options, void *rusage) {
 pid_t wait4(pid_t pid, int *status, int options, void *rusage) {
     (void)rusage;  // VOS doesn't track resource usage
     return waitpid(pid, status, options);
-}
-
-// vfork - just use fork (VOS doesn't have true vfork semantics)
-pid_t vfork(void) {
-    return fork();
-}
-
-// getgroups - VOS doesn't have supplementary groups
-int getgroups(int size, gid_t list[]) {
-    (void)size;
-    (void)list;
-    return 0;  // No supplementary groups
-}
-
-// times - process times (stub)
-#include <sys/times.h>
-clock_t times(struct tms *buf) {
-    if (buf) {
-        buf->tms_utime = 0;
-        buf->tms_stime = 0;
-        buf->tms_cutime = 0;
-        buf->tms_cstime = 0;
-    }
-    return (clock_t)-1;  // Return -1 to indicate not implemented
-}
-
-// ulimitcmd - dash builtin stub (ulimit not supported in VOS)
-int ulimitcmd(int argc, char **argv) {
-    (void)argc;
-    (void)argv;
-    // Return error - ulimit not supported
-    return 1;
 }

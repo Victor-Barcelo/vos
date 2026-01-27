@@ -85,11 +85,19 @@ Files in `initramfs/` are automatically included. Directory structure:
 initramfs/
 ├── bin/          # Binaries (added by Makefile, don't put here)
 ├── etc/          # Config files (passwd, profile, group)
-├── res/          # Resources (images, sounds, fonts)
+├── res/          # Resources (images, sounds, fonts, app data)
 └── sysroot/      # TCC development files (headers, libs)
 ```
 
 To add a static file, just put it in the appropriate `initramfs/` subdirectory.
+
+**CRITICAL: Do NOT create these directories at initramfs root level:**
+- `/usr/` - Aliased to disk, will break Live Mode if exists in initramfs
+- `/home/` - Aliased to disk
+- `/var/` - Aliased to disk
+- `/root/` - Aliased to disk
+
+**Why?** VOS aliases paths like `/usr` to `/disk/usr`. If `/usr` exists in initramfs, it will be visible in Live Mode (no disk) causing conflicts. Put application resources in `/res/appname/` instead, and copy to `/disk/usr/` in `init.c` during first-boot setup.
 
 ### Adding Files to Persistent Disk
 

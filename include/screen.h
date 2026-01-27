@@ -77,6 +77,7 @@ void screen_fill_row_full(int y, char c, uint8_t color);  // Fills entire pixel 
 
 // Batch mode for flicker-free updates (write all cells, then render once).
 void screen_write_char_at_batch(int x, int y, char c, uint8_t color);
+void screen_write_emoji_at_batch(int x, int y, uint32_t codepoint, uint8_t color);  // Returns 2 (emoji width)
 void screen_render_row(int y);
 void screen_render_row_noclear(int y);  // For status bar - no clear first
 

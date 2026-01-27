@@ -349,6 +349,28 @@ static void initialize_disk(void) {
         copy_tree("/res/roms", "/disk/usr/game/roms");
     }
 
+    // Copy resource directories to /disk so they're available after pivot_root
+    // (pivot_root makes /disk become /, so /disk/res becomes /res)
+    if (stat("/res", &st) == 0) {
+        tag("[setup] ", CLR_CYAN);
+        printf("Installing application resources...\n");
+        mkdir("/disk/res", 0755);
+        // Copy klystrack theme bundle
+        if (stat("/res/Default", &st) == 0) {
+            copy_file("/res/Default", "/disk/res/Default");
+        }
+        // Copy music files for modplay/midiplay
+        if (stat("/res/music", &st) == 0) {
+            mkdir("/disk/res/music", 0755);
+            copy_tree("/res/music", "/disk/res/music");
+        }
+    }
+    // Copy klystrack keyboard layouts
+    if (stat("/key", &st) == 0) {
+        mkdir("/disk/key", 0755);
+        copy_tree("/key", "/disk/key");
+    }
+
     // Create users
     create_default_users();
 

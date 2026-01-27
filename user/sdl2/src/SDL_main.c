@@ -244,6 +244,26 @@ int SDL_setenv(const char *name, const char *value, int overwrite) {
     return 0;
 }
 
+/* Filesystem functions */
+static char base_path[] = "/bin/";
+
+char *SDL_GetBasePath(void) {
+    /* Return path to directory containing the executable.
+     * In VOS, binaries are typically in /bin/.
+     * Note: SDL spec says caller should NOT free this, but some apps do.
+     * We return a static buffer to be safe. */
+    return base_path;
+}
+
+char *SDL_GetPrefPath(const char *org, const char *app) {
+    /* Return path for application preferences/save data.
+     * In VOS, we use the home directory. */
+    (void)org;
+    (void)app;
+    /* Return NULL - app should use its own config path */
+    return NULL;
+}
+
 /* Window icon stub - VOS doesn't support window icons */
 void SDL_SetWindowIcon(SDL_Window *window, SDL_Surface *icon) {
     (void)window;

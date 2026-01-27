@@ -5,6 +5,16 @@
 #include "system.h"
 #include "pmm.h"
 #include "task.h"
+#include "minixfs.h"
+
+// Emoji codepoints for statusbar icons
+#define EMOJI_STAR      0x2B50   // ⭐ - time
+#define EMOJI_FIRE      0x1F525  // 🔥 - memory
+#define EMOJI_HEART     0x2764   // ❤️ - disk
+#define EMOJI_SUN       0x2600   // ☀️ - CPU
+#define EMOJI_CHECK     0x2705   // ✅ - tasks
+#define EMOJI_LIGHTNING 0x26A1   // ⚡ - uptime
+#define EMOJI_RAINBOW   0x1F308  // 🌈 - console
 
 static uint32_t last_drawn_tick = 0xFFFFFFFFu;
 static uint32_t prev_ctx_switches = 0;
@@ -110,6 +120,14 @@ static void update_cpu_activity(void) {
     }
 }
 
+static uint8_t color_disk(void) {
+    return (uint8_t)(VGA_LIGHT_BLUE | (VGA_BLACK << 4));
+}
+
+static void put_emoji(int x, int y, uint32_t codepoint, uint8_t color) {
+    screen_write_emoji_at_batch(x, y, codepoint, color);
+}
+
 static void draw_statusbar(void) {
     int cols = screen_cols();
     int row = screen_rows() - 1;
@@ -120,11 +138,14 @@ static void draw_statusbar(void) {
     uint8_t sep = color_sep();
     uint8_t fill = color_bar_fill();
     uint8_t empty = color_bar_empty();
+    uint8_t disk_color = color_disk();
 
     int x = 0;
 
-    // First character (left margin)
+    // Left margin with star emoji for time
     put_char(x++, row, ' ', bg);
+    put_emoji(x, row, EMOJI_STAR, bg);
+    x += 2;  // Emoji is 2 cells wide
 
     // Time: HH:MM
     rtc_datetime_t dt;
@@ -138,7 +159,9 @@ static void draw_statusbar(void) {
     put_char(x++, row, '|', sep);
     put_char(x++, row, ' ', bg);
 
-    // Uptime
+    // Uptime with lightning emoji
+    put_emoji(x, row, EMOJI_LIGHTNING, bg);
+    x += 2;
     uint32_t up_sec = timer_uptime_ms() / 1000u;
     uint32_t up_min = up_sec / 60u;
     uint32_t up_hr = up_min / 60u;
@@ -153,7 +176,9 @@ static void draw_statusbar(void) {
     put_char(x++, row, '|', sep);
     put_char(x++, row, ' ', bg);
 
-    // Memory bar
+    // Memory bar with fire emoji
+    put_emoji(x, row, EMOJI_FIRE, bg);
+    x += 2;
     uint32_t total_frames = pmm_total_frames();
     uint32_t free_frames = pmm_free_frames();
     uint32_t used_frames = total_frames - free_frames;
@@ -174,12 +199,47 @@ static void draw_statusbar(void) {
     x = put_num(x, row, mem_used_mb, bg);
     put_char(x++, row, '/', bg);
     x = put_num(x, row, mem_total_mb, bg);
+    x = put_str(x, row, "M", bg);
 
     put_char(x++, row, ' ', bg);
     put_char(x++, row, '|', sep);
     put_char(x++, row, ' ', bg);
 
-    // CPU activity bar
+    // Disk usage with heart emoji
+    put_emoji(x, row, EMOJI_HEART, bg);
+    x += 2;
+    uint32_t disk_total = 0, disk_free = 0, disk_inodes = 0, disk_inodes_free = 0;
+    if (minixfs_statfs(&disk_total, &disk_free, &disk_inodes, &disk_inodes_free) && disk_total > 0) {
+        uint32_t disk_used = disk_total - disk_free;
+        // Convert to MB (1024 bytes per block)
+        uint32_t disk_total_mb = disk_total / 1024;
+        uint32_t disk_used_mb = disk_used / 1024;
+        uint32_t disk_pct = (disk_used * 100) / disk_total;
+
+        x = put_str(x, row, "DSK", disk_color);
+        put_char(x++, row, '[', sep);
+
+        int disk_filled = (int)((disk_pct * (uint32_t)bar_w) / 100u);
+        if (disk_filled > bar_w) disk_filled = bar_w;
+        draw_bar(x, row, bar_w, disk_filled, fill, empty);
+        x += bar_w;
+
+        put_char(x++, row, ']', sep);
+        x = put_num(x, row, disk_used_mb, bg);
+        put_char(x++, row, '/', bg);
+        x = put_num(x, row, disk_total_mb, bg);
+        x = put_str(x, row, "M", bg);
+    } else {
+        x = put_str(x, row, "DSK[--]", sep);
+    }
+
+    put_char(x++, row, ' ', bg);
+    put_char(x++, row, '|', sep);
+    put_char(x++, row, ' ', bg);
+
+    // CPU activity bar with sun emoji
+    put_emoji(x, row, EMOJI_SUN, bg);
+    x += 2;
     update_cpu_activity();
     x = put_str(x, row, "CPU", accent);
     put_char(x++, row, '[', sep);
@@ -201,7 +261,9 @@ static void draw_statusbar(void) {
     put_char(x++, row, '|', sep);
     put_char(x++, row, ' ', bg);
 
-    // Task count
+    // Task count with check emoji
+    put_emoji(x, row, EMOJI_CHECK, bg);
+    x += 2;
     uint32_t run = 0, sleep = 0, wait = 0, zomb = 0;
     tasking_get_state_counts(&run, &sleep, &wait, &zomb);
     uint32_t total_tasks = run + sleep + wait + zomb;
@@ -215,7 +277,9 @@ static void draw_statusbar(void) {
     put_char(x++, row, '|', sep);
     put_char(x++, row, ' ', bg);
 
-    // Virtual console indicator
+    // Virtual console indicator with rainbow emoji
+    put_emoji(x, row, EMOJI_RAINBOW, bg);
+    x += 2;
     x = put_str(x, row, "VC", accent);
     int vc = screen_console_active() + 1;  // 1-based for display
     x = put_num(x, row, (uint32_t)vc, bg);

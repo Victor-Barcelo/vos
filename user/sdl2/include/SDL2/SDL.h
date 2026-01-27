@@ -147,6 +147,21 @@ char *SDL_getenv(const char *name);
 int SDL_setenv(const char *name, const char *value, int overwrite);
 
 /*
+ * SDL_GetBasePath() - Get the directory where the application was run from
+ *
+ * Returns a static string "/bin/" for VOS (binaries are in /bin).
+ * Note: Unlike standard SDL2, caller should NOT free this.
+ */
+char *SDL_GetBasePath(void);
+
+/*
+ * SDL_GetPrefPath() - Get the user's preference directory
+ *
+ * VOS stub - returns NULL. Apps should manage their own config paths.
+ */
+char *SDL_GetPrefPath(const char *org, const char *app);
+
+/*
  * SDL_SetWindowIcon() - Set window icon
  *
  * VOS stub - window icons are not supported.

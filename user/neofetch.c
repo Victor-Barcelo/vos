@@ -49,7 +49,8 @@ static void print_2d(unsigned int v) {
 }
 
 static void print_key(const char* k) {
-    printf(CLR_KEY "%s" CLR_RESET, k);
+    // Pad to 7 chars (length of "Display") for alignment
+    printf(CLR_KEY "%-7s" CLR_RESET, k);
 }
 
 static void trim_left(char** s) {

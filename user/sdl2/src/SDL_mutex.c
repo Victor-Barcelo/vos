@@ -143,6 +143,11 @@ void SDL_WaitThread(SDL_Thread *thread, int *status) {
     }
 }
 
+void SDL_DetachThread(SDL_Thread *thread) {
+    /* VOS has no threads - no-op */
+    (void)thread;
+}
+
 Uint32 SDL_GetThreadID(SDL_Thread *thread) {
     (void)thread;
     return 0;

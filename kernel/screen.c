@@ -3415,9 +3415,36 @@ void screen_write_char_at_batch(int x, int y, char c, uint8_t color) {
         uint8_t fg = xterm_from_vga_index((uint8_t)(color & 0x0Fu));
         uint8_t bg = xterm_from_vga_index((uint8_t)((color >> 4) & 0x0Fu));
         fb_cells[cell_idx] = fb_cell_make((uint8_t)c, fg, bg);
+        fb_emoji_codepoints[cell_idx] = 0;  // Clear any emoji
         // No render - caller will call screen_render_row
     } else {
         VGA_BUFFER[screen_phys_y(y) * VGA_WIDTH + screen_phys_x(x)] = vga_entry(c, color);
+    }
+}
+
+// Batch mode: write emoji (2 cells wide) without immediate render
+void screen_write_emoji_at_batch(int x, int y, uint32_t codepoint, uint8_t color) {
+    if (x < 0 || x + 1 >= screen_cols_value || y < 0 || y >= screen_rows_value) {
+        return;
+    }
+    if (backend == SCREEN_BACKEND_FRAMEBUFFER) {
+        int cell_idx = y * screen_cols_value + x;
+        int cell_idx2 = cell_idx + 1;
+        if (cell_idx < 0 || cell_idx2 >= (int)(FB_MAX_COLS * FB_MAX_ROWS)) {
+            return;
+        }
+        uint8_t fg = xterm_from_vga_index((uint8_t)(color & 0x0Fu));
+        uint8_t bg = xterm_from_vga_index((uint8_t)((color >> 4) & 0x0Fu));
+        // First cell holds the emoji codepoint
+        fb_cells[cell_idx] = fb_cell_make((uint8_t)' ', fg, bg);
+        fb_emoji_codepoints[cell_idx] = codepoint;
+        // Second cell is continuation marker
+        fb_cells[cell_idx2] = fb_cell_make((uint8_t)' ', fg, bg);
+        fb_emoji_codepoints[cell_idx2] = EMOJI_CONTINUATION_MARKER;
+    } else {
+        // VGA text mode: just show placeholder
+        VGA_BUFFER[screen_phys_y(y) * VGA_WIDTH + screen_phys_x(x)] = vga_entry('*', color);
+        VGA_BUFFER[screen_phys_y(y) * VGA_WIDTH + screen_phys_x(x + 1)] = vga_entry(' ', color);
     }
 }
 

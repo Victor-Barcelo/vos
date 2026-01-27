@@ -43,6 +43,7 @@ typedef int (*SDL_ThreadFunction)(void *data);
 
 SDL_Thread* SDL_CreateThread(SDL_ThreadFunction fn, const char *name, void *data);
 void SDL_WaitThread(SDL_Thread *thread, int *status);
+void SDL_DetachThread(SDL_Thread *thread);
 Uint32 SDL_GetThreadID(SDL_Thread *thread);
 Uint32 SDL_ThreadID(void);
 

@@ -602,8 +602,8 @@ static void draw_help(void) {
     y++;
 
     draw_str(3, y++, C_LABEL, "[DISKS & FILESYSTEMS]");
-    draw_str(3, y++, C_DIM, "VOS mounts: / (initramfs), /disk (Minix persistent), /ram (tmpfs).");
-    draw_str(3, y++, C_DIM, "The /disk filesystem persists data across reboots.");
+    draw_str(3, y++, C_DIM, "VOS mounts: / (Minix persistent), /initramfs (boot files), /ram (tmpfs).");
+    draw_str(3, y++, C_DIM, "The root filesystem (/) persists data across reboots.");
     y++;
 
     draw_str(3, y++, C_LABEL, "[KEYBOARD SHORTCUTS]");

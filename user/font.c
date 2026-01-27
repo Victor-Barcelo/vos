@@ -88,10 +88,10 @@ static void draw_ui(const vos_font_info_t* infos, int count, int sel, int cur, i
     // Help line
     tb_print_str(2, 2, TB_CYAN, TB_DEFAULT, "Up/Down");
     tb_print_str(10, 2, TB_WHITE, TB_DEFAULT, ": Navigate  ");
-    tb_print_str(22, 2, TB_CYAN, TB_DEFAULT, "Enter");
-    tb_print_str(28, 2, TB_WHITE, TB_DEFAULT, ": Apply  ");
-    tb_print_str(38, 2, TB_CYAN, TB_DEFAULT, "q");
-    tb_print_str(40, 2, TB_WHITE, TB_DEFAULT, ": Quit");
+    tb_print_str(22, 2, TB_CYAN, TB_DEFAULT, "Space/a");
+    tb_print_str(30, 2, TB_WHITE, TB_DEFAULT, ": Apply  ");
+    tb_print_str(40, 2, TB_CYAN, TB_DEFAULT, "q");
+    tb_print_str(42, 2, TB_WHITE, TB_DEFAULT, ": Quit");
 
     // Table header
     int y = 4;
@@ -258,8 +258,9 @@ static int interactive_menu(vos_font_info_t* infos, int count) {
                 scroll_offset = count - list_max;
                 if (scroll_offset < 0) scroll_offset = 0;
             } else if (ev.key == TB_KEY_ENTER || ev.key == TB_KEY_CTRL_M ||
-                       ev.ch == '\r' || ev.ch == '\n' || ev.ch == 0x0d) {
-                // Apply selected font
+                       ev.ch == '\r' || ev.ch == '\n' || ev.ch == 0x0d ||
+                       ev.ch == ' ' || ev.ch == 'a' || ev.ch == 'A') {
+                // Apply selected font (Enter, Space, or 'a')
                 tb_shutdown();
 
                 int set_rc = sys_font_set((uint32_t)sel);

@@ -14,7 +14,7 @@
 #include "../third_party/pocketmod/pocketmod.h"
 
 #define SAMPLE_RATE 44100
-#define BUFFER_SAMPLES 2048
+#define BUFFER_SAMPLES 4096  // Match SB16 driver's half-buffer size (16KB = 4096 stereo frames)
 #define BUFFER_SIZE (BUFFER_SAMPLES * 2 * sizeof(int16_t))  // stereo 16-bit
 
 // Convert float samples to signed 16-bit

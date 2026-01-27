@@ -6,6 +6,9 @@
 #include "serial.h"
 #include "string.h"
 
+// Forward declaration for sleep
+extern void timer_sleep_ms(uint32_t ms);
+
 // Driver state
 static bool sb16_present = false;
 static uint16_t dsp_version = 0;
@@ -260,15 +263,18 @@ static void start_auto_init_playback(void) {
         if (current_format.channels == 2) {
             mode |= DSP_FORMAT_STEREO;
         }
-        // Count is per-half, in sample frames
-        sample_count = (AUDIO_HALF_SIZE / (current_format.channels * 2)) - 1;
+        // For auto-init mode, block size should NOT factor in stereo (QEMU quirk)
+        // See: https://github.com/qemu/qemu/blob/master/hw/audio/sb16.c
+        // "for DOOM and auto-init this value shouldn't take stereo into account"
+        sample_count = (AUDIO_HALF_SIZE / 2) - 1;
     } else {
         cmd = DSP_CMD_PLAY_8;
         mode = DSP_FORMAT_UNSIGNED;
         if (current_format.channels == 2) {
             mode |= DSP_FORMAT_STEREO;
         }
-        sample_count = (AUDIO_HALF_SIZE / current_format.channels) - 1;
+        // For 8-bit auto-init, also don't factor in stereo
+        sample_count = AUDIO_HALF_SIZE - 1;
     }
 
     // Use auto-init mode (DSP_MODE_AUTO) with FIFO
@@ -295,23 +301,38 @@ int sb16_write(const void* samples, uint32_t bytes) {
     // Find a ready half to fill
     int target_half = -1;
 
-    // Wait for a half to be ready
-    uint32_t timeout = 1000000;
-    while (timeout > 0) {
-        if (half_ready[0]) {
-            target_half = 0;
-            break;
+    // First check without sleeping (fast path)
+    if (half_ready[0]) {
+        target_half = 0;
+    } else if (half_ready[1]) {
+        target_half = 1;
+    }
+
+    // If no buffer ready, wait with minimal sleep
+    if (target_half < 0) {
+        for (int attempts = 0; attempts < 500; attempts++) {
+            // Brief pause to allow IRQ, then check
+            for (volatile int i = 0; i < 1000; i++) { }
+
+            if (half_ready[0]) {
+                target_half = 0;
+                break;
+            }
+            if (half_ready[1]) {
+                target_half = 1;
+                break;
+            }
+
+            // Only sleep every 10 iterations to reduce latency
+            if (attempts % 10 == 9) {
+                timer_sleep_ms(1);
+            }
         }
-        if (half_ready[1]) {
-            target_half = 1;
-            break;
-        }
-        __asm__ volatile("pause");
-        timeout--;
     }
 
     if (target_half < 0) {
         // Timeout waiting for buffer
+        serial_write_string("[SB16] write timeout - no buffer ready\n");
         return -1;
     }
 
@@ -390,17 +411,16 @@ bool sb16_is_playing(void) {
 }
 
 void sb16_wait(void) {
-    // Wait for both halves to be ready (nothing playing)
-    uint32_t timeout = 5000000;
-    while (auto_init_active && timeout > 0) {
-        if (half_ready[0] && half_ready[1]) {
-            break;
+    // Wait for at least one half to be ready (space available for more data)
+    for (int attempts = 0; attempts < 200; attempts++) {
+        if (half_ready[0] || half_ready[1]) {
+            return;
         }
-        __asm__ volatile("pause");
-        timeout--;
+        if (!auto_init_active) {
+            return;  // Not playing, no need to wait
+        }
+        timer_sleep_ms(5);
     }
-    if (timeout == 0) {
-        serial_write_string("[SB16] wait timeout - forcing stop\n");
-        sb16_stop();
-    }
+    serial_write_string("[SB16] wait timeout - forcing stop\n");
+    sb16_stop();
 }

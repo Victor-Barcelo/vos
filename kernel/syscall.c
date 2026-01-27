@@ -2130,8 +2130,9 @@ interrupt_frame_t* syscall_handle(interrupt_frame_t* frame) {
                 return frame;
             }
 
-            // Wait for playback to complete (blocking write)
-            sb16_wait();
+            // Note: sb16_write() already waits for buffer space internally.
+            // Don't call sb16_wait() here - that would drain the entire buffer
+            // and break continuous audio streaming.
 
             audio_lock_release();
             frame->eax = (uint32_t)written;

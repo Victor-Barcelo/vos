@@ -1,6 +1,6 @@
 /*
- * VOS libedit compatibility layer using linenoise
- * Implements minimal EditLine/History API for dash shell
+ * VOS libedit compatibility layer - simple implementation
+ * Uses basic stdio for input (no fancy line editing for now)
  */
 
 #include <stdio.h>
@@ -8,7 +8,6 @@
 #include <string.h>
 #include <stdarg.h>
 #include "myhistedit.h"
-#include "../../third_party/linenoise/linenoise.h"
 
 /* Maximum history entries */
 #define MAX_HISTORY 100
@@ -19,7 +18,7 @@ struct vos_history {
     char **entries;
     int count;
     int size;
-    int current;  /* Current position for iteration */
+    int current;
 };
 
 /* EditLine structure */
@@ -30,12 +29,8 @@ struct vos_editline {
     FILE *ferr;
     el_pfunc_t prompt_func;
     History *hist;
-    char *last_line;  /* Buffer for the last line read */
+    char *last_line;
 };
-
-/* Global prompt for linenoise callback */
-static el_pfunc_t g_prompt_func = NULL;
-static EditLine *g_el = NULL;
 
 /*
  * History implementation
@@ -86,25 +81,13 @@ int history(History *h, HistEvent *ev, int op, ...)
     switch (op) {
     case H_SETSIZE: {
         int newsize = va_arg(ap, int);
-        if (newsize > 0 && newsize != h->size) {
-            /* Resize not fully implemented - just cap count */
-            if (h->count > newsize) {
-                for (int i = newsize; i < h->count; i++) {
-                    free(h->entries[i]);
-                    h->entries[i] = NULL;
-                }
-                h->count = newsize;
-            }
-        }
+        (void)newsize;
         break;
     }
 
     case H_ENTER: {
         const char *str = va_arg(ap, const char *);
-        if (!str) break;
-
-        /* Add to linenoise history too */
-        linenoiseHistoryAdd(str);
+        if (!str || !str[0]) break;
 
         /* Add to our history */
         if (h->count >= h->size) {
@@ -122,99 +105,6 @@ int history(History *h, HistEvent *ev, int op, ...)
         break;
     }
 
-    case H_APPEND: {
-        const char *str = va_arg(ap, const char *);
-        if (!str || h->count == 0) break;
-
-        /* Append to last entry */
-        int last = h->count - 1;
-        size_t oldlen = strlen(h->entries[last]);
-        size_t newlen = strlen(str);
-        char *newstr = realloc(h->entries[last], oldlen + newlen + 1);
-        if (newstr) {
-            strcpy(newstr + oldlen, str);
-            h->entries[last] = newstr;
-            ev->num = last + 1;
-            ev->str = h->entries[last];
-        }
-        break;
-    }
-
-    case H_FIRST:
-        h->current = h->count - 1;
-        if (h->current >= 0) {
-            ev->num = h->current + 1;
-            ev->str = h->entries[h->current];
-            va_end(ap);
-            return 0;
-        }
-        va_end(ap);
-        return -1;
-
-    case H_NEXT:
-        if (h->current > 0) {
-            h->current--;
-            ev->num = h->current + 1;
-            ev->str = h->entries[h->current];
-            va_end(ap);
-            return 0;
-        }
-        va_end(ap);
-        return -1;
-
-    case H_PREV:
-        if (h->current < h->count - 1) {
-            h->current++;
-            ev->num = h->current + 1;
-            ev->str = h->entries[h->current];
-            va_end(ap);
-            return 0;
-        }
-        va_end(ap);
-        return -1;
-
-    case H_LAST:
-        h->current = 0;
-        if (h->count > 0) {
-            ev->num = 1;
-            ev->str = h->entries[0];
-            va_end(ap);
-            return 0;
-        }
-        va_end(ap);
-        return -1;
-
-    case H_NEXT_EVENT: {
-        int n = va_arg(ap, int);
-        if (n > 0 && n <= h->count) {
-            h->current = n - 1;
-            ev->num = n;
-            ev->str = h->entries[n - 1];
-            va_end(ap);
-            return 0;
-        }
-        va_end(ap);
-        return -1;
-    }
-
-    case H_PREV_STR: {
-        const char *str = va_arg(ap, const char *);
-        if (!str) break;
-
-        /* Search backwards for string */
-        for (int i = h->count - 1; i >= 0; i--) {
-            if (strstr(h->entries[i], str)) {
-                h->current = i;
-                ev->num = i + 1;
-                ev->str = h->entries[i];
-                va_end(ap);
-                return 0;
-            }
-        }
-        va_end(ap);
-        return -1;
-    }
-
     default:
         break;
     }
@@ -224,30 +114,21 @@ int history(History *h, HistEvent *ev, int op, ...)
 }
 
 /*
- * EditLine implementation
+ * EditLine implementation - simple version using fgets
  */
 
 EditLine *el_init(const char *prog, FILE *fin, FILE *fout, FILE *ferr)
 {
-    (void)fin;
-    (void)fout;
-    (void)ferr;
-
     EditLine *el = malloc(sizeof(EditLine));
     if (!el) return NULL;
 
     el->prog = prog;
-    el->fin = fin;
-    el->fout = fout;
-    el->ferr = ferr;
+    el->fin = fin ? fin : stdin;
+    el->fout = fout ? fout : stdout;
+    el->ferr = ferr ? ferr : stderr;
     el->prompt_func = NULL;
     el->hist = NULL;
     el->last_line = NULL;
-
-    g_el = el;
-
-    /* Set up linenoise */
-    linenoiseSetMultiLine(1);
 
     return el;
 }
@@ -259,17 +140,13 @@ void el_end(EditLine *el)
     if (el->last_line) {
         free(el->last_line);
     }
-
-    if (g_el == el) {
-        g_el = NULL;
-        g_prompt_func = NULL;
-    }
-
     free(el);
 }
 
 const char *el_gets(EditLine *el, int *count)
 {
+    static char buf[MAX_LINE_LEN];
+
     if (!el) {
         if (count) *count = 0;
         return NULL;
@@ -281,35 +158,30 @@ const char *el_gets(EditLine *el, int *count)
         el->last_line = NULL;
     }
 
-    /* Get prompt */
-    char *prompt = "";
+    /* Print prompt */
     if (el->prompt_func) {
-        prompt = el->prompt_func(el);
+        char *prompt = el->prompt_func(el);
+        if (prompt) {
+            fputs(prompt, el->fout);
+            fflush(el->fout);
+        }
     }
 
-    /* Read line using linenoise */
-    char *line = linenoise(prompt);
-    if (!line) {
+    /* Read line using fgets */
+    if (!fgets(buf, sizeof(buf), el->fin)) {
         if (count) *count = 0;
         return NULL;
     }
 
-    /* Add newline (dash expects it) */
-    size_t len = strlen(line);
-    el->last_line = malloc(len + 2);
+    /* Return the line (fgets already includes newline) */
+    size_t len = strlen(buf);
+    el->last_line = strdup(buf);
     if (!el->last_line) {
-        free(line);
         if (count) *count = 0;
         return NULL;
     }
 
-    memcpy(el->last_line, line, len);
-    el->last_line[len] = '\n';
-    el->last_line[len + 1] = '\0';
-
-    free(line);
-
-    if (count) *count = len + 1;
+    if (count) *count = (int)len;
     return el->last_line;
 }
 
@@ -327,18 +199,16 @@ int el_set(EditLine *el, int op, ...)
     case EL_PROMPT: {
         el_pfunc_t func = va_arg(ap, el_pfunc_t);
         el->prompt_func = func;
-        g_prompt_func = func;
         break;
     }
 
     case EL_EDITOR: {
         const char *mode = va_arg(ap, const char *);
-        (void)mode;  /* linenoise doesn't support vi/emacs mode switching */
+        (void)mode;
         break;
     }
 
     case EL_HIST: {
-        /* int (*func)(History *, HistEvent *, int, ...) */
         va_arg(ap, void *);  /* Skip function pointer */
         History *h = va_arg(ap, History *);
         el->hist = h;
@@ -347,7 +217,7 @@ int el_set(EditLine *el, int op, ...)
 
     case EL_TERMINAL: {
         const char *term = va_arg(ap, const char *);
-        (void)term;  /* linenoise handles terminal automatically */
+        (void)term;
         break;
     }
 
@@ -363,6 +233,5 @@ int el_source(EditLine *el, const char *file)
 {
     (void)el;
     (void)file;
-    /* No .editrc support in linenoise */
     return 0;
 }

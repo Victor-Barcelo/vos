@@ -75,6 +75,10 @@ void screen_write_string_at(int x, int y, const char* str, uint8_t color);
 void screen_fill_row(int y, char c, uint8_t color);
 void screen_fill_row_full(int y, char c, uint8_t color);  // Fills entire pixel row including margins
 
+// Batch mode for flicker-free updates (write all cells, then render once).
+void screen_write_char_at_batch(int x, int y, char c, uint8_t color);
+void screen_render_row(int y);
+
 // Enable/disable the VGA hardware cursor.
 void screen_cursor_set_enabled(bool enabled);
 

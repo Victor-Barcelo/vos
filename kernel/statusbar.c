@@ -40,7 +40,7 @@ static uint8_t color_cpu_med(void) {
 
 static void put_char(int x, int y, char c, uint8_t color) {
     if (x >= 0 && x < screen_cols()) {
-        screen_write_char_at(x, y, c, color);
+        screen_write_char_at_batch(x, y, c, color);
     }
 }
 
@@ -121,10 +121,10 @@ static void draw_statusbar(void) {
     uint8_t fill = color_bar_fill();
     uint8_t empty = color_bar_empty();
 
-    // Fill entire row with black background
-    screen_fill_row_full(row, ' ', bg);
+    int x = 0;
 
-    int x = 1;
+    // First character (left margin)
+    put_char(x++, row, ' ', bg);
 
     // Time: HH:MM
     rtc_datetime_t dt;
@@ -210,6 +210,14 @@ static void draw_statusbar(void) {
     put_char(x++, row, '/', bg);
     x = put_num(x, row, total_tasks, bg);
     x = put_str(x, row, "T", bg);
+
+    // Fill remaining columns with spaces (batch mode)
+    while (x < cols) {
+        put_char(x++, row, ' ', bg);
+    }
+
+    // Render the entire row once (flicker-free)
+    screen_render_row(row);
 }
 
 void statusbar_init(void) {

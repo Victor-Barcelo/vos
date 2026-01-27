@@ -3094,6 +3094,40 @@ void screen_write_char_at(int x, int y, char c, uint8_t color) {
     }
 }
 
+// Batch mode: write to cell buffer without immediate render (flicker-free)
+void screen_write_char_at_batch(int x, int y, char c, uint8_t color) {
+    if (x < 0 || x >= screen_cols_value || y < 0 || y >= screen_rows_value) {
+        return;
+    }
+    if (backend == SCREEN_BACKEND_FRAMEBUFFER) {
+        uint8_t fg = xterm_from_vga_index((uint8_t)(color & 0x0Fu));
+        uint8_t bg = xterm_from_vga_index((uint8_t)((color >> 4) & 0x0Fu));
+        fb_cells[y * screen_cols_value + x] = fb_cell_make((uint8_t)c, fg, bg);
+        // No render - caller will call screen_render_row
+    } else {
+        VGA_BUFFER[screen_phys_y(y) * VGA_WIDTH + screen_phys_x(x)] = vga_entry(c, color);
+    }
+}
+
+// Render entire row at once (for flicker-free batch updates)
+void screen_render_row(int y) {
+    if (y < 0 || y >= screen_rows_value) {
+        return;
+    }
+    if (backend == SCREEN_BACKEND_FRAMEBUFFER && fb_addr) {
+        for (int x = 0; x < screen_cols_value; x++) {
+            fb_render_cell_base(x, y);
+        }
+        // Re-apply overlays if on this row
+        if (!cursor_force_hidden && !cursor_vt_hidden && cursor_enabled && cursor_y == y) {
+            fb_draw_cursor_overlay(cursor_x, y);
+        }
+        if (mouse_cursor_enabled && mouse_cursor_y == y) {
+            fb_draw_mouse_cursor_overlay(mouse_cursor_x, y);
+        }
+    }
+}
+
 void screen_write_string_at(int x, int y, const char* str, uint8_t color) {
     if (!str || y < 0 || y >= screen_rows_value) {
         return;

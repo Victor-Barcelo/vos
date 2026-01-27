@@ -1,7 +1,7 @@
 # VOS - Victor's Operating System
 ## A Comprehensive Guide to Building a Minimal Operating System
 
-**Version:** 2.0 (Updated January 2025)
+**Version:** 3.0 (Updated January 2026)
 
 ---
 
@@ -13,6 +13,7 @@
    - What is an Operating System?
    - About VOS
    - Why Build an OS from Scratch?
+   - **VOS Filesystem Structure** (runtime directories explained)
 
 2. [Prerequisites and Tools](02_prerequisites.md)
    - Required Knowledge
@@ -69,6 +70,7 @@
     - Framebuffer Graphics
     - PSF2 Fonts
     - ANSI Escape Sequences
+    - Status Bar
 
 12. [Keyboard Driver](12_keyboard.md)
     - PS/2 Controller
@@ -98,6 +100,7 @@
     - Path Resolution
     - Mount Points
     - File Operations
+    - **Overlay Aliases** (NEW: /etc, /home, /root overlays)
 
 17. [RAM Filesystem](17_ramfs.md)
     - In-Memory Storage
@@ -109,6 +112,7 @@
     - Cluster Chains
     - Directory Entries
     - Long Filenames
+    - Persistent Storage
 
 ## Part V: Process Management
 
@@ -126,7 +130,7 @@
 
 21. [System Calls](21_syscalls.md)
     - The Syscall Interface
-    - Complete Syscall Reference (71 syscalls)
+    - Complete Syscall Reference (75+ syscalls)
     - Error Handling
 
 22. [Signals and IPC](22_signals.md)
@@ -143,21 +147,20 @@
 
 ## Part VI: POSIX Compliance
 
-24. [**POSIX Overview and VOS Compliance**](24_posix.md)
+24. [POSIX Overview and VOS Compliance](24_posix.md)
     - What is POSIX?
     - POSIX Standards History
     - VOS POSIX Implementation Status
     - Supported Functions
     - Missing Features
-    - Compliance Roadmap
 
 ## Part VII: User Space
 
 25. [Shell and Commands](25_shell.md)
     - Kernel Shell
-    - User Shell (sh)
+    - User Shell (dash)
     - Built-in Commands
-    - External Utilities
+    - External Utilities (95+ programs)
 
 26. [Newlib Integration](26_newlib.md)
     - C Library Support
@@ -192,7 +195,7 @@
     - File Organization
     - Code Statistics
 
-## Part IX: Appendices
+## Part IX: Advanced Features
 
 32. [Future Enhancements](32_future.md)
     - Planned Features
@@ -223,6 +226,46 @@
     - Using Emoji in Programs
     - Generating Emoji Data
 
+## Part X: Audio and Multimedia
+
+37. [**Sound Blaster 16 Audio**](37_sound_blaster.md) (NEW)
+    - SB16 Hardware Architecture
+    - DSP Programming and Commands
+    - DMA (Direct Memory Access) Transfers
+    - Audio Format Configuration
+    - IRQ Handling
+    - Mixer and Volume Control
+    - MOD and MIDI Players
+
+## Part XI: Customization
+
+38. [**Font System and Themes**](38_fonts.md) (NEW)
+    - PSF2 Font Format
+    - Multiple Built-in Fonts
+    - Runtime Font Switching
+    - Font Selection by Resolution
+    - Color Themes
+    - The `font` and `theme` Utilities
+    - Persistent Preferences
+
+39. [**User Management and Login**](39_users.md) (NEW)
+    - The passwd File Format
+    - VFS Overlay for /etc
+    - The login Program
+    - Privilege Separation (UID 0 vs regular)
+    - Password Authentication
+    - Home Directories
+    - Shell Profiles (/etc/profile)
+    - Security Considerations
+
+40. [**Virtual Consoles**](40_vconsoles.md) (NEW)
+    - Multiple Terminal Sessions
+    - Alt+1/2/3/4 Switching
+    - Per-Console State
+    - Process-to-Console Mapping
+    - Keyboard Input Routing
+    - Status Bar Integration
+
 ---
 
 ## About This Documentation
@@ -234,11 +277,52 @@ This book was generated from the VOS source code and provides a comprehensive gu
 - Implementation details
 - Practical exercises
 
-**Total Syscalls:** 71
-**Kernel Size:** ~20,000 lines of C
-**User Programs:** 40+ utilities
-**POSIX Compliance:** ~45%
+## VOS Statistics
+
+| Metric | Value |
+|--------|-------|
+| **Total Syscalls** | 75+ |
+| **Kernel Size** | ~25,000 lines of C |
+| **User Programs** | 95+ utilities |
+| **POSIX Compliance** | ~50% |
+| **Supported Fonts** | 5 built-in |
+| **Virtual Consoles** | 4 |
+| **Audio Support** | Sound Blaster 16 |
+
+## Key Features
+
+- **Multiboot-compliant** kernel bootable via GRUB
+- **Framebuffer graphics** with multiple font sizes
+- **FAT16 persistent storage** with overlay filesystem
+- **Multi-user authentication** with privilege separation
+- **95+ userland utilities** including editors, emulators, and tools
+- **Sound Blaster 16** audio driver with DMA
+- **MCP integration** for LLM-assisted development
+- **Emoji support** with alpha blending
+
+## Quick Start
+
+```bash
+# Build VOS
+make
+
+# Run in QEMU
+make run
+
+# Login as root (no password)
+root
+
+# Or login as victor (no password)
+victor
+
+# Try some commands
+neofetch
+ls /bin
+font
+top
+```
 
 ---
 
-*Last Updated: January 2025*
+*Last Updated: January 2026*
+*VOS Version: 3.0*

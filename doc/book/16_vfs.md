@@ -428,16 +428,125 @@ void vfs_init_stdio(void) {
 
 ```
 /                   (ramfs root)
-├── bin/            (initramfs binaries)
-├── tmp/            (ramfs temporary)
-├── disk/           (FAT16 partition)
-│   ├── home/
-│   ├── usr/
-│   └── etc/
-├── home -> /disk/home   (symlink alias)
-├── usr -> /disk/usr     (symlink alias)
-└── etc -> /disk/etc     (symlink alias)
+├── bin/            (initramfs binaries - read-only)
+├── etc/            (overlay: /disk/etc or initramfs)
+├── home/           (overlay: /disk/home)
+├── root/           (overlay: /disk/root)
+├── tmp/            (ramfs temporary - ephemeral)
+├── usr/            (overlay: /disk/usr)
+├── var/            (overlay: /disk/var)
+├── ram/            (ramfs mount point)
+└── disk/           (FAT16 persistent storage)
+    ├── etc/        (persistent config)
+    ├── home/       (user home directories)
+    ├── root/       (root's home)
+    ├── usr/        (toolchains, headers)
+    └── var/        (logs, state)
 ```
+
+## Path Overlay Aliases
+
+VOS implements an overlay-like alias system for Linux compatibility. Paths are automatically redirected to persistent storage when files exist there, falling back to initramfs defaults otherwise.
+
+### Alias Table
+
+| Path | Target | Behavior |
+|------|--------|----------|
+| `/etc/*` | `/disk/etc/*` | Overlay (fallback to initramfs) |
+| `/home/*` | `/disk/home/*` | Overlay |
+| `/root/*` | `/disk/root/*` | Overlay |
+| `/usr/*` | `/disk/usr/*` | Overlay |
+| `/var/*` | `/disk/var/*` | Overlay |
+| `/tmp/*` | `/ram/tmp/*` | Always (ephemeral) |
+
+### Overlay Implementation
+
+```c
+// Check if aliased path exists for overlay decision
+static bool vfs_path_exists_raw(const char* path) {
+    if (!path) return false;
+    bool is_dir;
+
+    // Check fatdisk for /disk/... paths
+    if (ci_starts_with(path, "/disk")) {
+        return fatdisk_stat_ex(path, &is_dir, NULL, NULL, NULL);
+    }
+
+    // Check ramfs for /ram/... paths
+    while (*path == '/') path++;
+    return ramfs_stat_ex(path, &is_dir, NULL, NULL, NULL);
+}
+
+static const char* abs_apply_posix_aliases(const char* abs, char tmp[]) {
+    // /tmp -> /ram/tmp (always ephemeral)
+    if (abs_alias_to(abs, "/tmp", "/ram/tmp", tmp)) {
+        return tmp;
+    }
+
+    // Overlay aliases: only apply if destination exists
+    if (abs_alias_to(abs, "/etc", "/disk/etc", tmp)) {
+        if (vfs_path_exists_raw(tmp)) return tmp;
+    }
+    if (abs_alias_to(abs, "/home", "/disk/home", tmp)) {
+        if (vfs_path_exists_raw(tmp)) return tmp;
+    }
+    if (abs_alias_to(abs, "/root", "/disk/root", tmp)) {
+        if (vfs_path_exists_raw(tmp)) return tmp;
+    }
+    if (abs_alias_to(abs, "/usr", "/disk/usr", tmp)) {
+        if (vfs_path_exists_raw(tmp)) return tmp;
+    }
+    if (abs_alias_to(abs, "/var", "/disk/var", tmp)) {
+        if (vfs_path_exists_raw(tmp)) return tmp;
+    }
+
+    // No alias or overlay fallback to original
+    return abs;
+}
+```
+
+### Overlay Behavior Examples
+
+**Reading /etc/passwd:**
+1. Alias computes `/disk/etc/passwd`
+2. Check if `/disk/etc/passwd` exists
+3. If yes: read from `/disk/etc/passwd` (persistent)
+4. If no: read from initramfs `/etc/passwd` (default)
+
+**First boot scenario:**
+```
+Step 1: User reads /etc/passwd
+        → /disk/etc/passwd doesn't exist
+        → Falls back to initramfs (defaults)
+
+Step 2: init copies initramfs to /disk/etc/passwd
+        → Creates persistent copy
+
+Step 3: User reads /etc/passwd again
+        → /disk/etc/passwd exists
+        → Reads from persistent storage
+```
+
+**User modifies /etc/passwd:**
+```
+Step 1: Open /etc/passwd for writing
+        → /disk/etc/passwd exists
+        → Opens /disk/etc/passwd (persistent)
+
+Step 2: Write changes
+        → Changes are persistent!
+```
+
+### Storage Tiers
+
+| Tier | Path | Persistence | Use Case |
+|------|------|-------------|----------|
+| Initramfs | `/bin/*`, etc. | Read-only | OS binaries |
+| RAMFS | `/ram/*`, `/tmp/*` | Lost on reboot | Temp files |
+| FAT16 | `/disk/*` | Persistent | User data |
+| Overlay | `/etc/*`, `/home/*` | Persistent* | Config, homes |
+
+*Overlay paths write to FAT16, read from FAT16 or initramfs
 
 ## Summary
 
@@ -448,8 +557,10 @@ The VFS provides:
 3. **File descriptors** for open file tracking
 4. **Directory tree** navigation
 5. **Pluggable filesystem** backends
+6. **Overlay aliases** for Linux-like path compatibility
+7. **Persistence** via FAT16 with initramfs fallback
 
-This abstraction allows VOS to support multiple filesystems transparently.
+This abstraction allows VOS to support multiple filesystems transparently while providing a familiar Linux directory structure.
 
 ---
 

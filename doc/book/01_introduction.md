@@ -131,6 +131,143 @@ VOS supports framebuffer graphics through syscalls, with libraries like olive.c 
 ### Development Environment
 With TCC integrated, you can write, compile, and run C programs entirely within VOS.
 
+## VOS Filesystem Structure
+
+When VOS boots, users see a Linux-like filesystem structure. Understanding this structure is essential for navigating and using VOS effectively.
+
+### Runtime Filesystem Overview
+
+```
+/                     (Root - ramfs)
+├── bin/              System binaries (95+ programs)
+├── etc/              System configuration (overlay)
+│   ├── passwd        User accounts
+│   └── profile       Shell startup script
+├── home/             User home directories (overlay)
+│   └── victor/       Victor's home
+├── root/             Root's home directory (overlay)
+├── tmp/              Temporary files (ephemeral)
+├── ram/              RAM filesystem mount point
+│   └── tmp/          Actual /tmp storage
+└── disk/             FAT16 persistent storage
+    ├── etc/          Persistent configuration
+    ├── home/         Persistent user data
+    │   └── victor/   Victor's files (survives reboot)
+    ├── root/         Root's persistent files
+    ├── usr/          Toolchains, headers, libraries
+    └── var/          Logs and state files
+```
+
+### Storage Tiers
+
+VOS uses three storage tiers:
+
+| Tier | Path(s) | Persistence | Use Case |
+|------|---------|-------------|----------|
+| **Initramfs** | `/bin/*` | Read-only | OS binaries, default configs |
+| **RAMFS** | `/ram/*`, `/tmp/*` | Lost on reboot | Temporary files |
+| **FAT16** | `/disk/*` | Survives reboot | User data, custom configs |
+
+### Overlay Aliases
+
+VOS implements a **path overlay system** similar to Linux overlayfs. When you access `/etc`, `/home`, or `/root`, VOS automatically checks if a persistent copy exists on `/disk`. If it does, you get the persistent version; otherwise, you get the default from initramfs.
+
+```
+User accesses:    VOS checks:              Result:
+─────────────────────────────────────────────────────────────
+/etc/passwd   →  /disk/etc/passwd exists?  →  Yes: /disk/etc/passwd
+                                               No: initramfs /etc/passwd
+
+/home/victor  →  /disk/home/victor exists? →  Yes: /disk/home/victor
+                                               No: (empty)
+
+/tmp/foo.txt  →  Always /ram/tmp/foo.txt   →  Ephemeral (always)
+```
+
+### Key Directories Explained
+
+#### `/bin` - System Binaries
+Contains 95+ programs from the initramfs archive. This includes:
+- **Core utilities**: `ls`, `cat`, `cp`, `mv`, `rm`, `mkdir`, `grep`, `find`
+- **Editors**: `vi`, `ved`, `ne`
+- **System tools**: `ps`, `top`, `uptime`, `date`, `neofetch`
+- **Development**: `tcc` (Tiny C Compiler)
+- **Entertainment**: `basic`, `zork`, `eliza`
+- **Audio**: `modplay`, `midi`
+
+All binaries are loaded from initramfs at boot and are read-only.
+
+#### `/etc` - Configuration (Overlay)
+System configuration files. On first boot, defaults come from initramfs:
+- `passwd` - User accounts (name:pass:uid:gid:home:shell)
+- `profile` - Shell initialization script
+
+After setup, `/disk/etc` is created and overlays the defaults, allowing persistent customization.
+
+#### `/home` and `/root` - Home Directories (Overlay)
+User home directories, persistent via FAT16:
+- `/home/victor` → `/disk/home/victor` (if exists)
+- `/root` → `/disk/root` (root's home)
+
+Files saved here survive reboots.
+
+#### `/tmp` - Temporary Files (Ephemeral)
+Always aliases to `/ram/tmp`. Contents are lost on reboot. Use for:
+- Temporary files during compilation
+- Scratch space for scripts
+- Files that don't need persistence
+
+#### `/disk` - Persistent Storage
+Direct access to the FAT16 partition. Anything written here survives reboots:
+- `/disk/etc/passwd` - Customized user list
+- `/disk/home/victor/` - Your files
+- `/disk/fontrc` - Font preferences
+- `/disk/usr/` - Toolchains and headers
+
+### First Boot Behavior
+
+On first boot, VOS init creates necessary directories:
+
+```c
+// From init.c
+mkdir("/disk/etc", 0755);
+mkdir("/disk/home", 0755);
+mkdir("/disk/root", 0700);
+mkdir("/disk/home/victor", 0755);
+
+// Copy default passwd if not present
+if (stat("/disk/etc/passwd", &st) < 0) {
+    // Copy from initramfs to persistent storage
+}
+```
+
+This ensures the overlay system works correctly after first boot.
+
+### Example Session
+
+```bash
+$ pwd
+/home/victor              # You're in your home directory
+
+$ echo "Hello" > test.txt
+$ ls
+test.txt                  # File created
+
+$ cat /disk/home/victor/test.txt
+Hello                     # Same file - overlay in action!
+
+$ echo "Temp" > /tmp/scratch.txt
+$ ls /ram/tmp/
+scratch.txt               # /tmp aliases to /ram/tmp
+
+# After reboot:
+$ ls /home/victor/
+test.txt                  # Persisted!
+
+$ ls /tmp/
+                         # Empty - /tmp is ephemeral
+```
+
 ## System Requirements
 
 ### For Running in QEMU

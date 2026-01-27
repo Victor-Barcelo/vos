@@ -245,3 +245,41 @@ Uint64 SDL_GetPerformanceCounter(void) {
 Uint64 SDL_GetPerformanceFrequency(void) {
     return 1000000;  /* Microseconds */
 }
+
+/* Environment variable functions */
+char *SDL_getenv(const char *name) {
+    /* VOS doesn't have environment variables, return NULL */
+    (void)name;
+    return NULL;
+}
+
+int SDL_setenv(const char *name, const char *value, int overwrite) {
+    /* VOS doesn't have environment variables, no-op */
+    (void)name;
+    (void)value;
+    (void)overwrite;
+    return 0;
+}
+
+/* Window icon stub - VOS doesn't support window icons */
+void SDL_SetWindowIcon(SDL_Window *window, SDL_Surface *icon) {
+    (void)window;
+    (void)icon;
+    /* No-op on VOS */
+}
+
+/* Message box stub - print to stderr on VOS */
+int SDL_ShowSimpleMessageBox(Uint32 flags, const char *title,
+                             const char *message, SDL_Window *window) {
+    (void)flags;
+    (void)window;
+    /* Print to stderr since we don't have GUI message boxes */
+    /* Note: In VOS environment this would use sys_write to stderr */
+    if (title) {
+        /* Could use sys_write here but keeping it simple */
+    }
+    if (message) {
+        /* Could use sys_write here but keeping it simple */
+    }
+    return 0;
+}

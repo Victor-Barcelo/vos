@@ -1115,7 +1115,7 @@ uint32_t tasking_getpgrp(void) {
 }
 
 int tasking_current_console(void) {
-    if (!current_task) return 0;
+    if (!current_task) return -1;  // No task = kernel context, accept input
     return (int)current_task->console;
 }
 

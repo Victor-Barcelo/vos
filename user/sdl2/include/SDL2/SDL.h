@@ -22,6 +22,7 @@
 #include "SDL_keyboard.h"
 #include "SDL_mutex.h"
 #include "SDL_rwops.h"
+#include "SDL_endian.h"
 
 /*
  * SDL initialization flags

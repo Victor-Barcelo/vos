@@ -941,3 +941,35 @@ SDL_bool SDL_IsTextInputActive(void) {
 void SDL_SetTextInputRect(const SDL_Rect *rect) {
     (void)rect;  /* No-op on VOS */
 }
+
+/* Cursor functions - VOS doesn't support cursor changing */
+
+SDL_Cursor* SDL_CreateSystemCursor(SDL_SystemCursor id) {
+    (void)id;
+    return NULL;  /* No cursor support in VOS */
+}
+
+SDL_Cursor* SDL_CreateColorCursor(SDL_Surface *surface, int hot_x, int hot_y) {
+    (void)surface;
+    (void)hot_x;
+    (void)hot_y;
+    return NULL;  /* No cursor support in VOS */
+}
+
+void SDL_FreeCursor(SDL_Cursor *cursor) {
+    (void)cursor;
+    /* No-op on VOS */
+}
+
+void SDL_SetCursor(SDL_Cursor *cursor) {
+    (void)cursor;
+    /* No-op on VOS */
+}
+
+SDL_Cursor* SDL_GetCursor(void) {
+    return NULL;  /* No cursor support in VOS */
+}
+
+SDL_Cursor* SDL_GetDefaultCursor(void) {
+    return NULL;  /* No cursor support in VOS */
+}

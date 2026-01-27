@@ -304,6 +304,21 @@ char keyboard_getchar(void) {
 
     char c = 0;
     for (;;) {
+        // If we're in a user task, only accept input if on active console
+        int task_console = tasking_current_console();
+        if (task_console >= 0 && task_console != screen_console_active()) {
+            // Not on active console - yield and try again
+            if (tasking_current_should_interrupt()) {
+                c = 0;
+                break;
+            }
+            hlt();
+            if (idle_hook) {
+                idle_hook();
+            }
+            continue;
+        }
+
         if (keyboard_try_getchar(&c)) {
             break;
         }

@@ -514,35 +514,62 @@ int main(int argc, char** argv) {
     printf("\n");
     fflush(stdout);
 
-    // Main loop - spawn login
-    for (;;) {
+    // Spawn login on all 4 virtual consoles
+    #define NUM_CONSOLES 4
+    pid_t console_pids[NUM_CONSOLES] = {0};
+
+    for (int i = 0; i < NUM_CONSOLES; i++) {
         pid_t pid = fork();
         if (pid < 0) {
             tag("[init] ", CLR_CYAN);
             tag("error: ", CLR_RED);
-            printf("fork() for /bin/login failed: %s\n", strerror(errno));
-            (void)sys_sleep(1000u);
+            printf("fork() for console %d failed: %s\n", i + 1, strerror(errno));
             continue;
         }
 
         if (pid == 0) {
-            // Test: explicitly set console 0
-            sys_set_console(0);
+            sys_set_console(i);
             char* const largv[] = {"/bin/login", NULL};
             execve("/bin/login", largv, NULL);
-            tag("[init] ", CLR_CYAN);
-            tag("error: ", CLR_RED);
-            printf("execve(/bin/login) failed: %s\n", strerror(errno));
             _exit(127);
         }
 
+        console_pids[i] = pid;
+    }
+
+    // Main loop - wait for any child to exit and respawn on that console
+    for (;;) {
         int status = 0;
-        pid_t got = waitpid(pid, &status, 0);
-        int code = 0;
-        if (got >= 0) {
-            code = (status >> 8) & 0xFF;
+        pid_t got = waitpid(-1, &status, 0);
+
+        if (got <= 0) {
+            (void)sys_sleep(100u);
+            continue;
         }
-        tag("[init] ", CLR_CYAN);
-        printf("Session ended (exit %d), restarting...\n", code);
+
+        int exited_console = -1;
+        for (int i = 0; i < NUM_CONSOLES; i++) {
+            if (console_pids[i] == got) {
+                exited_console = i;
+                console_pids[i] = 0;
+                break;
+            }
+        }
+
+        if (exited_console >= 0) {
+            (void)sys_sleep(100u);
+
+            pid_t pid = fork();
+            if (pid < 0) continue;
+
+            if (pid == 0) {
+                sys_set_console(exited_console);
+                char* const largv[] = {"/bin/login", NULL};
+                execve("/bin/login", largv, NULL);
+                _exit(127);
+            }
+
+            console_pids[exited_console] = pid;
+        }
     }
 }

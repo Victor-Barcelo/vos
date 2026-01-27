@@ -13,7 +13,20 @@ void* early_alloc(size_t size, size_t align) {
         align = 1;
     }
     uint32_t aligned = (early_ptr + (uint32_t)(align - 1u)) & ~(uint32_t)(align - 1u);
-    early_ptr = aligned + (uint32_t)size;
+    // Check for overflow on alignment
+    if (aligned < early_ptr) {
+        return NULL;
+    }
+    uint32_t new_ptr = aligned + (uint32_t)size;
+    // Check for overflow on size addition
+    if (new_ptr < aligned) {
+        return NULL;
+    }
+    // Check we don't exceed kernel space
+    if (new_ptr > 0xC0000000u) {
+        return NULL;
+    }
+    early_ptr = new_ptr;
     return (void*)aligned;
 }
 

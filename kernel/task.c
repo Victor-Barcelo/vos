@@ -2109,6 +2109,13 @@ interrupt_frame_t* tasking_deliver_pending_signals(interrupt_frame_t* frame) {
         return tasking_exit(frame, -EFAULT);
     }
 
+    // Validate handler is in user space
+    if (handler < USER_BASE || handler >= USER_STACK_TOP) {
+        // Invalid handler address - use default action instead
+        // Kill the process
+        return tasking_exit(frame, 128 + sig);
+    }
+
     frame_set_user_esp(frame, new_esp);
     frame_set_user_ss(frame, old_user_ss);
     frame->eip = handler;
@@ -2917,6 +2924,8 @@ int32_t tasking_execve(interrupt_frame_t* frame, const char* path, const char* c
     current_task->user_brk_min = brk;
     current_task->mmap_top = USER_STACK_TOP - (USER_STACK_PAGES + 1u) * PAGE_SIZE;
     current_task->sig_pending = 0;
+    // Reset signal handlers to default on execve (POSIX requirement)
+    memset(current_task->sig_handlers, 0, sizeof(current_task->sig_handlers));
     current_task->kill_pending = false;
     current_task->kill_exit_code = 0;
     current_task->wait_pid = 0;

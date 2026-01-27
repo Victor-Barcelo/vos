@@ -148,7 +148,7 @@ static bool normalize_path(const char* in, char* out, uint32_t out_cap) {
 
     // Build a canonical path without leading '/'.
     uint32_t out_len = 0;
-    uint32_t saved[32];
+    uint32_t saved[33];
     uint32_t depth = 0;
 
     const char* p = in;

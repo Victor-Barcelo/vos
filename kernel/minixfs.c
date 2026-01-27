@@ -219,6 +219,7 @@ static uint32_t lookup_path(const char* path) {
             continue;
         }
         if (len > g_fs.name_len) return 0; // Name too long
+        if (len > sizeof(component) - 1) len = sizeof(component) - 1; // Bounds check
 
         memcpy(component, path, len);
         component[len] = '\0';
@@ -1032,6 +1033,7 @@ bool minixfs_write_file(const char* path, const uint8_t* data, uint32_t size) {
 
         if (!add_dir_entry(parent_ino, base_name, ino)) {
             free_inode(ino);
+            write_bitmaps();
             return false;
         }
     } else {

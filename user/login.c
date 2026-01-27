@@ -160,6 +160,14 @@ static int load_user(const char* username, user_entry_t* out) {
 
         char line[256];
         while (fgets(line, sizeof(line), f)) {
+            // Check if line was truncated (no newline and not at EOF)
+            size_t linelen = strlen(line);
+            if (linelen > 0 && line[linelen-1] != '\n' && !feof(f)) {
+                // Line was truncated, skip rest of line
+                int c;
+                while ((c = fgetc(f)) != '\n' && c != EOF);
+                continue;  // Skip this malformed entry
+            }
             trim_newline(line);
             user_entry_t e;
             if (parse_passwd_line(line, &e) != 0) {

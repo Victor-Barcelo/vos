@@ -389,7 +389,8 @@ void keyboard_getline_history(char* buffer, size_t max_len) {
 
                 // Copy history entry
                 int h = hist_idx % HISTORY_SIZE;
-                strcpy(buffer, history[h]);
+                strncpy(buffer, history[h], max_len - 1);
+                buffer[max_len - 1] = '\0';
                 pos = strlen(buffer);
                 screen_print(buffer);
             }
@@ -406,10 +407,12 @@ void keyboard_getline_history(char* buffer, size_t max_len) {
 
                 if (hist_idx == history_count) {
                     // Restore saved line
-                    strcpy(buffer, saved_line);
+                    strncpy(buffer, saved_line, max_len - 1);
+                    buffer[max_len - 1] = '\0';
                 } else {
                     int h = hist_idx % HISTORY_SIZE;
-                    strcpy(buffer, history[h]);
+                    strncpy(buffer, history[h], max_len - 1);
+                    buffer[max_len - 1] = '\0';
                 }
                 pos = strlen(buffer);
                 screen_print(buffer);

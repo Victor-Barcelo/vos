@@ -126,6 +126,12 @@ int main(int argc, char* argv[]) {
         usage();
     }
 
+    // Validate username doesn't contain path traversal characters
+    if (strchr(username, '/') != NULL || strstr(username, "..") != NULL) {
+        fprintf(stderr, "useradd: invalid username (contains path characters)\n");
+        return 1;
+    }
+
     // Check if user already exists
     if (getpwnam(username)) {
         fprintf(stderr, "useradd: user '%s' already exists\n", username);

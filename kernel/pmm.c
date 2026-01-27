@@ -227,6 +227,7 @@ uint32_t pmm_alloc_frame(void) {
     }
 
     // Search from the current cursor downwards, wrapping once.
+    // We allocate top-down to avoid overlap with early allocator structures.
     for (uint32_t scanned = 0; scanned < frames_total; scanned++) {
         uint32_t frame = alloc_cursor;
         if (!bitmap_test(frame)) {

@@ -9,6 +9,7 @@
 #include "statusbar.h"
 #include "kerrno.h"
 #include "emoji.h"
+#include "kheap.h"
 
 typedef enum {
     SCREEN_BACKEND_VGA_TEXT = 0,
@@ -129,6 +130,11 @@ static uint8_t fb_b_pos = 0;
 static uint8_t fb_b_size = 0;
 static font_t fb_font;
 static int fb_font_current_index = -1;
+
+// Double buffering support for flicker-free graphics
+static uint8_t* fb_backbuffer = NULL;       // Off-screen buffer for drawing
+static bool fb_double_buffering = false;    // Is double buffering active?
+static uint32_t fb_buffer_size = 0;         // Size of framebuffer in bytes
 
 // Extra fonts embedded as binary objects by the build.
 extern const uint8_t _binary_third_party_fonts_spleen_spleen_12x24_psf_start[];
@@ -1140,12 +1146,18 @@ static void ansi_erase_to_eol(void) {
     bool render_now = !(backend == SCREEN_BACKEND_FRAMEBUFFER && scrollback_view_offset > 0);
 
     if (backend == SCREEN_BACKEND_FRAMEBUFFER) {
+        int row_start_idx = y * screen_cols_value;
+        if (row_start_idx < 0 || row_start_idx >= (int)(FB_MAX_COLS * FB_MAX_ROWS)) {
+            return;
+        }
         fb_cell_t blank = fb_cell_make((uint8_t)' ', sgr_effective_fg(), sgr_effective_bg());
-        fb_cell_t* row = &fb_cells[y * screen_cols_value];
+        fb_cell_t* row = &fb_cells[row_start_idx];
         for (int x = cursor_x; x < screen_cols_value; x++) {
-            row[x] = blank;
-            if (render_now) {
-                fb_render_cell(x, y);
+            if (row_start_idx + x < (int)(FB_MAX_COLS * FB_MAX_ROWS)) {
+                row[x] = blank;
+                if (render_now) {
+                    fb_render_cell(x, y);
+                }
             }
         }
     } else {
@@ -1186,12 +1198,18 @@ static void ansi_erase_line(int mode) {
     bool render_now = !(backend == SCREEN_BACKEND_FRAMEBUFFER && scrollback_view_offset > 0);
 
     if (backend == SCREEN_BACKEND_FRAMEBUFFER) {
+        int row_start_idx = y * screen_cols_value;
+        if (row_start_idx < 0 || row_start_idx >= (int)(FB_MAX_COLS * FB_MAX_ROWS)) {
+            return;
+        }
         fb_cell_t blank = fb_cell_make((uint8_t)' ', sgr_effective_fg(), sgr_effective_bg());
-        fb_cell_t* row = &fb_cells[y * screen_cols_value];
+        fb_cell_t* row = &fb_cells[row_start_idx];
         for (int x = x0; x <= x1; x++) {
-            row[x] = blank;
-            if (render_now) {
-                fb_render_cell(x, y);
+            if (row_start_idx + x < (int)(FB_MAX_COLS * FB_MAX_ROWS)) {
+                row[x] = blank;
+                if (render_now) {
+                    fb_render_cell(x, y);
+                }
             }
         }
     } else {
@@ -1280,17 +1298,28 @@ static void ansi_insert_lines(int n) {
         }
 
         int cols = screen_cols_value;
+        // Validate bounds before array access
+        int top_idx = top * cols;
+        int bottom_idx = (bottom + 1) * cols;
+        if (top_idx < 0 || bottom_idx < 0 ||
+            top_idx >= (int)(FB_MAX_COLS * FB_MAX_ROWS) ||
+            bottom_idx > (int)(FB_MAX_COLS * FB_MAX_ROWS)) {
+            return;
+        }
         size_t row_bytes = (size_t)cols * sizeof(fb_cell_t);
         int move_rows = region_rows - n;
         if (move_rows > 0) {
-            memmove(&fb_cells[(top + n) * cols], &fb_cells[top * cols], row_bytes * (size_t)move_rows);
+            memmove(&fb_cells[(top + n) * cols], &fb_cells[top_idx], row_bytes * (size_t)move_rows);
         }
 
         fb_cell_t blank = fb_cell_make((uint8_t)' ', sgr_effective_fg(), sgr_effective_bg());
         for (int y = 0; y < n; y++) {
-            fb_cell_t* row = &fb_cells[(top + y) * cols];
-            for (int x = 0; x < cols; x++) {
-                row[x] = blank;
+            int row_idx = (top + y) * cols;
+            if (row_idx >= 0 && row_idx + cols <= (int)(FB_MAX_COLS * FB_MAX_ROWS)) {
+                fb_cell_t* row = &fb_cells[row_idx];
+                for (int x = 0; x < cols; x++) {
+                    row[x] = blank;
+                }
             }
         }
 
@@ -1366,17 +1395,28 @@ static void ansi_delete_lines(int n) {
         }
 
         int cols = screen_cols_value;
+        // Validate bounds before array access
+        int top_idx = top * cols;
+        int bottom_idx = (bottom + 1) * cols;
+        if (top_idx < 0 || bottom_idx < 0 ||
+            top_idx >= (int)(FB_MAX_COLS * FB_MAX_ROWS) ||
+            bottom_idx > (int)(FB_MAX_COLS * FB_MAX_ROWS)) {
+            return;
+        }
         size_t row_bytes = (size_t)cols * sizeof(fb_cell_t);
         int move_rows = region_rows - n;
         if (move_rows > 0) {
-            memmove(&fb_cells[top * cols], &fb_cells[(top + n) * cols], row_bytes * (size_t)move_rows);
+            memmove(&fb_cells[top_idx], &fb_cells[(top + n) * cols], row_bytes * (size_t)move_rows);
         }
 
         fb_cell_t blank = fb_cell_make((uint8_t)' ', sgr_effective_fg(), sgr_effective_bg());
         for (int y = bottom - n + 1; y <= bottom; y++) {
-            fb_cell_t* row = &fb_cells[y * cols];
-            for (int x = 0; x < cols; x++) {
-                row[x] = blank;
+            int row_idx = y * cols;
+            if (row_idx >= 0 && row_idx + cols <= (int)(FB_MAX_COLS * FB_MAX_ROWS)) {
+                fb_cell_t* row = &fb_cells[row_idx];
+                for (int x = 0; x < cols; x++) {
+                    row[x] = blank;
+                }
             }
         }
 
@@ -1454,7 +1494,11 @@ static void ansi_delete_chars(int n) {
             cursor_drawn_y = -1;
         }
 
-        fb_cell_t* row = &fb_cells[y * cols];
+        int row_idx = y * cols;
+        if (row_idx < 0 || row_idx + cols > (int)(FB_MAX_COLS * FB_MAX_ROWS)) {
+            return;
+        }
+        fb_cell_t* row = &fb_cells[row_idx];
         size_t move_bytes = (size_t)(cols - cursor_x - n) * sizeof(fb_cell_t);
         if (move_bytes > 0) {
             memmove(&row[cursor_x], &row[cursor_x + n], move_bytes);
@@ -2000,7 +2044,12 @@ static uint32_t fb_color_from_xterm(uint8_t idx) {
 }
 
 static void fb_put_pixel(uint32_t x, uint32_t y, uint32_t pixel) {
-    uint8_t* p = fb_addr + y * fb_pitch + x * (uint32_t)fb_bytes_per_pixel;
+    if (x >= fb_width || y >= fb_height) {
+        return;
+    }
+    // Use backbuffer if double buffering is active, otherwise write directly to framebuffer
+    uint8_t* target = (fb_double_buffering && fb_backbuffer) ? fb_backbuffer : fb_addr;
+    uint8_t* p = target + y * fb_pitch + x * (uint32_t)fb_bytes_per_pixel;
     switch (fb_bytes_per_pixel) {
         case 4:
             *(uint32_t*)p = pixel;
@@ -2020,8 +2069,25 @@ static void fb_put_pixel(uint32_t x, uint32_t y, uint32_t pixel) {
 }
 
 static void fb_fill_rect(uint32_t x, uint32_t y, uint32_t w, uint32_t h, uint32_t pixel) {
+    // Bounds validation - clamp rectangle to framebuffer dimensions
+    if (x >= fb_width || y >= fb_height) {
+        return;
+    }
+    if (x + w > fb_width) {
+        w = fb_width - x;
+    }
+    if (y + h > fb_height) {
+        h = fb_height - y;
+    }
+    if (w == 0 || h == 0) {
+        return;
+    }
+
+    // Use backbuffer if double buffering is active
+    uint8_t* target = (fb_double_buffering && fb_backbuffer) ? fb_backbuffer : fb_addr;
+
     for (uint32_t yy = 0; yy < h; yy++) {
-        uint8_t* row = fb_addr + (y + yy) * fb_pitch;
+        uint8_t* row = target + (y + yy) * fb_pitch;
         for (uint32_t xx = 0; xx < w; xx++) {
             uint8_t* p = row + (x + xx) * (uint32_t)fb_bytes_per_pixel;
             switch (fb_bytes_per_pixel) {
@@ -2111,8 +2177,14 @@ static void fb_render_entry(int x, int y, fb_cell_t entry) {
         return;
     }
 
+    // Validate cell index before array access
+    int cell_idx = y * screen_cols_value + x;
+    if (cell_idx < 0 || cell_idx >= (int)(FB_MAX_COLS * FB_MAX_ROWS)) {
+        return;
+    }
+
     // Check if this cell has an emoji
-    uint32_t emoji_cp = fb_emoji_codepoints[y * screen_cols_value + x];
+    uint32_t emoji_cp = fb_emoji_codepoints[cell_idx];
     if (emoji_cp == EMOJI_CONTINUATION_MARKER) {
         // This is the second half of a double-width emoji, already rendered
         return;
@@ -2159,7 +2231,11 @@ static void fb_render_cell_base(int x, int y) {
     if (x < 0 || y < 0 || x >= screen_cols_value || y >= screen_rows_value) {
         return;
     }
-    fb_render_entry(x, y, fb_cells[y * screen_cols_value + x]);
+    int cell_idx = y * screen_cols_value + x;
+    if (cell_idx < 0 || cell_idx >= (int)(FB_MAX_COLS * FB_MAX_ROWS)) {
+        return;
+    }
+    fb_render_entry(x, y, fb_cells[cell_idx]);
 }
 
 static void fb_render_cell(int x, int y) {
@@ -2183,8 +2259,12 @@ static void fb_draw_cursor_overlay(int x, int y) {
     if (x < 0 || y < 0 || x >= screen_cols_value || y >= usable_height()) {
         return;
     }
+    int cell_idx = y * screen_cols_value + x;
+    if (cell_idx < 0 || cell_idx >= (int)(FB_MAX_COLS * FB_MAX_ROWS)) {
+        return;
+    }
 
-    fb_cell_t entry = fb_cells[y * screen_cols_value + x];
+    fb_cell_t entry = fb_cells[cell_idx];
     uint8_t fg = fb_cell_fg(entry);
     uint32_t fg_px = fb_color_from_xterm(fg);
 
@@ -2407,19 +2487,28 @@ static void fb_scroll(void) {
     }
 
     int cols = screen_cols_value;
+    // Validate bounds before array access
+    int top_idx = top * cols;
+    int bottom_idx = bottom * cols;
+    if (top_idx < 0 || bottom_idx < 0 ||
+        top_idx >= (int)(FB_MAX_COLS * FB_MAX_ROWS) ||
+        bottom_idx + cols > (int)(FB_MAX_COLS * FB_MAX_ROWS)) {
+        cursor_y = bottom;
+        return;
+    }
     if (cols > 0) {
-        scrollback_push_line(&fb_cells[top * cols], cols);
+        scrollback_push_line(&fb_cells[top_idx], cols);
     }
     size_t row_bytes = (size_t)cols * sizeof(fb_cell_t);
-    memmove(&fb_cells[top * cols], &fb_cells[(top + 1) * cols], row_bytes * (size_t)(bottom - top));
+    memmove(&fb_cells[top_idx], &fb_cells[(top + 1) * cols], row_bytes * (size_t)(bottom - top));
 
     // Also scroll emoji codepoints
-    memmove(&fb_emoji_codepoints[top * cols], &fb_emoji_codepoints[(top + 1) * cols], (size_t)cols * sizeof(uint32_t) * (size_t)(bottom - top));
+    memmove(&fb_emoji_codepoints[top_idx], &fb_emoji_codepoints[(top + 1) * cols], (size_t)cols * sizeof(uint32_t) * (size_t)(bottom - top));
 
     fb_cell_t blank = fb_cell_make((uint8_t)' ', sgr_effective_fg(), sgr_effective_bg());
     for (int x = 0; x < cols; x++) {
-        fb_cells[bottom * cols + x] = blank;
-        fb_emoji_codepoints[bottom * cols + x] = 0;
+        fb_cells[bottom_idx + x] = blank;
+        fb_emoji_codepoints[bottom_idx + x] = 0;
     }
 
     if (scrollback_view_offset == 0) {
@@ -2501,12 +2590,20 @@ static void fb_scroll_down(void) {
     }
 
     int cols = screen_cols_value;
+    // Validate bounds before array access
+    int top_idx = top * cols;
+    int bottom_idx = (bottom + 1) * cols;
+    if (top_idx < 0 || bottom_idx < 0 ||
+        top_idx >= (int)(FB_MAX_COLS * FB_MAX_ROWS) ||
+        bottom_idx > (int)(FB_MAX_COLS * FB_MAX_ROWS)) {
+        return;
+    }
     size_t row_bytes = (size_t)cols * sizeof(fb_cell_t);
-    memmove(&fb_cells[(top + 1) * cols], &fb_cells[top * cols], row_bytes * (size_t)(bottom - top));
+    memmove(&fb_cells[(top + 1) * cols], &fb_cells[top_idx], row_bytes * (size_t)(bottom - top));
 
     fb_cell_t blank = fb_cell_make((uint8_t)' ', sgr_effective_fg(), sgr_effective_bg());
     for (int x = 0; x < cols; x++) {
-        fb_cells[top * cols + x] = blank;
+        fb_cells[top_idx + x] = blank;
     }
 
     if (scrollback_view_offset == 0) {
@@ -2560,7 +2657,11 @@ static void scrollback_render_view(void) {
             if (live_row >= (uint32_t)FB_MAX_ROWS) {
                 continue;
             }
-            src = &fb_cells[live_row * (uint32_t)screen_cols_value];
+            uint32_t row_idx = live_row * (uint32_t)screen_cols_value;
+            if (row_idx >= (uint32_t)(FB_MAX_COLS * FB_MAX_ROWS)) {
+                continue;
+            }
+            src = &fb_cells[row_idx];
         }
 
         for (int x = 0; x < cols; x++) {
@@ -2651,8 +2752,11 @@ void screen_clear(void) {
 
         for (int y = 0; y < rows; y++) {
             for (int x = 0; x < cols; x++) {
-                fb_cells[y * cols + x] = blank;
-                fb_emoji_codepoints[y * cols + x] = 0;
+                int cell_idx = y * cols + x;
+                if (cell_idx >= 0 && cell_idx < (int)(FB_MAX_COLS * FB_MAX_ROWS)) {
+                    fb_cells[cell_idx] = blank;
+                    fb_emoji_codepoints[cell_idx] = 0;
+                }
             }
         }
 
@@ -2979,9 +3083,15 @@ static void screen_put_codepoint(uint32_t cp) {
         if (cursor_x > 0) {
             cursor_x--;
             if (backend == SCREEN_BACKEND_FRAMEBUFFER) {
-                fb_cells[cursor_y * screen_cols_value + cursor_x] = fb_cell_make((uint8_t)' ', sgr_effective_fg(), sgr_effective_bg());
-                if (render_now) {
-                    fb_render_cell(cursor_x, cursor_y);
+                if (cursor_x >= 0 && cursor_y >= 0 &&
+                    cursor_x < screen_cols_value && cursor_y < screen_rows_value) {
+                    int bs_cell_idx = cursor_y * screen_cols_value + cursor_x;
+                    if (bs_cell_idx >= 0 && bs_cell_idx < (int)(FB_MAX_COLS * FB_MAX_ROWS)) {
+                        fb_cells[bs_cell_idx] = fb_cell_make((uint8_t)' ', sgr_effective_fg(), sgr_effective_bg());
+                        if (render_now) {
+                            fb_render_cell(cursor_x, cursor_y);
+                        }
+                    }
                 }
             } else {
                 VGA_BUFFER[screen_phys_y(cursor_y) * VGA_WIDTH + screen_phys_x(cursor_x)] = vga_entry(' ', current_color);
@@ -3005,7 +3115,15 @@ static void screen_put_codepoint(uint32_t cp) {
 
         uint8_t glyph = screen_glyph_for_codepoint(cp);
         if (backend == SCREEN_BACKEND_FRAMEBUFFER) {
+            // Validate cursor bounds before array access
+            if (cursor_x < 0 || cursor_y < 0 ||
+                cursor_x >= screen_cols_value || cursor_y >= screen_rows_value) {
+                return;
+            }
             int cell_idx = cursor_y * screen_cols_value + cursor_x;
+            if (cell_idx < 0 || cell_idx >= (int)(FB_MAX_COLS * FB_MAX_ROWS)) {
+                return;
+            }
             // Check if this is an emoji we can render
             if (emoji_is_emoji(cp) && emoji_lookup(cp) != NULL) {
                 fb_emoji_codepoints[cell_idx] = cp;
@@ -3013,8 +3131,10 @@ static void screen_put_codepoint(uint32_t cp) {
                 // Mark second cell as continuation (emoji is double-width)
                 if (cursor_x + 1 < screen_cols_value) {
                     int cell_idx2 = cursor_y * screen_cols_value + cursor_x + 1;
-                    fb_emoji_codepoints[cell_idx2] = EMOJI_CONTINUATION_MARKER;
-                    fb_cells[cell_idx2] = fb_cell_make((uint8_t)' ', sgr_effective_fg(), sgr_effective_bg());
+                    if (cell_idx2 >= 0 && cell_idx2 < (int)(FB_MAX_COLS * FB_MAX_ROWS)) {
+                        fb_emoji_codepoints[cell_idx2] = EMOJI_CONTINUATION_MARKER;
+                        fb_cells[cell_idx2] = fb_cell_make((uint8_t)' ', sgr_effective_fg(), sgr_effective_bg());
+                    }
                 }
                 if (render_now) {
                     fb_render_cell(cursor_x, cursor_y);
@@ -3222,8 +3342,14 @@ void screen_backspace(void) {
         cursor_wrap_pending = false;
         cursor_x--;
         if (backend == SCREEN_BACKEND_FRAMEBUFFER) {
-            fb_cells[cursor_y * screen_cols_value + cursor_x] = fb_cell_make((uint8_t)' ', sgr_effective_fg(), sgr_effective_bg());
-            fb_render_cell(cursor_x, cursor_y);
+            if (cursor_x >= 0 && cursor_y >= 0 &&
+                cursor_x < screen_cols_value && cursor_y < screen_rows_value) {
+                int cell_idx = cursor_y * screen_cols_value + cursor_x;
+                if (cell_idx >= 0 && cell_idx < (int)(FB_MAX_COLS * FB_MAX_ROWS)) {
+                    fb_cells[cell_idx] = fb_cell_make((uint8_t)' ', sgr_effective_fg(), sgr_effective_bg());
+                    fb_render_cell(cursor_x, cursor_y);
+                }
+            }
         } else {
             VGA_BUFFER[screen_phys_y(cursor_y) * VGA_WIDTH + screen_phys_x(cursor_x)] = vga_entry(' ', current_color);
         }
@@ -3254,9 +3380,13 @@ void screen_write_char_at(int x, int y, char c, uint8_t color) {
         return;
     }
     if (backend == SCREEN_BACKEND_FRAMEBUFFER) {
+        int cell_idx = y * screen_cols_value + x;
+        if (cell_idx < 0 || cell_idx >= (int)(FB_MAX_COLS * FB_MAX_ROWS)) {
+            return;
+        }
         uint8_t fg = xterm_from_vga_index((uint8_t)(color & 0x0Fu));
         uint8_t bg = xterm_from_vga_index((uint8_t)((color >> 4) & 0x0Fu));
-        fb_cells[y * screen_cols_value + x] = fb_cell_make((uint8_t)c, fg, bg);
+        fb_cells[cell_idx] = fb_cell_make((uint8_t)c, fg, bg);
         fb_render_cell(x, y);
         if (cursor_drawn_x == x && cursor_drawn_y == y) {
             cursor_drawn_x = -1;
@@ -3274,9 +3404,13 @@ void screen_write_char_at_batch(int x, int y, char c, uint8_t color) {
         return;
     }
     if (backend == SCREEN_BACKEND_FRAMEBUFFER) {
+        int cell_idx = y * screen_cols_value + x;
+        if (cell_idx < 0 || cell_idx >= (int)(FB_MAX_COLS * FB_MAX_ROWS)) {
+            return;
+        }
         uint8_t fg = xterm_from_vga_index((uint8_t)(color & 0x0Fu));
         uint8_t bg = xterm_from_vga_index((uint8_t)((color >> 4) & 0x0Fu));
-        fb_cells[y * screen_cols_value + x] = fb_cell_make((uint8_t)c, fg, bg);
+        fb_cells[cell_idx] = fb_cell_make((uint8_t)c, fg, bg);
         // No render - caller will call screen_render_row
     } else {
         VGA_BUFFER[screen_phys_y(y) * VGA_WIDTH + screen_phys_x(x)] = vga_entry(c, color);
@@ -3289,8 +3423,13 @@ void screen_render_row(int y) {
         return;
     }
     if (backend == SCREEN_BACKEND_FRAMEBUFFER && fb_addr) {
+        // Validate cell index before array access
+        int row_start_idx = y * screen_cols_value;
+        if (row_start_idx < 0 || row_start_idx >= (int)(FB_MAX_COLS * FB_MAX_ROWS)) {
+            return;
+        }
         // Get the background color from the first cell
-        fb_cell_t first_cell = fb_cells[y * screen_cols_value];
+        fb_cell_t first_cell = fb_cells[row_start_idx];
         uint8_t bg = fb_cell_bg(first_cell);
         uint32_t bg_px = fb_color_from_xterm(bg);
 
@@ -3694,9 +3833,12 @@ bool screen_graphics_blit_rgba(int32_t x, int32_t y, uint32_t w, uint32_t h, con
         return false;
     }
 
+    // Use backbuffer if double buffering is active
+    uint8_t* target = (fb_double_buffering && fb_backbuffer) ? fb_backbuffer : fb_addr;
+
     for (uint32_t yy = 0; yy < h; yy++) {
         const uint8_t* src = rgba + yy * stride_bytes;
-        uint8_t* dst = fb_addr + ((uint32_t)y + yy) * fb_pitch + (uint32_t)x * (uint32_t)fb_bytes_per_pixel;
+        uint8_t* dst = target + ((uint32_t)y + yy) * fb_pitch + (uint32_t)x * (uint32_t)fb_bytes_per_pixel;
 
         switch (fb_bytes_per_pixel) {
             case 4: {
@@ -3967,7 +4109,12 @@ int screen_dump_to_serial(void) {
         // Framebuffer mode - read from fb_cells array
         for (int y = 0; y < rows; y++) {
             for (int x = 0; x < cols; x++) {
-                fb_cell_t cell = fb_cells[y * cols + x];
+                int cell_idx = y * cols + x;
+                if (cell_idx < 0 || cell_idx >= (int)(FB_MAX_COLS * FB_MAX_ROWS)) {
+                    serial_write_char(' ');
+                    continue;
+                }
+                fb_cell_t cell = fb_cells[cell_idx];
                 uint8_t ch = fb_cell_ch(cell);
                 // Output printable chars, replace control chars with space
                 if (ch >= 32 && ch < 127) {

@@ -2,6 +2,7 @@
 #include "paging.h"
 #include "panic.h"
 #include "pmm.h"
+#include "serial.h"
 #include "string.h"
 
 #define HEAP_BASE 0xD0000000u
@@ -23,6 +24,9 @@ static block_header_t* free_list = NULL;
 static uint32_t heap_alloc_count = 0;   // successful allocations
 static uint32_t heap_free_count = 0;    // successful frees
 static uint32_t heap_fail_count = 0;    // allocation failures
+
+// Cached free bytes to avoid O(n) traversal in kheap_get_info()
+static uint32_t cached_free_bytes = 0;
 
 static uint32_t align_up(uint32_t v, uint32_t a) {
     return (v + a - 1u) & ~(a - 1u);
@@ -122,6 +126,7 @@ static block_header_t* coalesce(block_header_t* b) {
     // Merge with next.
     block_header_t* n = next_block(b);
     if ((uint32_t)n < heap_end && n->used == 0 && n->size >= block_min_size()) {
+        cached_free_bytes -= n->size;  // Remove merged block from cache
         free_list_remove(n);
         b->size += n->size;
         write_footer(b);
@@ -130,6 +135,7 @@ static block_header_t* coalesce(block_header_t* b) {
     // Merge with previous.
     block_header_t* p = prev_block(b);
     if (p && (uint32_t)p >= heap_base && (uint32_t)p < heap_end && p->used == 0 && p->size >= block_min_size()) {
+        cached_free_bytes -= p->size;  // Remove merged block from cache
         free_list_remove(p);
         p->size += b->size;
         write_footer(p);
@@ -160,7 +166,9 @@ static bool heap_grow(uint32_t min_extra) {
 
     uint32_t block_size = new_end - old_end;
     if (block_size < block_min_size()) {
-        return true;
+        // Revert to avoid wasting memory
+        heap_end = old_end;
+        return false;
     }
 
     block_header_t* b = (block_header_t*)old_end;
@@ -172,6 +180,7 @@ static bool heap_grow(uint32_t min_extra) {
 
     b = coalesce(b);
     free_list_insert(b);
+    cached_free_bytes += b->size;
     return true;
 }
 
@@ -241,6 +250,7 @@ void* kmalloc(size_t size) {
                 b->used = 1;
                 write_footer(b);
                 heap_alloc_count++;
+                cached_free_bytes -= b->size;
                 return (uint8_t*)b + sizeof(block_header_t);
             }
             b = b->next_free;
@@ -279,11 +289,17 @@ void kfree(void* ptr) {
 
     uint32_t addr = (uint32_t)ptr;
     if (addr < heap_base + sizeof(block_header_t) || addr >= heap_end) {
+        serial_write_string("[kfree] warning: invalid pointer 0x");
+        serial_write_hex(addr);
+        serial_write_string(" (out of heap bounds)\n");
         return;
     }
 
     block_header_t* b = (block_header_t*)(addr - sizeof(block_header_t));
     if (b->used == 0 || b->size < block_min_size() || (b->size & 0xFu) != 0) {
+        serial_write_string("[kfree] warning: invalid block header at 0x");
+        serial_write_hex((uint32_t)b);
+        serial_write_string("\n");
         return;
     }
 
@@ -292,6 +308,10 @@ void kfree(void* ptr) {
     b = coalesce(b);
     free_list_insert(b);
     heap_free_count++;
+    // Add the coalesced block size (which accounts for any merged blocks)
+    // The coalesced blocks were already removed from free list (and thus from
+    // cached_free_bytes conceptually), so we just add the final merged size.
+    cached_free_bytes += b->size;
 }
 
 void kheap_get_info(uint32_t* out_base, uint32_t* out_end,
@@ -303,19 +323,19 @@ void kheap_get_info(uint32_t* out_base, uint32_t* out_end,
         *out_end = heap_end;
     }
 
-    uint32_t free_bytes = 0;
-    uint32_t free_blocks = 0;
-    block_header_t* b = free_list;
-    while (b) {
-        free_blocks++;
-        free_bytes += b->size;
-        b = b->next_free;
+    // Use cached value for free bytes (O(1) instead of O(n))
+    if (out_free_bytes) {
+        *out_free_bytes = cached_free_bytes;
     }
 
-    if (out_free_bytes) {
-        *out_free_bytes = free_bytes;
-    }
+    // Only traverse the free list if free_blocks count is requested
     if (out_free_blocks) {
+        uint32_t free_blocks = 0;
+        block_header_t* b = free_list;
+        while (b) {
+            free_blocks++;
+            b = b->next_free;
+        }
         *out_free_blocks = free_blocks;
     }
 }

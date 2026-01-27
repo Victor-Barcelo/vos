@@ -228,12 +228,20 @@ bool ata_read_sector(uint32_t lba, uint8_t* out512) {
         return false;
     }
 
+    // Check for error BEFORE reading data
+    uint8_t st = ata_alt_status();
+    if ((st & (ATA_SR_ERR | ATA_SR_DF)) != 0) {
+        irq_restore(irq_flags);
+        return false;
+    }
+
+    // Now safe to read data
     uint16_t* dst = (uint16_t*)out512;
     for (uint32_t i = 0; i < 256; i++) {
         dst[i] = inw(ATA_PRIMARY_IO + ATA_REG_DATA);
     }
 
-    if (!ata_wait_not_busy(100000u) || ((ata_alt_status() & (ATA_SR_ERR | ATA_SR_DF)) != 0)) {
+    if (!ata_wait_not_busy(100000u)) {
         irq_restore(irq_flags);
         return false;
     }

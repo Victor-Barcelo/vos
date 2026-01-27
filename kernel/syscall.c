@@ -1256,18 +1256,18 @@ interrupt_frame_t* syscall_handle(interrupt_frame_t* frame) {
                 frame->eax = (uint32_t)-EINVAL;
                 return frame;
             }
-            if (w > 0x3FFFFFFFu) {
+            // Prevent integer overflow: 4 bytes per pixel, so w * 4 must not overflow
+            if (w > 0x3FFFFFFF / 4u) {
                 frame->eax = (uint32_t)-EINVAL;
                 return frame;
             }
+            uint32_t row_bytes = w * 4u;
             uint32_t fb_w = screen_framebuffer_width();
             uint32_t fb_h = screen_framebuffer_height();
             if ((uint32_t)x + w > fb_w || (uint32_t)y + h > fb_h) {
                 frame->eax = (uint32_t)-EINVAL;
                 return frame;
             }
-
-            uint32_t row_bytes = w * 4u;
             uint8_t* row = (uint8_t*)kmalloc(row_bytes);
             if (!row) {
                 frame->eax = (uint32_t)-ENOMEM;
@@ -1585,7 +1585,12 @@ interrupt_frame_t* syscall_handle(interrupt_frame_t* frame) {
                     frame->eax = (uint32_t)-EFAULT;
                     return frame;
                 }
-                timeout_ms = tv.tv_sec * 1000 + tv.tv_usec / 1000;
+                // Prevent integer overflow: cap tv_sec to max safe value
+                if (tv.tv_sec > (int32_t)(0x7FFFFFFF / 1000)) {
+                    timeout_ms = 0x7FFFFFFF;  // Cap to max safe value
+                } else {
+                    timeout_ms = tv.tv_sec * 1000 + tv.tv_usec / 1000;
+                }
                 if (timeout_ms < 0) timeout_ms = 0;
             }
 
@@ -1650,10 +1655,19 @@ interrupt_frame_t* syscall_handle(interrupt_frame_t* frame) {
                 if (timeout_ms > 0) {
                     uint32_t now = timer_get_ticks();
                     if (now >= deadline) {
-                        // Timed out, return 0
-                        if (readfds_user) copy_to_user(readfds_user, &out_read, sizeof(out_read));
-                        if (writefds_user) copy_to_user(writefds_user, &out_write, sizeof(out_write));
-                        if (exceptfds_user) copy_to_user(exceptfds_user, &out_except, sizeof(out_except));
+                        // Timed out, return 0 - check copy_to_user for errors
+                        if (readfds_user && !copy_to_user(readfds_user, &out_read, sizeof(out_read))) {
+                            frame->eax = (uint32_t)-EFAULT;
+                            return frame;
+                        }
+                        if (writefds_user && !copy_to_user(writefds_user, &out_write, sizeof(out_write))) {
+                            frame->eax = (uint32_t)-EFAULT;
+                            return frame;
+                        }
+                        if (exceptfds_user && !copy_to_user(exceptfds_user, &out_except, sizeof(out_except))) {
+                            frame->eax = (uint32_t)-EFAULT;
+                            return frame;
+                        }
                         frame->eax = 0;
                         return frame;
                     }

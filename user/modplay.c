@@ -13,7 +13,7 @@
 #define POCKETMOD_IMPLEMENTATION
 #include "../third_party/pocketmod/pocketmod.h"
 
-#define SAMPLE_RATE 22050
+#define SAMPLE_RATE 44100
 #define BUFFER_SAMPLES 2048
 #define BUFFER_SIZE (BUFFER_SAMPLES * 2 * sizeof(int16_t))  // stereo 16-bit
 

@@ -266,6 +266,23 @@
     - Keyboard Input Routing
     - Status Bar Integration
 
+## Part XII: Applications
+
+41. [**Vi Text Editor**](41_vi_editor.md) (NEW)
+    - Overview and Starting Vi
+    - The Three Modes (Normal, Insert, Ex)
+    - Navigation and Movement Commands
+    - Text Editing (Insert, Delete, Change)
+    - Search and Replace
+    - Yanking, Pasting, and Registers
+    - Marks and Bookmarks
+    - Macros and Automation
+    - Ex Commands Reference
+    - Configuration (.virc)
+    - Syntax Highlighting
+    - VOS Build Integration (:make, :run, :cn/:cp/:cl)
+    - Keyboard Quick Reference
+
 ---
 
 ## About This Documentation
@@ -295,7 +312,7 @@ This book was generated from the VOS source code and provides a comprehensive gu
 - **Framebuffer graphics** with multiple font sizes
 - **FAT16 persistent storage** with overlay filesystem
 - **Multi-user authentication** with privilege separation
-- **~89 userland utilities** including vi editor, emulators, and tools
+- **~89 userland utilities** including nextvi editor, emulators, and tools
 - **Sound Blaster 16** audio driver with DMA
 - **MCP integration** for LLM-assisted development
 - **Emoji support** with alpha blending

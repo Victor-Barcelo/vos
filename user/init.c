@@ -1,3 +1,4 @@
+#include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <stdio.h>
@@ -40,6 +41,49 @@ static void cat_file(const char* path) {
     }
 
     close(fd);
+}
+
+// Copy a single file from src to dst
+static int copy_file(const char* src, const char* dst) {
+    int sfd = open(src, O_RDONLY);
+    if (sfd < 0) return -1;
+
+    int dfd = open(dst, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    if (dfd < 0) {
+        close(sfd);
+        return -1;
+    }
+
+    char buf[512];
+    int n;
+    while ((n = (int)read(sfd, buf, sizeof(buf))) > 0) {
+        (void)write(dfd, buf, (unsigned int)n);
+    }
+
+    close(dfd);
+    close(sfd);
+    return 0;
+}
+
+// Copy all files from srcdir to dstdir (non-recursive, files only)
+static void copy_dir_files(const char* srcdir, const char* dstdir) {
+    DIR* d = opendir(srcdir);
+    if (!d) return;
+
+    struct dirent* ent;
+    while ((ent = readdir(d)) != NULL) {
+        if (ent->d_name[0] == '.') continue;  // skip . and ..
+
+        char srcpath[256], dstpath[256];
+        snprintf(srcpath, sizeof(srcpath), "%s/%s", srcdir, ent->d_name);
+        snprintf(dstpath, sizeof(dstpath), "%s/%s", dstdir, ent->d_name);
+
+        struct stat st;
+        if (stat(srcpath, &st) == 0 && S_ISREG(st.st_mode)) {
+            copy_file(srcpath, dstpath);
+        }
+    }
+    closedir(d);
 }
 
 static void posix_selftest(void) {
@@ -241,32 +285,131 @@ int main(int argc, char** argv) {
     // Linux-like temp directory (mapped to RAM via the VFS alias).
     (void)mkdir("/tmp", 0777);
 
-    // Set up persistent directories on /disk for Linux-like structure
+    // Set up /ram/etc (VFS aliases /etc -> /ram/etc)
+    // This allows runtime modifications while optionally persisting to /disk/etc
     tag("[init] ", CLR_CYAN);
-    printf("Setting up persistent directories...\n");
+    printf("Setting up /etc...\n");
+    (void)mkdir("/ram/etc", 0755);
+    (void)mkdir("/ram/etc/skel", 0755);
+
+    // Set up persistent directories on /disk
     (void)mkdir("/disk/etc", 0755);
     (void)mkdir("/disk/home", 0755);
-    (void)mkdir("/disk/root", 0700);  // root's home (aliased from /root)
+    (void)mkdir("/disk/root", 0700);
     (void)mkdir("/disk/home/victor", 0755);
 
-    // Copy passwd to persistent storage if not present (first boot)
+    // Check if /disk/etc has passwd (persistent users exist)
     struct stat st;
-    if (stat("/disk/etc/passwd", &st) < 0) {
+    int has_persistent = (stat("/disk/etc/passwd", &st) == 0);
+
+    if (has_persistent) {
+        // Load persistent passwd/group into /ram/etc
+        copy_file("/disk/etc/passwd", "/ram/etc/passwd");
+        copy_file("/disk/etc/group", "/ram/etc/group");
+    } else {
+        // First boot: create default passwd/group
         tag("[init] ", CLR_CYAN);
-        printf("First boot: copying /etc/passwd to /disk/etc/passwd\n");
-        int src = open("/etc/passwd", O_RDONLY);
-        if (src >= 0) {
-            int dst = open("/disk/etc/passwd", O_WRONLY | O_CREAT | O_TRUNC, 0644);
-            if (dst >= 0) {
-                char buf[256];
-                int n;
-                while ((n = (int)read(src, buf, sizeof(buf))) > 0) {
-                    (void)write(dst, buf, (unsigned int)n);
-                }
-                close(dst);
-            }
-            close(src);
+        printf("First boot: creating default users...\n");
+
+        // Default passwd
+        int fd = open("/ram/etc/passwd", O_WRONLY | O_CREAT | O_TRUNC, 0644);
+        if (fd >= 0) {
+            const char* passwd =
+                "root::0:0:/root:/bin/dash\n"
+                "victor::1000:1000:/home/victor:/bin/dash\n";
+            (void)write(fd, passwd, strlen(passwd));
+            close(fd);
         }
+
+        // Default group
+        fd = open("/ram/etc/group", O_WRONLY | O_CREAT | O_TRUNC, 0644);
+        if (fd >= 0) {
+            const char* group =
+                "root::0:root\n"
+                "victor::1000:victor\n";
+            (void)write(fd, group, strlen(group));
+            close(fd);
+        }
+
+        // Also persist to disk for next boot
+        copy_file("/ram/etc/passwd", "/disk/etc/passwd");
+        copy_file("/ram/etc/group", "/disk/etc/group");
+    }
+
+    // Create /etc/profile (system-wide shell config)
+    int fd = open("/ram/etc/profile", O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    if (fd >= 0) {
+        const char* profile =
+            "# /etc/profile - system-wide shell configuration\n"
+            "\n"
+            "export PATH=/bin:/usr/bin\n"
+            "\n"
+            "# Nice prompt: user@vos:dir$ (or # for root)\n"
+            "if [ \"$USER\" = \"root\" ]; then\n"
+            "    PS1='\x1b[1;31mroot\x1b[0m@\x1b[1;36mvos\x1b[0m:\x1b[1;33m$PWD\x1b[0m# '\n"
+            "else\n"
+            "    PS1='\x1b[1;32m'\"$USER\"'\x1b[0m@\x1b[1;36mvos\x1b[0m:\x1b[1;33m$PWD\x1b[0m$ '\n"
+            "fi\n"
+            "export PS1\n"
+            "\n"
+            "# Handy aliases (ls already has colors by default)\n"
+            "alias ll='ls -la'\n"
+            "alias la='ls -A'\n"
+            "alias l='ls -l'\n"
+            "\n"
+            "# Set default editor\n"
+            "export EDITOR=edit\n";
+        (void)write(fd, profile, strlen(profile));
+        close(fd);
+    }
+
+    // Create /etc/skel/.profile (template for new users)
+    fd = open("/ram/etc/skel/.profile", O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    if (fd >= 0) {
+        const char* profile =
+            "# ~/.profile - executed by login shell\n"
+            "\n"
+            "# Source system-wide profile\n"
+            "if [ -f /etc/profile ]; then\n"
+            "    . /etc/profile\n"
+            "fi\n"
+            "\n"
+            "# User-specific settings below\n"
+            "export HOME\n";
+        (void)write(fd, profile, strlen(profile));
+        close(fd);
+    }
+
+    // Create /root/.profile (in /disk/root since /root -> /disk/root)
+    fd = open("/disk/root/.profile", O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    if (fd >= 0) {
+        const char* profile =
+            "# ~/.profile - root shell configuration\n"
+            "\n"
+            "# Source system-wide profile\n"
+            "if [ -f /etc/profile ]; then\n"
+            "    . /etc/profile\n"
+            "fi\n"
+            "\n"
+            "export HOME=/root\n";
+        (void)write(fd, profile, strlen(profile));
+        close(fd);
+    }
+
+    // Also create for victor user
+    fd = open("/disk/home/victor/.profile", O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    if (fd >= 0) {
+        const char* profile =
+            "# ~/.profile - executed by login shell\n"
+            "\n"
+            "# Source system-wide profile\n"
+            "if [ -f /etc/profile ]; then\n"
+            "    . /etc/profile\n"
+            "fi\n"
+            "\n"
+            "export HOME\n";
+        (void)write(fd, profile, strlen(profile));
+        close(fd);
     }
 
     posix_selftest();

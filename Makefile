@@ -141,6 +141,10 @@ USER_BEEP_OBJ = $(USER_BUILD_DIR)/beep.o
 USER_MODPLAY_OBJ = $(USER_BUILD_DIR)/modplay.o
 USER_MIDIPLAY_OBJ = $(USER_BUILD_DIR)/midiplay.o
 USER_CHOWN_OBJ = $(USER_BUILD_DIR)/chown.o
+USER_USERADD_OBJ = $(USER_BUILD_DIR)/useradd.o
+USER_USERDEL_OBJ = $(USER_BUILD_DIR)/userdel.o
+USER_GROUPADD_OBJ = $(USER_BUILD_DIR)/groupadd.o
+USER_GROUPDEL_OBJ = $(USER_BUILD_DIR)/groupdel.o
 USER_INIT = $(USER_BUILD_DIR)/init.elf
 USER_ELIZA = $(USER_BUILD_DIR)/eliza.elf
 USER_DF = $(USER_BUILD_DIR)/df.elf
@@ -168,6 +172,10 @@ USER_BEEP = $(USER_BUILD_DIR)/beep.elf
 USER_MODPLAY = $(USER_BUILD_DIR)/modplay.elf
 USER_MIDIPLAY = $(USER_BUILD_DIR)/midiplay.elf
 USER_CHOWN = $(USER_BUILD_DIR)/chown.elf
+USER_USERADD = $(USER_BUILD_DIR)/useradd.elf
+USER_USERDEL = $(USER_BUILD_DIR)/userdel.elf
+USER_GROUPADD = $(USER_BUILD_DIR)/groupadd.elf
+USER_GROUPDEL = $(USER_BUILD_DIR)/groupdel.elf
 # pocketmod and TinySoundFont directories
 POCKETMOD_DIR = $(THIRD_PARTY_DIR)/pocketmod
 TSF_DIR = $(THIRD_PARTY_DIR)/tsf
@@ -314,7 +322,8 @@ DASH_C_SOURCES = \
 DASH_OBJECTS = $(patsubst $(DASH_DIR)/%.c,$(DASH_BUILD_DIR)/%.o,$(DASH_C_SOURCES))
 USER_DASH = $(USER_BUILD_DIR)/dash.elf
 
-USER_BINS = $(USER_INIT) $(USER_ELIZA) $(USER_DF) $(USER_TREE) $(USER_UPTIME) $(USER_SETDATE) $(USER_PS) $(USER_TOP) $(USER_SYSVIEW) $(USER_NEOFETCH) $(USER_FONT) $(USER_THEME) $(USER_LS) $(USER_JSON) $(USER_IMG) $(USER_LOGIN) $(USER_S3LCUBE) $(USER_S3LFLY) $(USER_OLIVEDEMO) $(USER_NEXTVI) $(USER_BASIC) $(USER_ZORK) $(USER_TCC) $(USER_GBEMU) $(USER_NESEMU) $(USER_ZIP) $(USER_UNZIP) $(USER_GZIP) $(USER_BEEP) $(USER_MODPLAY) $(USER_MIDIPLAY) $(USER_CHOWN) \
+USER_BINS = $(USER_INIT) $(USER_ELIZA) $(USER_DF) $(USER_TREE) $(USER_UPTIME) $(USER_SETDATE) $(USER_PS) $(USER_TOP) $(USER_SYSVIEW) $(USER_NEOFETCH) $(USER_FONT) $(USER_THEME) $(USER_LS) $(USER_JSON) $(USER_IMG) $(USER_LOGIN) $(USER_S3LCUBE) $(USER_S3LFLY) $(USER_OLIVEDEMO) $(USER_NEXTVI) $(USER_BASIC) $(USER_ZORK) $(USER_TCC) $(USER_GBEMU) $(USER_NESEMU) $(USER_DASH) $(USER_ZIP) $(USER_UNZIP) $(USER_GZIP) $(USER_BEEP) $(USER_MODPLAY) $(USER_MIDIPLAY) $(USER_CHOWN) \
+            $(USER_USERADD) $(USER_USERDEL) $(USER_GROUPADD) $(USER_GROUPDEL) \
             $(SBASE_TOOL_BINS)
 
 # QEMU defaults
@@ -521,6 +530,19 @@ $(USER_MIDIPLAY): $(USER_RUNTIME_OBJECTS) $(USER_MIDIPLAY_OBJ) $(USER_RUNTIME_LI
 $(USER_CHOWN): $(USER_RUNTIME_OBJECTS) $(USER_CHOWN_OBJ) $(USER_RUNTIME_LIBS)
 	$(USER_LINK_CMD)
 
+# Link user management tools
+$(USER_USERADD): $(USER_RUNTIME_OBJECTS) $(USER_USERADD_OBJ) $(USER_RUNTIME_LIBS)
+	$(USER_LINK_CMD)
+
+$(USER_USERDEL): $(USER_RUNTIME_OBJECTS) $(USER_USERDEL_OBJ) $(USER_RUNTIME_LIBS)
+	$(USER_LINK_CMD)
+
+$(USER_GROUPADD): $(USER_RUNTIME_OBJECTS) $(USER_GROUPADD_OBJ) $(USER_RUNTIME_LIBS)
+	$(USER_LINK_CMD)
+
+$(USER_GROUPDEL): $(USER_RUNTIME_OBJECTS) $(USER_GROUPDEL_OBJ) $(USER_RUNTIME_LIBS)
+	$(USER_LINK_CMD)
+
 # Compile sbase sources
 $(SBASE_BUILD_DIR)/%.o: $(SBASE_DIR)/%.c | $(USER_BUILD_DIR)
 	mkdir -p $(dir $@)
@@ -662,6 +684,10 @@ $(ISO): $(KERNEL) $(USER_BINS) $(FAT_IMG) $(INITRAMFS_FILES) $(INITRAMFS_DIRS)
 	cp $(USER_MODPLAY) $(INITRAMFS_ROOT)/bin/modplay
 	cp $(USER_MIDIPLAY) $(INITRAMFS_ROOT)/bin/midiplay
 	cp $(USER_CHOWN) $(INITRAMFS_ROOT)/bin/chown
+	cp $(USER_USERADD) $(INITRAMFS_ROOT)/bin/useradd
+	cp $(USER_USERDEL) $(INITRAMFS_ROOT)/bin/userdel
+	cp $(USER_GROUPADD) $(INITRAMFS_ROOT)/bin/groupadd
+	cp $(USER_GROUPDEL) $(INITRAMFS_ROOT)/bin/groupdel
 	for b in $(SBASE_TOOLS); do cp $(SBASE_BIN_DIR)/$$b.elf $(INITRAMFS_ROOT)/bin/$$b; done
 	tar -C $(INITRAMFS_ROOT) -cf $(INITRAMFS_TAR) .
 	echo 'set timeout=0' > $(ISO_DIR)/boot/grub/grub.cfg
@@ -698,22 +724,14 @@ clean:
 	rm -rf $(FAT_IMG)
 	rm -f $(ISO)
 
-# Run in QEMU (for quick testing)
+# Run in QEMU (includes Sound Blaster 16 audio support)
 run: $(ISO)
-	qemu-system-i386 -cdrom $(ISO) -vga none -device bochs-display,xres=$(QEMU_XRES),yres=$(QEMU_YRES)
-
-# Run in QEMU with Sound Blaster 16 audio support
-run-audio: $(ISO)
 	qemu-system-i386 -cdrom $(ISO) -vga none -device bochs-display,xres=$(QEMU_XRES),yres=$(QEMU_YRES) \
 		-device sb16,audiodev=snd0 -audiodev pa,id=snd0
 
 # Run in QEMU with debug output
 debug: $(ISO)
-	qemu-system-i386 -cdrom $(ISO) -vga none -device bochs-display,xres=$(QEMU_XRES),yres=$(QEMU_YRES) -d int -no-reboot
-
-# Run in QEMU with debug and audio
-debug-audio: $(ISO)
 	qemu-system-i386 -cdrom $(ISO) -vga none -device bochs-display,xres=$(QEMU_XRES),yres=$(QEMU_YRES) \
 		-device sb16,audiodev=snd0 -audiodev pa,id=snd0 -d int -no-reboot
 
-.PHONY: all clean run run-audio debug debug-audio sysroot
+.PHONY: all clean run debug sysroot

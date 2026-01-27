@@ -505,4 +505,4 @@ This enables a productive multi-tasking environment even without a window manage
 ---
 
 *Previous: [Chapter 39: User Management](39_users.md)*
-*Next: [Chapter 41: Future Directions](32_future.md)*
+*Next: [Chapter 41: Vi Text Editor](41_vi_editor.md)*

@@ -185,22 +185,25 @@ static const char* abs_apply_posix_aliases(const char* abs, char tmp[VFS_PATH_MA
         return tmp;
     }
 
-    // For persistent aliases, use overlay semantics:
-    // Only alias if the destination exists, otherwise fall back to initramfs
-    if (abs_alias_to(abs, "/usr", "/disk/usr", tmp)) {
-        if (vfs_path_exists_raw(tmp)) return tmp;
+    // /etc -> /ram/etc (always; init populates from initramfs + /disk/etc overlay)
+    if (abs_alias_to(abs, "/etc", "/ram/etc", tmp)) {
+        return tmp;
     }
-    if (abs_alias_to(abs, "/etc", "/disk/etc", tmp)) {
-        if (vfs_path_exists_raw(tmp)) return tmp;
+
+    // For persistent aliases: if the base target directory exists on disk,
+    // always apply the alias (even for paths that don't exist yet, e.g. for creation).
+    // This allows creating files/dirs under /home, /var, etc. when disk is available.
+    if (abs_alias_to(abs, "/usr", "/disk/usr", tmp)) {
+        if (vfs_path_exists_raw("/disk/usr")) return tmp;
     }
     if (abs_alias_to(abs, "/home", "/disk/home", tmp)) {
-        if (vfs_path_exists_raw(tmp)) return tmp;
+        if (vfs_path_exists_raw("/disk/home")) return tmp;
     }
     if (abs_alias_to(abs, "/var", "/disk/var", tmp)) {
-        if (vfs_path_exists_raw(tmp)) return tmp;
+        if (vfs_path_exists_raw("/disk/var")) return tmp;
     }
     if (abs_alias_to(abs, "/root", "/disk/root", tmp)) {
-        if (vfs_path_exists_raw(tmp)) return tmp;
+        if (vfs_path_exists_raw("/disk/root")) return tmp;
     }
 
     return abs;

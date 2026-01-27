@@ -16,7 +16,7 @@
 #define TML_IMPLEMENTATION
 #include "../third_party/tsf/tml.h"
 
-#define SAMPLE_RATE 22050
+#define SAMPLE_RATE 44100
 #define BUFFER_SAMPLES 1024
 
 static void print_usage(const char* prog) {

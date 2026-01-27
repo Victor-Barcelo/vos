@@ -65,6 +65,7 @@ static void cmd_cp(const char* args);
 static void cmd_mv(const char* args);
 static void cmd_nano(const char* args);
 static void cmd_beep(const char* args);
+static void cmd_screendump(void);
 
 static void execute_command(char* input);
 
@@ -915,6 +916,8 @@ static void execute_command(char* input) {
         cmd_nano(args);
     } else if (strcmp(input, "beep") == 0) {
         cmd_beep(args);
+    } else if (strcmp(input, "screendump") == 0) {
+        cmd_screendump();
     } else {
         screen_set_color(VGA_LIGHT_RED, VGA_BLUE);
         screen_print("Unknown command: ");
@@ -954,6 +957,7 @@ static void cmd_help(void) {
     print_help_cmd("color <0-15>", "Change text color");
     print_help_cmd("basic", "Start BASIC interpreter");
     print_help_cmd("beep [freq] [ms]", "Play a tone (default: 440 Hz, 200 ms)");
+    print_help_cmd("screendump", "Dump screen to serial (for MCP/remote debug)");
     print_help_cmd("reboot", "Reboot the system");
     print_help_cmd("halt", "Halt the system");
 }
@@ -2221,6 +2225,15 @@ static void cmd_beep(const char* args) {
     }
 
     speaker_beep(freq, duration);
+}
+
+static void cmd_screendump(void) {
+    // Dump the current screen content to serial port
+    // This is used by the MCP server for fast text-mode screen capture
+    int bytes = screen_dump_to_serial();
+    screen_print("Screen dumped to serial (");
+    screen_print_dec(bytes);
+    screen_println(" bytes)");
 }
 
 static void cmd_cat(const char* args) {

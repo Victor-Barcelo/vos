@@ -3679,6 +3679,32 @@ int32_t tasking_fd_read(int32_t fd, void* dst_user, uint32_t len) {
         return (int32_t)total;
     }
 
+    // /dev/null always returns EOF (0 bytes read)
+    if (ent->kind == FD_KIND_NULL) {
+        irq_restore(irq_flags);
+        return 0;
+    }
+
+    // /dev/zero returns zeros
+    if (ent->kind == FD_KIND_ZERO) {
+        irq_restore(irq_flags);
+        // Fill buffer with zeros
+        uint8_t zero_buf[256];
+        memset(zero_buf, 0, sizeof(zero_buf));
+        uint32_t total = 0;
+        while (total < len) {
+            uint32_t chunk = len - total;
+            if (chunk > sizeof(zero_buf)) {
+                chunk = sizeof(zero_buf);
+            }
+            if (!copy_to_user((uint8_t*)dst_user + total, zero_buf, chunk)) {
+                return (total != 0) ? (int32_t)total : -EFAULT;
+            }
+            total += chunk;
+        }
+        return (int32_t)total;
+    }
+
     if (ent->kind != FD_KIND_VFS || !ent->handle) {
         irq_restore(irq_flags);
         return -EBADF;
@@ -3749,6 +3775,11 @@ int32_t tasking_fd_write(int32_t fd, const void* src_user, uint32_t len) {
             total += chunk;
         }
         return (int32_t)total;
+    }
+
+    // /dev/null and /dev/zero accept all writes (discard data)
+    if (kind == FD_KIND_NULL || kind == FD_KIND_ZERO) {
+        return (int32_t)len;  // Pretend we wrote everything
     }
 
     if (kind == FD_KIND_PIPE && ent->pipe) {
@@ -4460,6 +4491,16 @@ int32_t tasking_fd_is_readable(int32_t fd) {
             irq_restore(irq_flags);
             return 0;
 
+        case FD_KIND_NULL:
+            // /dev/null is always readable (returns EOF immediately)
+            irq_restore(irq_flags);
+            return 1;
+
+        case FD_KIND_ZERO:
+            // /dev/zero is always readable (returns zeros)
+            irq_restore(irq_flags);
+            return 1;
+
         case FD_KIND_VFS:
             // Regular files are always readable (we don't track EOF here)
             irq_restore(irq_flags);
@@ -4511,6 +4552,12 @@ int32_t tasking_fd_is_writable(int32_t fd) {
         case FD_KIND_STDERR:
         case FD_KIND_TTY:  // TTY writes like stdout
             // stdout/stderr/tty are always writable
+            irq_restore(irq_flags);
+            return 1;
+
+        case FD_KIND_NULL:
+        case FD_KIND_ZERO:
+            // /dev/null and /dev/zero are always writable (discard data)
             irq_restore(irq_flags);
             return 1;
 

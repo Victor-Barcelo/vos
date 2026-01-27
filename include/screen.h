@@ -138,4 +138,9 @@ int screen_console_count(void);
 int screen_console_active(void);
 void screen_console_switch(int console);
 
+// Dump current screen text content (for remote debugging/MCP server).
+// Writes the visible text content to serial port as plain text.
+// Returns number of characters written.
+int screen_dump_to_serial(void);
+
 #endif

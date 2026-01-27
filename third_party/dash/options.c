@@ -144,6 +144,9 @@ procargs(int argc, char **argv)
 		iflag = 1;
 	if (mflag == 2)
 		mflag = iflag;
+	/* Enable emacs editing mode for interactive shells (arrow keys for history) */
+	if (iflag && Eflag == 2)
+		Eflag = 1;
 	for (i = 0; i < NOPTS; i++)
 		if (optlist[i] == 2)
 			optlist[i] = 0;

@@ -3949,3 +3949,60 @@ void screen_console_init(void) {
     vc_active = 0;
     vc_enabled = false;
 }
+
+int screen_dump_to_serial(void) {
+    int total = 0;
+    int cols = screen_cols_value;
+    int rows = screen_rows_value;
+
+    // Output header with dimensions
+    serial_write_string("---SCREENDUMP ");
+    serial_write_dec(cols);
+    serial_write_char('x');
+    serial_write_dec(rows);
+    serial_write_string("---\n");
+    total += 20;
+
+    if (backend == SCREEN_BACKEND_FRAMEBUFFER) {
+        // Framebuffer mode - read from fb_cells array
+        for (int y = 0; y < rows; y++) {
+            for (int x = 0; x < cols; x++) {
+                fb_cell_t cell = fb_cells[y * cols + x];
+                uint8_t ch = fb_cell_ch(cell);
+                // Output printable chars, replace control chars with space
+                if (ch >= 32 && ch < 127) {
+                    serial_write_char((char)ch);
+                } else if (ch == 0) {
+                    serial_write_char(' ');
+                } else {
+                    serial_write_char(' ');
+                }
+                total++;
+            }
+            // Trim trailing spaces and output newline
+            serial_write_char('\n');
+            total++;
+        }
+    } else {
+        // VGA text mode - read from VGA buffer
+        for (int y = 0; y < rows && y < VGA_HEIGHT; y++) {
+            for (int x = 0; x < cols && x < VGA_WIDTH; x++) {
+                uint16_t entry = VGA_BUFFER[y * VGA_WIDTH + x];
+                char ch = (char)(entry & 0xFF);
+                if (ch >= 32 && ch < 127) {
+                    serial_write_char(ch);
+                } else {
+                    serial_write_char(' ');
+                }
+                total++;
+            }
+            serial_write_char('\n');
+            total++;
+        }
+    }
+
+    serial_write_string("---END SCREENDUMP---\n");
+    total += 20;
+
+    return total;
+}

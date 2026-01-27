@@ -365,6 +365,12 @@ static void mouse_irq_handler(interrupt_frame_t* frame) {
         return;
     }
 
+    // Bounds check before writing to packet buffer
+    if (packet_off >= sizeof(packet)) {
+        packet_off = 0;  // Reset on overflow (shouldn't happen)
+        return;
+    }
+
     packet[packet_off++] = b;
     if (packet_off < packet_len) {
         return;

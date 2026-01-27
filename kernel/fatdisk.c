@@ -252,7 +252,9 @@ static void fat_root_best_ts(uint16_t* out_wtime, uint16_t* out_wdate) {
         }
 
         if (changed) {
-            (void)disk_write(lba, sec);
+            if (!disk_write(lba, sec)) {
+                serial_write_string("[FATDISK] warning: timestamp update write failed\n");
+            }
             (void)ata_flush();
         }
     }
@@ -1654,7 +1656,11 @@ uint32_t fatdisk_list_dir(const char* abs_path, fatdisk_dirent_t* out, uint32_t 
                 uint8_t* e = sec + off;
                 if (e[0] == 0x00) {
                     if (dirty_sector) {
-                        wrote_any |= disk_write(lba, sec);
+                        if (!disk_write(lba, sec)) {
+                            serial_write_string("[FATDISK] warning: timestamp update write failed\n");
+                        } else {
+                            wrote_any = true;
+                        }
                     }
                     if (wrote_any) {
                         (void)ata_flush();
@@ -1707,7 +1713,11 @@ uint32_t fatdisk_list_dir(const char* abs_path, fatdisk_dirent_t* out, uint32_t 
                 count++;
             }
             if (dirty_sector) {
-                wrote_any |= disk_write(lba, sec);
+                if (!disk_write(lba, sec)) {
+                    serial_write_string("[FATDISK] warning: timestamp update write failed\n");
+                } else {
+                    wrote_any = true;
+                }
             }
         }
         if (wrote_any) {
@@ -1736,7 +1746,11 @@ uint32_t fatdisk_list_dir(const char* abs_path, fatdisk_dirent_t* out, uint32_t 
                 uint8_t* e = sec + off;
                 if (e[0] == 0x00) {
                     if (dirty_sector) {
-                        wrote_any |= disk_write(lba, sec);
+                        if (!disk_write(lba, sec)) {
+                            serial_write_string("[FATDISK] warning: timestamp update write failed\n");
+                        } else {
+                            wrote_any = true;
+                        }
                     }
                     if (wrote_any) {
                         (void)ata_flush();
@@ -1789,7 +1803,11 @@ uint32_t fatdisk_list_dir(const char* abs_path, fatdisk_dirent_t* out, uint32_t 
                 count++;
             }
             if (dirty_sector) {
-                wrote_any |= disk_write(lba, sec);
+                if (!disk_write(lba, sec)) {
+                    serial_write_string("[FATDISK] warning: timestamp update write failed\n");
+                } else {
+                    wrote_any = true;
+                }
             }
         }
 

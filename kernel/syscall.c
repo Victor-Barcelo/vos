@@ -24,6 +24,20 @@
 #define VOS_EXEC_ARG_STR_MAX 4096u
 #define VOS_EXEC_ARG_MAXBYTES (128u * 1024u)
 
+// Audio buffer protection - simple spinlock to prevent race conditions
+// when multiple tasks call SYS_AUDIO_WRITE simultaneously
+static volatile uint32_t audio_lock = 0;
+
+static void audio_lock_acquire(void) {
+    while (__sync_lock_test_and_set(&audio_lock, 1)) {
+        __asm__ volatile("pause");
+    }
+}
+
+static void audio_lock_release(void) {
+    __sync_lock_release(&audio_lock);
+}
+
 enum {
     SYS_WRITE = 0,
     SYS_EXIT = 1,
@@ -2000,15 +2014,20 @@ interrupt_frame_t* syscall_handle(interrupt_frame_t* frame) {
                 bytes = 32768;
             }
 
+            // Acquire lock to protect shared buffer from concurrent access
+            audio_lock_acquire();
+
             // Copy samples from user space (using a temporary buffer)
             static uint8_t audio_copy_buf[32768];
             if (!copy_from_user(audio_copy_buf, samples_user, bytes)) {
+                audio_lock_release();
                 frame->eax = (uint32_t)-EFAULT;
                 return frame;
             }
 
             int written = sb16_write(audio_copy_buf, bytes);
             if (written < 0) {
+                audio_lock_release();
                 frame->eax = (uint32_t)-EIO;
                 return frame;
             }
@@ -2016,6 +2035,7 @@ interrupt_frame_t* syscall_handle(interrupt_frame_t* frame) {
             // Wait for playback to complete (blocking write)
             sb16_wait();
 
+            audio_lock_release();
             frame->eax = (uint32_t)written;
             return frame;
         }

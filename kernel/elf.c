@@ -245,6 +245,16 @@ fail:
     return false;
 }
 
+// Helper to free user pages in a range on ELF load failure
+static void elf_cleanup_range(uint32_t start, uint32_t end) {
+    for (uint32_t va = start; va < end; va += PAGE_SIZE) {
+        uint32_t paddr = 0;
+        if (paging_unmap_page(va, &paddr) && paddr) {
+            pmm_free_frame(paddr);
+        }
+    }
+}
+
 bool elf_load_user_image(const uint8_t* image, uint32_t size, uint32_t* out_entry, uint32_t* out_user_esp, uint32_t* out_brk) {
     if (!image || size < sizeof(elf32_ehdr_t)) {
         return false;
@@ -257,6 +267,10 @@ bool elf_load_user_image(const uint8_t* image, uint32_t size, uint32_t* out_entr
     }
 
     uint32_t max_end = USER_BASE;
+
+    // Track mapped ranges for cleanup on failure
+    uint32_t mapped_min = 0xFFFFFFFF;
+    uint32_t mapped_max = 0;
 
     // Load PT_LOAD segments.
     for (uint16_t i = 0; i < eh->e_phnum; i++) {
@@ -271,22 +285,22 @@ bool elf_load_user_image(const uint8_t* image, uint32_t size, uint32_t* out_entr
         }
         if (ph->p_filesz > ph->p_memsz) {
             serial_write_string("[ELF] segment filesz > memsz\n");
-            return false;
+            goto fail_cleanup;
         }
         if (ph->p_offset + ph->p_filesz < ph->p_offset || ph->p_offset + ph->p_filesz > size) {
             serial_write_string("[ELF] segment out of bounds\n");
-            return false;
+            goto fail_cleanup;
         }
 
         uint32_t seg_start = ph->p_vaddr;
         uint32_t seg_end = ph->p_vaddr + ph->p_memsz;
         if (seg_end < seg_start) {
             serial_write_string("[ELF] segment overflow\n");
-            return false;
+            goto fail_cleanup;
         }
         if (seg_start < USER_BASE || seg_end > USER_LIMIT) {
             serial_write_string("[ELF] segment not in user range\n");
-            return false;
+            goto fail_cleanup;
         }
         if (seg_end > max_end) {
             max_end = seg_end;
@@ -306,11 +320,17 @@ bool elf_load_user_image(const uint8_t* image, uint32_t size, uint32_t* out_entr
             uint32_t frame = pmm_alloc_frame();
             if (frame == 0) {
                 serial_write_string("[ELF] out of frames\n");
-                return false;
+                // Free pages allocated in this segment so far
+                elf_cleanup_range(map_start, va);
+                goto fail_cleanup;
             }
             paging_map_page(va, frame, map_flags);
             memset((void*)va, 0, PAGE_SIZE);
         }
+
+        // Track this segment's range for cleanup
+        if (map_start < mapped_min) mapped_min = map_start;
+        if (map_end > mapped_max) mapped_max = map_end;
 
         // Copy initialized data.
         memcpy((void*)seg_start, image + ph->p_offset, ph->p_filesz);
@@ -326,14 +346,15 @@ bool elf_load_user_image(const uint8_t* image, uint32_t size, uint32_t* out_entr
     uint32_t user_esp = 0;
     if (!map_user_stack(&user_esp)) {
         serial_write_string("[ELF] failed to map user stack\n");
-        return false;
+        goto fail_cleanup;
     }
 
     uint32_t brk = align_up(max_end, PAGE_SIZE);
     uint32_t stack_guard_bottom = USER_STACK_TOP - (USER_STACK_PAGES + 1u) * PAGE_SIZE;
     if (brk < USER_BASE || brk > stack_guard_bottom) {
         serial_write_string("[ELF] brk collides with stack\n");
-        return false;
+        // Note: stack pages also need cleanup but map_user_stack handles its own cleanup on failure
+        goto fail_cleanup;
     }
 
     if (out_entry) {
@@ -355,4 +376,11 @@ bool elf_load_user_image(const uint8_t* image, uint32_t size, uint32_t* out_entr
     serial_write_char('\n');
 
     return true;
+
+fail_cleanup:
+    // Free all pages that were mapped during this load attempt
+    if (mapped_max > mapped_min) {
+        elf_cleanup_range(mapped_min, mapped_max);
+    }
+    return false;
 }

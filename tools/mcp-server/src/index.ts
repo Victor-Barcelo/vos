@@ -4,9 +4,11 @@
  *
  * Provides tools for Claude to interact with VOS running in QEMU:
  * - Start/stop QEMU with VOS
- * - Execute commands via serial console
+ * - Execute commands via serial console (with marker-based completion detection)
  * - Take screenshots via QMP
  * - Send keystrokes for interactive programs
+ * - Batch command execution for efficiency
+ * - Text screen dump for fast text-mode validation
  */
 
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
@@ -66,7 +68,7 @@ const TOOLS: Tool[] = [
   },
   {
     name: "vos_exec",
-    description: "Execute a command in VOS shell and return the output. Waits for command to complete.",
+    description: "Execute a command in VOS shell and return the output. Waits for command to complete using unique marker detection for reliability.",
     inputSchema: {
       type: "object",
       properties: {
@@ -80,6 +82,25 @@ const TOOLS: Tool[] = [
         },
       },
       required: ["command"],
+    },
+  },
+  {
+    name: "vos_exec_batch",
+    description: "Execute multiple commands in batch and return all outputs. More efficient than multiple vos_exec calls as it reduces round-trips.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        commands: {
+          type: "array",
+          items: { type: "string" },
+          description: "Array of commands to execute",
+        },
+        timeout: {
+          type: "number",
+          description: "Total timeout in milliseconds (default: 30000)",
+        },
+      },
+      required: ["commands"],
     },
   },
   {
@@ -111,13 +132,26 @@ const TOOLS: Tool[] = [
   },
   {
     name: "vos_screenshot",
-    description: "Take a screenshot of VOS display. Returns the file path.",
+    description: "Take a PNG screenshot of VOS display. Returns the file path. Use this for graphical applications.",
     inputSchema: {
       type: "object",
       properties: {
         filename: {
           type: "string",
           description: "Screenshot filename (default: auto-generated timestamp)",
+        },
+      },
+    },
+  },
+  {
+    name: "vos_screendump",
+    description: "Get the current text screen buffer content as plain text. Much faster than screenshot for text-mode applications. Returns the visible text on screen.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        timeout: {
+          type: "number",
+          description: "Timeout in milliseconds (default: 5000)",
         },
       },
     },
@@ -146,7 +180,7 @@ const TOOLS: Tool[] = [
   },
   {
     name: "vos_upload",
-    description: "Upload a file to VOS by writing it via shell commands (base64 encoded)",
+    description: "Upload a file to VOS by writing it via shell commands (heredoc for text, base64 for binary)",
     inputSchema: {
       type: "object",
       properties: {
@@ -171,7 +205,7 @@ class VosMcpServer {
 
   constructor() {
     this.server = new Server(
-      { name: "vos-mcp-server", version: "1.0.0" },
+      { name: "vos-mcp-server", version: "2.0.0" },
       { capabilities: { tools: {} } }
     );
 
@@ -217,6 +251,9 @@ class VosMcpServer {
       case "vos_exec":
         return this.handleExec(args);
 
+      case "vos_exec_batch":
+        return this.handleExecBatch(args);
+
       case "vos_read":
         return this.handleRead(args);
 
@@ -225,6 +262,9 @@ class VosMcpServer {
 
       case "vos_screenshot":
         return this.handleScreenshot(args);
+
+      case "vos_screendump":
+        return this.handleScreendump(args);
 
       case "vos_sendkeys":
         return this.handleSendKeys(args);
@@ -285,6 +325,31 @@ class VosMcpServer {
     return this.serial.execCommand(command, timeout);
   }
 
+  private async handleExecBatch(args: Record<string, unknown>): Promise<string> {
+    if (!this.serial.isConnected()) {
+      throw new Error("Not connected to VOS. Call vos_start first.");
+    }
+
+    const commands = args.commands as string[];
+    const timeout = (args.timeout as number) || 30000;
+
+    if (!commands || !Array.isArray(commands) || commands.length === 0) {
+      throw new Error("commands must be a non-empty array of strings");
+    }
+
+    const results = await this.serial.execBatch(commands, timeout);
+
+    // Format output
+    const output: string[] = [];
+    for (const [cmd, result] of results) {
+      output.push(`$ ${cmd}`);
+      output.push(result);
+      output.push("");
+    }
+
+    return output.join("\n").trim();
+  }
+
   private async handleRead(args: Record<string, unknown>): Promise<string> {
     if (!this.serial.isConnected()) {
       throw new Error("Not connected to VOS. Call vos_start first.");
@@ -315,6 +380,17 @@ class VosMcpServer {
     await this.qemu.screenshot(filepath);
 
     return `Screenshot saved to: ${filepath}`;
+  }
+
+  private async handleScreendump(args: Record<string, unknown>): Promise<string> {
+    if (!this.serial.isConnected()) {
+      throw new Error("Not connected to VOS. Call vos_start first.");
+    }
+
+    const timeout = (args.timeout as number) || 5000;
+
+    // Use the screendump command which outputs text screen buffer
+    return this.serial.readScreenDump(timeout);
   }
 
   private async handleSendKeys(args: Record<string, unknown>): Promise<string> {
@@ -415,7 +491,7 @@ class VosMcpServer {
   async run() {
     const transport = new StdioServerTransport();
     await this.server.connect(transport);
-    console.error("VOS MCP Server running on stdio");
+    console.error("VOS MCP Server v2.0 running on stdio");
   }
 }
 

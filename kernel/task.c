@@ -127,7 +127,9 @@ typedef enum {
     FD_KIND_STDERR = 3,
     FD_KIND_VFS = 4,
     FD_KIND_PIPE = 5,
-    FD_KIND_TTY = 6,  // /dev/tty - reads from stdin, writes to stdout
+    FD_KIND_TTY = 6,   // /dev/tty - reads from stdin, writes to stdout
+    FD_KIND_NULL = 7,  // /dev/null - discards writes, returns EOF on read
+    FD_KIND_ZERO = 8,  // /dev/zero - discards writes, returns zeros on read
 } fd_kind_t;
 
 typedef struct pipe_obj pipe_obj_t;
@@ -3046,12 +3048,21 @@ int32_t tasking_fd_open(const char* path, uint32_t flags) {
         return -EINVAL;
     }
 
-    // Handle /dev/tty as a special pseudo-device (controlling terminal)
+    // Handle /dev pseudo-devices
+    fd_kind_t dev_kind = FD_KIND_FREE;
     if (strcmp(path, "/dev/tty") == 0) {
+        dev_kind = FD_KIND_TTY;
+    } else if (strcmp(path, "/dev/null") == 0) {
+        dev_kind = FD_KIND_NULL;
+    } else if (strcmp(path, "/dev/zero") == 0) {
+        dev_kind = FD_KIND_ZERO;
+    }
+
+    if (dev_kind != FD_KIND_FREE) {
         uint32_t irq_flags = irq_save();
         for (int32_t fd = 0; fd < (int32_t)TASK_MAX_FDS; fd++) {
             if (current_task->fds[fd].kind == FD_KIND_FREE) {
-                current_task->fds[fd].kind = FD_KIND_TTY;
+                current_task->fds[fd].kind = dev_kind;
                 current_task->fds[fd].fd_flags = 0;
                 current_task->fds[fd].fl_flags = flags;
                 current_task->fds[fd].handle = NULL;

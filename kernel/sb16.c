@@ -339,7 +339,14 @@ bool sb16_is_playing(void) {
 }
 
 void sb16_wait(void) {
-    while (sb16_is_playing()) {
+    // Timeout after ~5 seconds (assumes ~1M iterations per second on typical CPU)
+    uint32_t timeout = 5000000;
+    while (sb16_is_playing() && timeout > 0) {
         __asm__ volatile("pause");
+        timeout--;
+    }
+    if (timeout == 0) {
+        serial_write_string("[SB16] wait timeout - forcing stop\n");
+        sb16_stop();
     }
 }

@@ -71,11 +71,25 @@ void timer_sleep_ms(uint32_t ms) {
         return;
     }
 
-    uint32_t whole_seconds = ms / 1000u;
-    uint32_t rem_ms = ms % 1000u;
-
-    uint32_t ticks_to_wait = whole_seconds * hz;
-    ticks_to_wait += (rem_ms * hz + 999u) / 1000u;
+    // Calculate ticks with overflow protection
+    // Formula: ticks = (ms * hz + 999) / 1000, but check for overflow first
+    uint32_t ticks_to_wait;
+    if (ms > 0xFFFFFFFFu / hz) {
+        // Would overflow 32 bits - cap at max reasonable tick count
+        ticks_to_wait = 0x7FFFFFFFu;
+    } else {
+        uint32_t product = ms * hz;
+        // Check if adding 999 would overflow
+        if (product > 0xFFFFFFFFu - 999u) {
+            ticks_to_wait = (product / 1000u) + 1u;
+        } else {
+            ticks_to_wait = (product + 999u) / 1000u;
+        }
+        // Cap at max to avoid wrap issues with target calculation
+        if (ticks_to_wait > 0x7FFFFFFFu) {
+            ticks_to_wait = 0x7FFFFFFFu;
+        }
+    }
 
     uint32_t target = timer_get_ticks() + ticks_to_wait;
 

@@ -84,6 +84,27 @@ static void el_write(EditLine *el, const char *s) {
     fflush(el->fout);
 }
 
+/* Calculate visible width of string, skipping ANSI escape sequences */
+static int visible_strlen(const char *s) {
+    if (!s) return 0;
+    int len = 0;
+    int in_escape = 0;
+    while (*s) {
+        if (in_escape) {
+            /* End of escape sequence at letter or ~ */
+            if ((*s >= 'A' && *s <= 'Z') || (*s >= 'a' && *s <= 'z') || *s == '~') {
+                in_escape = 0;
+            }
+        } else if (*s == '\033') {
+            in_escape = 1;
+        } else if ((unsigned char)*s >= 32) {
+            len++;
+        }
+        s++;
+    }
+    return len;
+}
+
 /* Refresh the line display */
 static void refresh_line(EditLine *el, const char *prompt, char *buf, int len, int pos) {
     char seq[64];
@@ -100,8 +121,8 @@ static void refresh_line(EditLine *el, const char *prompt, char *buf, int len, i
     /* Erase to end of line */
     el_write(el, "\x1b[K");
 
-    /* Move cursor to correct position */
-    int prompt_len = prompt ? strlen(prompt) : 0;
+    /* Move cursor to correct position - use visible width for ANSI prompts */
+    int prompt_len = visible_strlen(prompt);
     snprintf(seq, sizeof(seq), "\r\x1b[%dC", prompt_len + pos);
     el_write(el, seq);
 
@@ -116,7 +137,8 @@ static char *line_edit(EditLine *el, const char *prompt) {
     int hist_idx = -1;
     char saved_line[MAX_LINE_LEN] = "";
 
-    buf[0] = '\0';
+    /* Clear the entire buffer to prevent stale data issues */
+    memset(buf, 0, sizeof(buf));
 
     /* Print prompt */
     if (prompt) el_write(el, prompt);
@@ -136,6 +158,9 @@ static char *line_edit(EditLine *el, const char *prompt) {
     int inbuf_len = 0;
     int inbuf_pos = 0;
 
+    /* Track if we're in the middle of an escape sequence */
+    int in_escape = 0;  /* 0=none, 1=got ESC, 2=got ESC[ */
+
     while (1) {
         unsigned char c;
 
@@ -152,88 +177,92 @@ static char *line_edit(EditLine *el, const char *prompt) {
 
         c = inbuf[inbuf_pos++];
 
-        /* Handle escape sequences */
-        if (c == 27) {  /* ESC */
-            /* Need at least 2 more bytes for arrow keys */
-            if (inbuf_pos + 1 >= inbuf_len) {
-                /* Try to read more */
-                int extra = read(STDIN_FILENO, inbuf + inbuf_len,
-                                 sizeof(inbuf) - inbuf_len);
-                if (extra > 0) inbuf_len += extra;
+        /* State machine for escape sequences */
+        if (in_escape == 1) {
+            /* We got ESC, expecting '[' */
+            if (c == '[') {
+                in_escape = 2;
+                continue;
+            } else {
+                /* Not a CSI sequence, ignore the ESC and reprocess this char */
+                in_escape = 0;
+                /* Fall through to regular character handling */
             }
-
-            if (inbuf_pos < inbuf_len && inbuf[inbuf_pos] == '[') {
-                inbuf_pos++;
-                if (inbuf_pos < inbuf_len) {
-                    unsigned char seq1 = inbuf[inbuf_pos++];
-                    switch (seq1) {
-                        case 'A':  /* Up arrow - previous history */
-                            if (el->hist && el->hist->count > 0) {
-                                /* Save current line first time */
-                                if (hist_idx == -1) {
-                                    strncpy(saved_line, buf, sizeof(saved_line)-1);
-                                    saved_line[sizeof(saved_line)-1] = '\0';
-                                }
-                                if (hist_idx < el->hist->count - 1) {
-                                    hist_idx++;
-                                    int idx = el->hist->count - 1 - hist_idx;
-                                    strncpy(buf, el->hist->entries[idx], sizeof(buf)-1);
-                                    buf[sizeof(buf)-1] = '\0';
-                                    len = pos = strlen(buf);
-                                    refresh_line(el, prompt, buf, len, pos);
-                                }
-                            }
-                            break;
-                        case 'B':  /* Down arrow - next history */
-                            if (hist_idx > 0) {
-                                hist_idx--;
-                                int idx = el->hist->count - 1 - hist_idx;
-                                strncpy(buf, el->hist->entries[idx], sizeof(buf)-1);
-                                buf[sizeof(buf)-1] = '\0';
-                                len = pos = strlen(buf);
-                                refresh_line(el, prompt, buf, len, pos);
-                            } else if (hist_idx == 0) {
-                                hist_idx = -1;
-                                strncpy(buf, saved_line, sizeof(buf)-1);
-                                buf[sizeof(buf)-1] = '\0';
-                                len = pos = strlen(buf);
-                                refresh_line(el, prompt, buf, len, pos);
-                            }
-                            break;
-                        case 'C':  /* Right arrow */
-                            if (pos < len) {
-                                pos++;
-                                el_write(el, "\x1b[C");
-                            }
-                            break;
-                        case 'D':  /* Left arrow */
-                            if (pos > 0) {
-                                pos--;
-                                el_write(el, "\x1b[D");
-                            }
-                            break;
-                        case 'H':  /* Home */
-                            pos = 0;
+        } else if (in_escape == 2) {
+            /* We got ESC[, expecting command character */
+            in_escape = 0;  /* Reset state */
+            switch (c) {
+                case 'A':  /* Up arrow - previous history */
+                    if (el->hist && el->hist->count > 0) {
+                        /* Save current line first time */
+                        if (hist_idx == -1) {
+                            strncpy(saved_line, buf, sizeof(saved_line)-1);
+                            saved_line[sizeof(saved_line)-1] = '\0';
+                        }
+                        if (hist_idx < el->hist->count - 1) {
+                            hist_idx++;
+                            int idx = el->hist->count - 1 - hist_idx;
+                            strncpy(buf, el->hist->entries[idx], sizeof(buf)-1);
+                            buf[sizeof(buf)-1] = '\0';
+                            len = pos = strlen(buf);
                             refresh_line(el, prompt, buf, len, pos);
-                            break;
-                        case 'F':  /* End */
-                            pos = len;
-                            refresh_line(el, prompt, buf, len, pos);
-                            break;
-                        case '3':  /* Delete key (ESC [ 3 ~) */
-                            if (inbuf_pos < inbuf_len && inbuf[inbuf_pos] == '~') {
-                                inbuf_pos++;
-                                if (pos < len) {
-                                    memmove(buf + pos, buf + pos + 1, len - pos);
-                                    len--;
-                                    buf[len] = '\0';
-                                    refresh_line(el, prompt, buf, len, pos);
-                                }
-                            }
-                            break;
+                        }
                     }
-                }
+                    break;
+                case 'B':  /* Down arrow - next history */
+                    if (hist_idx > 0) {
+                        hist_idx--;
+                        int idx = el->hist->count - 1 - hist_idx;
+                        strncpy(buf, el->hist->entries[idx], sizeof(buf)-1);
+                        buf[sizeof(buf)-1] = '\0';
+                        len = pos = strlen(buf);
+                        refresh_line(el, prompt, buf, len, pos);
+                    } else if (hist_idx == 0) {
+                        hist_idx = -1;
+                        strncpy(buf, saved_line, sizeof(buf)-1);
+                        buf[sizeof(buf)-1] = '\0';
+                        len = pos = strlen(buf);
+                        refresh_line(el, prompt, buf, len, pos);
+                    }
+                    break;
+                case 'C':  /* Right arrow */
+                    if (pos < len) {
+                        pos++;
+                        el_write(el, "\x1b[C");
+                    }
+                    break;
+                case 'D':  /* Left arrow */
+                    if (pos > 0) {
+                        pos--;
+                        el_write(el, "\x1b[D");
+                    }
+                    break;
+                case 'H':  /* Home */
+                    pos = 0;
+                    refresh_line(el, prompt, buf, len, pos);
+                    break;
+                case 'F':  /* End */
+                    pos = len;
+                    refresh_line(el, prompt, buf, len, pos);
+                    break;
+                case '3':  /* Delete key (ESC [ 3 ~) */
+                    if (inbuf_pos < inbuf_len && inbuf[inbuf_pos] == '~') {
+                        inbuf_pos++;
+                        if (pos < len) {
+                            memmove(buf + pos, buf + pos + 1, len - pos);
+                            len--;
+                            buf[len] = '\0';
+                            refresh_line(el, prompt, buf, len, pos);
+                        }
+                    }
+                    break;
             }
+            continue;
+        }
+
+        /* Handle ESC - start of escape sequence */
+        if (c == 27) {
+            in_escape = 1;
             continue;
         }
 

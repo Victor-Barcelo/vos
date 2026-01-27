@@ -258,10 +258,12 @@ void* kcalloc(size_t nmemb, size_t size) {
     if (nmemb == 0 || size == 0) {
         return NULL;
     }
-    uint32_t total = (uint32_t)nmemb * (uint32_t)size;
-    if (nmemb != 0 && (total / nmemb) != (uint32_t)size) {
-        return NULL;
+    // Check for overflow BEFORE multiplication using 64-bit arithmetic
+    uint64_t total64 = (uint64_t)nmemb * (uint64_t)size;
+    if (total64 > 0xFFFFFFFFu) {
+        return NULL;  // Overflow: result doesn't fit in 32 bits
     }
+    uint32_t total = (uint32_t)total64;
     void* p = kmalloc(total);
     if (!p) {
         return NULL;

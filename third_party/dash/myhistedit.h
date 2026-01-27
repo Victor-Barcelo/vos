@@ -24,6 +24,8 @@ typedef struct {
 #define H_LAST       7
 #define H_NEXT_EVENT 8
 #define H_PREV_STR   9
+#define H_LOAD       10
+#define H_SAVE       11
 
 /* EditLine commands */
 #define EL_PROMPT    1

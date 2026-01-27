@@ -8,6 +8,7 @@
 #include "font_vga_psf2.h"
 #include "statusbar.h"
 #include "kerrno.h"
+#include "emoji.h"
 
 typedef enum {
     SCREEN_BACKEND_VGA_TEXT = 0,
@@ -456,6 +457,9 @@ static inline uint8_t fb_cell_bg(fb_cell_t cell) {
 }
 
 static fb_cell_t fb_cells[FB_MAX_COLS * FB_MAX_ROWS];
+
+// Emoji codepoint tracking (0 = no emoji, non-zero = emoji codepoint)
+static uint32_t fb_emoji_codepoints[FB_MAX_COLS * FB_MAX_ROWS];
 
 // UTF-8 decoding for framebuffer text console (so userland can print Unicode).
 typedef struct {
@@ -1981,8 +1985,72 @@ static void fb_fill_rect(uint32_t x, uint32_t y, uint32_t w, uint32_t h, uint32_
     }
 }
 
+// Render emoji sprite at cell position, scaled to fit cell size
+static void fb_render_emoji(int x, int y, uint32_t codepoint, uint32_t bg_px) {
+    const uint32_t* sprite = emoji_lookup(codepoint);
+    if (!sprite) {
+        return;
+    }
+
+    int emoji_size = emoji_get_size();
+    uint32_t base_x = fb_origin_x + (uint32_t)x * fb_font.width;
+    uint32_t base_y = fb_origin_y + (uint32_t)y * fb_font.height;
+
+    // Center emoji in cell
+    int offset_x = ((int)fb_font.width - emoji_size) / 2;
+    int offset_y = ((int)fb_font.height - emoji_size) / 2;
+    if (offset_x < 0) offset_x = 0;
+    if (offset_y < 0) offset_y = 0;
+
+    // First fill background
+    fb_fill_rect(base_x, base_y, fb_font.width, fb_font.height, bg_px);
+
+    // Then render emoji with alpha blending
+    for (int sy = 0; sy < emoji_size && (uint32_t)(offset_y + sy) < fb_font.height; sy++) {
+        for (int sx = 0; sx < emoji_size && (uint32_t)(offset_x + sx) < fb_font.width; sx++) {
+            uint32_t pixel = sprite[sy * emoji_size + sx];
+            uint8_t a = (pixel >> 24) & 0xFF;
+            uint8_t r = (pixel >> 16) & 0xFF;
+            uint8_t g = (pixel >> 8) & 0xFF;
+            uint8_t b = pixel & 0xFF;
+
+            if (a == 0) {
+                continue;  // Fully transparent
+            }
+
+            uint32_t px = base_x + (uint32_t)(offset_x + sx);
+            uint32_t py = base_y + (uint32_t)(offset_y + sy);
+
+            if (a == 255) {
+                // Fully opaque
+                uint32_t color = (r << 16) | (g << 8) | b;
+                fb_put_pixel(px, py, color);
+            } else {
+                // Alpha blend with background
+                uint8_t bg_r = (bg_px >> 16) & 0xFF;
+                uint8_t bg_g = (bg_px >> 8) & 0xFF;
+                uint8_t bg_b = bg_px & 0xFF;
+                uint8_t out_r = (uint8_t)(((uint32_t)r * a + (uint32_t)bg_r * (255u - a)) / 255u);
+                uint8_t out_g = (uint8_t)(((uint32_t)g * a + (uint32_t)bg_g * (255u - a)) / 255u);
+                uint8_t out_b = (uint8_t)(((uint32_t)b * a + (uint32_t)bg_b * (255u - a)) / 255u);
+                uint32_t color = ((uint32_t)out_r << 16) | ((uint32_t)out_g << 8) | (uint32_t)out_b;
+                fb_put_pixel(px, py, color);
+            }
+        }
+    }
+}
+
 static void fb_render_entry(int x, int y, fb_cell_t entry) {
     if (x < 0 || y < 0 || x >= screen_cols_value || y >= screen_rows_value) {
+        return;
+    }
+
+    // Check if this cell has an emoji
+    uint32_t emoji_cp = fb_emoji_codepoints[y * screen_cols_value + x];
+    if (emoji_cp != 0) {
+        uint8_t bg = fb_cell_bg(entry);
+        uint32_t bg_px = fb_color_from_xterm(bg);
+        fb_render_emoji(x, y, emoji_cp, bg_px);
         return;
     }
 
@@ -2275,9 +2343,13 @@ static void fb_scroll(void) {
     size_t row_bytes = (size_t)cols * sizeof(fb_cell_t);
     memmove(&fb_cells[top * cols], &fb_cells[(top + 1) * cols], row_bytes * (size_t)(bottom - top));
 
+    // Also scroll emoji codepoints
+    memmove(&fb_emoji_codepoints[top * cols], &fb_emoji_codepoints[(top + 1) * cols], (size_t)cols * sizeof(uint32_t) * (size_t)(bottom - top));
+
     fb_cell_t blank = fb_cell_make((uint8_t)' ', sgr_effective_fg(), sgr_effective_bg());
     for (int x = 0; x < cols; x++) {
         fb_cells[bottom * cols + x] = blank;
+        fb_emoji_codepoints[bottom * cols + x] = 0;
     }
 
     if (scrollback_view_offset == 0) {
@@ -2510,6 +2582,7 @@ void screen_clear(void) {
         for (int y = 0; y < rows; y++) {
             for (int x = 0; x < cols; x++) {
                 fb_cells[y * cols + x] = blank;
+                fb_emoji_codepoints[y * cols + x] = 0;
             }
         }
 
@@ -2862,7 +2935,15 @@ static void screen_put_codepoint(uint32_t cp) {
 
         uint8_t glyph = screen_glyph_for_codepoint(cp);
         if (backend == SCREEN_BACKEND_FRAMEBUFFER) {
-            fb_cells[cursor_y * screen_cols_value + cursor_x] = fb_cell_make(glyph, sgr_effective_fg(), sgr_effective_bg());
+            int cell_idx = cursor_y * screen_cols_value + cursor_x;
+            // Check if this is an emoji we can render
+            if (emoji_is_emoji(cp) && emoji_lookup(cp) != NULL) {
+                fb_emoji_codepoints[cell_idx] = cp;
+                fb_cells[cell_idx] = fb_cell_make((uint8_t)' ', sgr_effective_fg(), sgr_effective_bg());
+            } else {
+                fb_emoji_codepoints[cell_idx] = 0;
+                fb_cells[cell_idx] = fb_cell_make(glyph, sgr_effective_fg(), sgr_effective_bg());
+            }
             if (render_now) {
                 fb_render_cell(cursor_x, cursor_y);
             }
@@ -3115,9 +3196,28 @@ void screen_render_row(int y) {
         return;
     }
     if (backend == SCREEN_BACKEND_FRAMEBUFFER && fb_addr) {
+        // Get the background color from the first cell
+        fb_cell_t first_cell = fb_cells[y * screen_cols_value];
+        uint8_t bg = fb_cell_bg(first_cell);
+        uint32_t bg_px = fb_color_from_xterm(bg);
+
+        // Calculate row position
+        uint32_t row_y = fb_origin_y + (uint32_t)y * fb_font.height;
+        uint32_t row_h = fb_font.height;
+
+        // For the last row, extend to the actual screen bottom
+        if (y >= screen_rows_value - 1) {
+            row_h = fb_height - row_y;
+        }
+
+        // Fill entire width of framebuffer first (covers all margins)
+        fb_fill_rect(0, row_y, fb_width, row_h, bg_px);
+
+        // Then render all character cells on top
         for (int x = 0; x < screen_cols_value; x++) {
             fb_render_cell_base(x, y);
         }
+
         // Re-apply overlays if on this row
         if (!cursor_force_hidden && !cursor_vt_hidden && cursor_enabled && cursor_y == y) {
             fb_draw_cursor_overlay(cursor_x, y);

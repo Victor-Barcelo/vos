@@ -11,6 +11,11 @@
 
 #include "util.h"
 
+/* Fallback for VOS */
+#ifndef _POSIX_ARG_MAX
+#define _POSIX_ARG_MAX 4096
+#endif
+
 #define NARGS 10000
 
 static int inputc(void);

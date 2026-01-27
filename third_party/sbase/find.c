@@ -17,6 +17,11 @@
 
 #include "util.h"
 
+/* Fallback for VOS */
+#ifndef _POSIX_ARG_MAX
+#define _POSIX_ARG_MAX 4096
+#endif
+
 /* because putting integers in pointers is undefined by the standard */
 union extra {
 	void    *p;

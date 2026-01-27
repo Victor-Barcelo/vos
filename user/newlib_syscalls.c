@@ -16,6 +16,7 @@
 #include <sys/ioctl.h>
 #include <sys/mman.h>
 #include <sys/select.h>
+#include <sys/wait.h>
 #include <dirent.h>
 #include <signal.h>
 #include <reent.h>
@@ -23,6 +24,20 @@
 #include <time.h>
 #include <unistd.h>
 #include <sys/times.h>
+
+// Wait status macros - ensure these are defined
+#ifndef WIFEXITED
+#define WIFEXITED(s)   (((s) & 0x7f) == 0)
+#endif
+#ifndef WEXITSTATUS
+#define WEXITSTATUS(s) (((s) >> 8) & 0xff)
+#endif
+#ifndef WIFSIGNALED
+#define WIFSIGNALED(s) (((s) & 0x7f) != 0 && ((s) & 0x7f) != 0x7f)
+#endif
+#ifndef WTERMSIG
+#define WTERMSIG(s)    ((s) & 0x7f)
+#endif
 
 // poll.h is not in newlib, define here
 #ifndef POLLIN
@@ -3048,4 +3063,158 @@ pid_t wait3(int *status, int options, void *rusage) {
 pid_t wait4(pid_t pid, int *status, int options, void *rusage) {
     (void)rusage;  // VOS doesn't track resource usage
     return waitpid(pid, status, options);
+}
+
+// link() - create a hard link (not supported in VOS)
+int link(const char *oldpath, const char *newpath) {
+    (void)oldpath;
+    (void)newpath;
+    errno = ENOSYS;
+    return -1;
+}
+
+// execl() - execute a file with variable arguments
+int execl(const char *path, const char *arg, ...) {
+    // Count arguments
+    va_list ap;
+    int argc = 1;
+    va_start(ap, arg);
+    while (va_arg(ap, char *) != NULL) argc++;
+    va_end(ap);
+
+    // Build argv array
+    char **argv = malloc((argc + 1) * sizeof(char *));
+    if (!argv) {
+        errno = ENOMEM;
+        return -1;
+    }
+
+    argv[0] = (char *)arg;
+    va_start(ap, arg);
+    for (int i = 1; i < argc; i++) {
+        argv[i] = va_arg(ap, char *);
+    }
+    va_end(ap);
+    argv[argc] = NULL;
+
+    // execv (no PATH search)
+    int ret = execve(path, argv, environ);
+    free(argv);
+    return ret;
+}
+
+// execlp() - execute a file with PATH search
+int execlp(const char *file, const char *arg, ...) {
+    // Count arguments
+    va_list ap;
+    int argc = 1;
+    va_start(ap, arg);
+    while (va_arg(ap, char *) != NULL) argc++;
+    va_end(ap);
+
+    // Build argv array
+    char **argv = malloc((argc + 1) * sizeof(char *));
+    if (!argv) {
+        errno = ENOMEM;
+        return -1;
+    }
+
+    argv[0] = (char *)arg;
+    va_start(ap, arg);
+    for (int i = 1; i < argc; i++) {
+        argv[i] = va_arg(ap, char *);
+    }
+    va_end(ap);
+    argv[argc] = NULL;
+
+    // execvp handles PATH search
+    int ret = execvp(file, argv);
+    free(argv);
+    return ret;
+}
+
+// Track popen'd FILE* and their pids
+static struct {
+    FILE *fp;
+    pid_t pid;
+} popen_table[16];
+
+// popen() - open a pipe to a process
+FILE *popen(const char *command, const char *mode) {
+    int pfd[2];
+    if (pipe(pfd) < 0) return NULL;
+
+    pid_t pid = fork();
+    if (pid < 0) {
+        close(pfd[0]);
+        close(pfd[1]);
+        return NULL;
+    }
+
+    if (pid == 0) {
+        // Child
+        if (*mode == 'r') {
+            close(pfd[0]);
+            dup2(pfd[1], STDOUT_FILENO);
+            close(pfd[1]);
+        } else {
+            close(pfd[1]);
+            dup2(pfd[0], STDIN_FILENO);
+            close(pfd[0]);
+        }
+        execl("/bin/dash", "dash", "-c", command, (char *)NULL);
+        _exit(127);
+    }
+
+    // Parent - track pid
+    FILE *fp;
+    if (*mode == 'r') {
+        close(pfd[1]);
+        fp = fdopen(pfd[0], "r");
+    } else {
+        close(pfd[0]);
+        fp = fdopen(pfd[1], "w");
+    }
+
+    // Save in table
+    for (int i = 0; i < 16; i++) {
+        if (popen_table[i].fp == NULL) {
+            popen_table[i].fp = fp;
+            popen_table[i].pid = pid;
+            break;
+        }
+    }
+
+    return fp;
+}
+
+// pclose() - close a pipe to a process
+int pclose(FILE *stream) {
+    if (!stream) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    // Find pid for this stream
+    pid_t pid = -1;
+    for (int i = 0; i < 16; i++) {
+        if (popen_table[i].fp == stream) {
+            pid = popen_table[i].pid;
+            popen_table[i].fp = NULL;
+            break;
+        }
+    }
+
+    fclose(stream);
+
+    if (pid <= 0) {
+        return 0;
+    }
+
+    int status;
+    while (waitpid(pid, &status, 0) < 0) {
+        if (errno != EINTR) return -1;
+    }
+
+    return WIFEXITED(status) ? WEXITSTATUS(status) : -1;
 }

@@ -164,7 +164,7 @@ int main(int argc, char** argv) {
                 break;
             case 6:
                 // U+2600 sun (no variation selector)
-                printf("\xE2\x98\x80  ");
+                printf("\xE2\x98\x80 ");
                 print_key("RTC");
                 if (rtc_rc == 0) {
                     printf(": " CLR_VAL "%u-", (unsigned int)dt.year);

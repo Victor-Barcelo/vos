@@ -10,6 +10,8 @@
 #include <unistd.h>
 #include <termios.h>
 #include <errno.h>
+#include <dirent.h>
+#include <sys/stat.h>
 #include "myhistedit.h"
 
 #define MAX_HISTORY 100
@@ -103,6 +105,179 @@ static int visible_strlen(const char *s) {
         s++;
     }
     return len;
+}
+
+/* Forward declaration */
+static void refresh_line(EditLine *el, const char *prompt, char *buf, int len, int pos);
+
+/* Tab completion helper - find matches in directory */
+static int find_matches(const char *dir, const char *prefix, char **matches, int max_matches) {
+    DIR *d = opendir(dir);
+    if (!d) return 0;
+
+    int count = 0;
+    size_t prefix_len = strlen(prefix);
+    struct dirent *ent;
+
+    while ((ent = readdir(d)) != NULL && count < max_matches) {
+        /* Skip . and .. */
+        if (ent->d_name[0] == '.' && (ent->d_name[1] == '\0' ||
+            (ent->d_name[1] == '.' && ent->d_name[2] == '\0'))) {
+            continue;
+        }
+        /* Check if prefix matches */
+        if (prefix_len == 0 || strncmp(ent->d_name, prefix, prefix_len) == 0) {
+            matches[count] = strdup(ent->d_name);
+            if (matches[count]) count++;
+        }
+    }
+    closedir(d);
+    return count;
+}
+
+/* Find common prefix among matches */
+static int common_prefix_len(char **matches, int count) {
+    if (count <= 0 || !matches[0]) return 0;
+    if (count == 1) return strlen(matches[0]);
+
+    int len = 0;
+    while (1) {
+        char c = matches[0][len];
+        if (c == '\0') break;
+        int all_match = 1;
+        for (int i = 1; i < count; i++) {
+            if (matches[i][len] != c) {
+                all_match = 0;
+                break;
+            }
+        }
+        if (!all_match) break;
+        len++;
+    }
+    return len;
+}
+
+/* Free matches array */
+static void free_matches(char **matches, int count) {
+    for (int i = 0; i < count; i++) {
+        free(matches[i]);
+    }
+}
+
+/* Tab completion - returns number of characters added */
+static int do_tab_complete(EditLine *el, char *buf, int *len, int *pos, const char *prompt) {
+    #define MAX_MATCHES 64
+
+    /* Find start of current word (stop only at spaces, not slashes) */
+    int word_start = *pos;
+    while (word_start > 0 && buf[word_start - 1] != ' ') {
+        word_start--;
+    }
+
+    /* Check if this is first word (command completion) */
+    int is_command = 1;
+    for (int i = 0; i < word_start; i++) {
+        if (buf[i] != ' ') {
+            is_command = 0;
+            break;
+        }
+    }
+
+    /* Extract the prefix to complete */
+    char prefix[256];
+    int prefix_len = *pos - word_start;
+    if (prefix_len >= (int)sizeof(prefix)) prefix_len = sizeof(prefix) - 1;
+    strncpy(prefix, buf + word_start, prefix_len);
+    prefix[prefix_len] = '\0';
+
+    /* Find directory to search */
+    char dir[256] = ".";
+    char *file_prefix = prefix;
+
+    /* Check if there's a path component */
+    char *last_slash = strrchr(prefix, '/');
+    if (last_slash) {
+        int dir_len = last_slash - prefix;
+        if (dir_len == 0) {
+            strcpy(dir, "/");
+        } else {
+            strncpy(dir, prefix, dir_len);
+            dir[dir_len] = '\0';
+        }
+        file_prefix = last_slash + 1;
+        word_start = *pos - strlen(file_prefix);
+    } else if (is_command) {
+        strcpy(dir, "/bin");
+    }
+
+    /* Find matches */
+    char *matches[MAX_MATCHES];
+    int match_count = find_matches(dir, file_prefix, matches, MAX_MATCHES);
+
+    if (match_count == 0) {
+        /* No matches - beep */
+        el_write(el, "\a");
+        return 0;
+    }
+
+    int added = 0;
+    int common_len = common_prefix_len(matches, match_count);
+    int file_prefix_len = strlen(file_prefix);
+
+    if (common_len > file_prefix_len) {
+        /* Complete the common prefix */
+        int to_add = common_len - file_prefix_len;
+
+        /* Make room in buffer */
+        if (*len + to_add < MAX_LINE_LEN) {
+            memmove(buf + *pos + to_add, buf + *pos, *len - *pos + 1);
+            memcpy(buf + *pos, matches[0] + file_prefix_len, to_add);
+            *len += to_add;
+            *pos += to_add;
+            added = to_add;
+            buf[*len] = '\0';
+        }
+
+        /* If single match, check if it's a directory and add / or space */
+        if (match_count == 1) {
+            char full_path[512];
+            snprintf(full_path, sizeof(full_path), "%s/%s", dir, matches[0]);
+            struct stat st;
+            if (stat(full_path, &st) == 0) {
+                char suffix = S_ISDIR(st.st_mode) ? '/' : ' ';
+                if (*len < MAX_LINE_LEN - 1) {
+                    memmove(buf + *pos + 1, buf + *pos, *len - *pos + 1);
+                    buf[*pos] = suffix;
+                    (*len)++;
+                    (*pos)++;
+                    added++;
+                    buf[*len] = '\0';
+                }
+            }
+        }
+    }
+
+    if (match_count > 1 && added == 0) {
+        /* Multiple matches and nothing to complete - show them */
+        el_write(el, "\n");
+        for (int i = 0; i < match_count; i++) {
+            /* Check if directory */
+            char full_path[512];
+            snprintf(full_path, sizeof(full_path), "%s/%s", dir, matches[i]);
+            struct stat st;
+            if (stat(full_path, &st) == 0 && S_ISDIR(st.st_mode)) {
+                fprintf(el->fout, "%s/  ", matches[i]);
+            } else {
+                fprintf(el->fout, "%s  ", matches[i]);
+            }
+        }
+        el_write(el, "\n");
+        /* Redraw prompt and line */
+        refresh_line(el, prompt, buf, *len, *pos);
+    }
+
+    free_matches(matches, match_count);
+    return added;
 }
 
 /* Refresh the line display */
@@ -342,6 +517,13 @@ static char *line_edit(EditLine *el, const char *prompt) {
         /* Ctrl-L (clear screen) */
         if (c == 12) {
             el_write(el, "\x1b[H\x1b[2J");
+            refresh_line(el, prompt, buf, len, pos);
+            continue;
+        }
+
+        /* Tab (completion) */
+        if (c == '\t') {
+            do_tab_complete(el, buf, &len, &pos, prompt);
             refresh_line(el, prompt, buf, len, pos);
             continue;
         }

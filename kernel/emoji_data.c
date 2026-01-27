@@ -3322,6 +3322,8 @@ int emoji_is_emoji(uint32_t codepoint) {
     if (codepoint >= 0x2600 && codepoint <= 0x26FF) return 1;
     /* Dingbats */
     if (codepoint >= 0x2700 && codepoint <= 0x27BF) return 1;
+    /* Miscellaneous Symbols and Arrows (includes star U+2B50) */
+    if (codepoint >= 0x2B00 && codepoint <= 0x2BFF) return 1;
     /* Emoticons and beyond */
     if (codepoint >= 0x1F300 && codepoint <= 0x1FFFF) return 1;
     return 0;

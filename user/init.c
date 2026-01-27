@@ -240,6 +240,35 @@ int main(int argc, char** argv) {
 
     // Linux-like temp directory (mapped to RAM via the VFS alias).
     (void)mkdir("/tmp", 0777);
+
+    // Set up persistent directories on /disk for Linux-like structure
+    tag("[init] ", CLR_CYAN);
+    printf("Setting up persistent directories...\n");
+    (void)mkdir("/disk/etc", 0755);
+    (void)mkdir("/disk/home", 0755);
+    (void)mkdir("/disk/root", 0700);  // root's home (aliased from /root)
+    (void)mkdir("/disk/home/victor", 0755);
+
+    // Copy passwd to persistent storage if not present (first boot)
+    struct stat st;
+    if (stat("/disk/etc/passwd", &st) < 0) {
+        tag("[init] ", CLR_CYAN);
+        printf("First boot: copying /etc/passwd to /disk/etc/passwd\n");
+        int src = open("/etc/passwd", O_RDONLY);
+        if (src >= 0) {
+            int dst = open("/disk/etc/passwd", O_WRONLY | O_CREAT | O_TRUNC, 0644);
+            if (dst >= 0) {
+                char buf[256];
+                int n;
+                while ((n = (int)read(src, buf, sizeof(buf))) > 0) {
+                    (void)write(dst, buf, (unsigned int)n);
+                }
+                close(dst);
+            }
+            close(src);
+        }
+    }
+
     posix_selftest();
     posix_process_selftest();
 

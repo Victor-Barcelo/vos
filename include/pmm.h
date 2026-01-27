@@ -7,6 +7,7 @@
 void pmm_init(uint32_t multiboot_magic, const multiboot_info_t* mbi, uint32_t kernel_end_paddr);
 
 uint32_t pmm_alloc_frame(void);
+uint32_t pmm_alloc_frame_below(uint32_t max_paddr);  // For ISA DMA (needs < 16MB)
 void pmm_free_frame(uint32_t paddr);
 
 uint32_t pmm_total_frames(void);

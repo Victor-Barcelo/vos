@@ -150,6 +150,20 @@ static bool abs_alias_to(const char* abs, const char* mount, const char* target,
     return true;
 }
 
+// Check if a path exists (for overlay fallback logic).
+// Works with both /ram/... (ramfs) and /disk/... (fatdisk) paths.
+static bool vfs_path_exists_raw(const char* path) {
+    if (!path) return false;
+    bool is_dir;
+    // Check fatdisk for /disk/... paths
+    if (ci_starts_with(path, "/disk") && (path[5] == '/' || path[5] == '\0')) {
+        return fatdisk_stat_ex(path, &is_dir, NULL, NULL, NULL);
+    }
+    // Check ramfs for /ram/... paths
+    while (*path == '/') path++;
+    return ramfs_stat_ex(path, &is_dir, NULL, NULL, NULL);
+}
+
 // Convenience aliases so userland can use Linux-like paths while we keep the
 // actual mountpoints simple:
 //   /usr  -> /disk/usr   (toolchains, headers, libs)
@@ -157,25 +171,38 @@ static bool abs_alias_to(const char* abs, const char* mount, const char* target,
 //   /home -> /disk/home  (user homes)
 //   /var  -> /disk/var   (logs/state; optional)
 //   /tmp  -> /ram/tmp    (ephemeral scratch)
+//
+// These aliases use overlay semantics: if the destination path doesn't exist
+// in RAMFS, we fall back to the original path (which may resolve to initramfs).
+// This allows initramfs defaults to be overridden by persistent storage.
 static const char* abs_apply_posix_aliases(const char* abs, char tmp[VFS_PATH_MAX]) {
     if (!abs || !tmp) {
         return abs;
     }
-    if (abs_alias_to(abs, "/usr", "/disk/usr", tmp)) {
-        return tmp;
-    }
-    if (abs_alias_to(abs, "/etc", "/disk/etc", tmp)) {
-        return tmp;
-    }
-    if (abs_alias_to(abs, "/home", "/disk/home", tmp)) {
-        return tmp;
-    }
-    if (abs_alias_to(abs, "/var", "/disk/var", tmp)) {
-        return tmp;
-    }
+
+    // /tmp -> /ram/tmp (always, ephemeral storage)
     if (abs_alias_to(abs, "/tmp", "/ram/tmp", tmp)) {
         return tmp;
     }
+
+    // For persistent aliases, use overlay semantics:
+    // Only alias if the destination exists, otherwise fall back to initramfs
+    if (abs_alias_to(abs, "/usr", "/disk/usr", tmp)) {
+        if (vfs_path_exists_raw(tmp)) return tmp;
+    }
+    if (abs_alias_to(abs, "/etc", "/disk/etc", tmp)) {
+        if (vfs_path_exists_raw(tmp)) return tmp;
+    }
+    if (abs_alias_to(abs, "/home", "/disk/home", tmp)) {
+        if (vfs_path_exists_raw(tmp)) return tmp;
+    }
+    if (abs_alias_to(abs, "/var", "/disk/var", tmp)) {
+        if (vfs_path_exists_raw(tmp)) return tmp;
+    }
+    if (abs_alias_to(abs, "/root", "/disk/root", tmp)) {
+        if (vfs_path_exists_raw(tmp)) return tmp;
+    }
+
     return abs;
 }
 

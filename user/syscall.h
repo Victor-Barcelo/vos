@@ -179,6 +179,9 @@ enum {
     SYS_UNAME = 89,
     SYS_POLL = 90,
     SYS_BEEP = 91,
+    SYS_AUDIO_OPEN = 92,
+    SYS_AUDIO_WRITE = 93,
+    SYS_AUDIO_CLOSE = 94,
 };
 
 // For select() syscall
@@ -941,6 +944,46 @@ static inline int sys_beep(uint32_t frequency, uint32_t duration_ms) {
         "int $0x80"
         : "=a"(ret)
         : "a"(SYS_BEEP), "b"(frequency), "c"(duration_ms)
+        : "memory"
+    );
+    return ret;
+}
+
+// Audio syscalls (Sound Blaster 16)
+
+// Open audio device and set format
+// Returns handle (>0) on success, negative on error
+static inline int sys_audio_open(uint32_t sample_rate, uint8_t bits, uint8_t channels) {
+    int ret;
+    __asm__ volatile (
+        "int $0x80"
+        : "=a"(ret)
+        : "a"(SYS_AUDIO_OPEN), "b"(sample_rate), "c"(bits), "d"(channels)
+        : "memory"
+    );
+    return ret;
+}
+
+// Write PCM samples to audio device (blocking)
+// Returns number of bytes written, or negative on error
+static inline int sys_audio_write(int handle, const void* samples, uint32_t bytes) {
+    int ret;
+    __asm__ volatile (
+        "int $0x80"
+        : "=a"(ret)
+        : "a"(SYS_AUDIO_WRITE), "b"(handle), "c"(samples), "d"(bytes)
+        : "memory"
+    );
+    return ret;
+}
+
+// Close audio device
+static inline int sys_audio_close(int handle) {
+    int ret;
+    __asm__ volatile (
+        "int $0x80"
+        : "=a"(ret)
+        : "a"(SYS_AUDIO_CLOSE), "b"(handle)
         : "memory"
     );
     return ret;

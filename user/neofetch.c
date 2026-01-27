@@ -11,9 +11,8 @@
 // Theme: VOS console default is white-on-blue, so prefer bright fg colors.
 #define CLR_LOGO  "\x1b[36;1m" // bright cyan (logo)
 #define CLR_KEY   "\x1b[33;1m" // bright yellow (labels)
-#define CLR_HDR   "\x1b[37;1m" // bright white (header)
+#define CLR_VAL   "\x1b[37;1m" // bright white (values)
 #define CLR_DIM   "\x1b[37m"   // light grey (secondary)
-#define CLR_ACCENT "\x1b[35;1m" // bright magenta (accent)
 
 static void print_uptime_human(uint32_t ms) {
     uint32_t total = ms / 1000u;
@@ -54,13 +53,15 @@ int main(int argc, char** argv) {
     (void)argc;
     (void)argv;
 
+    // New cleaner ASCII art logo
     static const char* const logo[] = {
-        " _    __  ____   _____ ",
-        "| |  / / / __ \\ / ____|",
-        "| | / / | |  | | (___  ",
-        "| |/ /  | |  | |\\___ \\ ",
-        "|   <   | |__| |____) |",
-        "|_|\\_\\   \\____/|_____/ ",
+        "        __     _____  ____   _____ ",
+        "        \\ \\   / / _ \\/ ___| / ____|",
+        "         \\ \\ / / | | \\___ \\| (___  ",
+        "          \\ V /| | | |___) |\\___ \\ ",
+        "           \\_/ | |_| |____/ |____) |",
+        "               \\___/       |_____/ ",
+        "",
     };
     const int logo_lines = (int)(sizeof(logo) / sizeof(logo[0]));
 
@@ -94,11 +95,7 @@ int main(int argc, char** argv) {
     int tasks = sys_task_count();
     if (tasks < 0) tasks = 0;
 
-    // "Emoji-like" symbols. Full Unicode emoji (e.g. U+1F680 🚀) aren't available
-    // in our current 256-glyph PSF2 fonts / 8-bit cell storage.
-    const char* mood = "☺ ☼ ♦ ♠ ♣";
-
-    const int info_lines = 14;
+    const int info_lines = 10;
     int lines = (logo_lines > info_lines) ? logo_lines : info_lines;
 
     for (int line = 0; line < lines; line++) {
@@ -107,72 +104,63 @@ int main(int argc, char** argv) {
 
         printf(CLR_LOGO "%s" CLR_RESET, l);
         for (int i = l_len; i < logo_width; i++) putchar(' ');
-        putchar(' ');
-        putchar(' ');
+        printf("  ");
 
         switch (line) {
             case 0:
-                printf(CLR_HDR "user@vos" CLR_RESET " " CLR_ACCENT "%s" CLR_RESET "\n", mood);
+                printf("💻 ");
+                print_key("OS");
+                printf(": " CLR_VAL "VOS 0.1.0" CLR_RESET " (i386)\n");
                 break;
             case 1:
-                printf(CLR_DIM "----------" CLR_RESET "\n");
+                printf("🔥 ");
+                print_key("Kernel");
+                printf(": " CLR_VAL "VOS kernel" CLR_RESET " (Multiboot1)\n");
                 break;
             case 2:
-                print_key("OS");
-                printf(": VOS 0.1.0 (i386)\n");
-                break;
-            case 3:
-                print_key("Kernel");
-                printf(": VOS kernel (Multiboot1)\n");
-                break;
-            case 4:
+                printf("⭐ ");
                 print_key("Display");
                 if (ws.ws_xpixel && ws.ws_ypixel) {
-                    printf(": %ux%u (%ux%u cells)\n",
+                    printf(": " CLR_VAL "%ux%u" CLR_RESET " (%ux%u cells)\n",
                            (unsigned int)ws.ws_xpixel, (unsigned int)ws.ws_ypixel,
                            (unsigned int)ws.ws_col, (unsigned int)ws.ws_row);
                 } else if (ws.ws_col && ws.ws_row) {
-                    printf(": %ux%u cells\n", (unsigned int)ws.ws_col, (unsigned int)ws.ws_row);
+                    printf(": " CLR_VAL "%ux%u cells" CLR_RESET "\n",
+                           (unsigned int)ws.ws_col, (unsigned int)ws.ws_row);
+                } else {
+                    printf(": unknown\n");
+                }
+                break;
+            case 3:
+                printf("🚀 ");
+                print_key("Uptime");
+                printf(": " CLR_VAL);
+                print_uptime_human(sys_uptime_ms());
+                printf(CLR_RESET "\n");
+                break;
+            case 4:
+                printf("💡 ");
+                print_key("Memory");
+                if (mem_kb) {
+                    printf(": " CLR_VAL "%lu MB" CLR_RESET "\n", (unsigned long)(mem_kb / 1024u));
                 } else {
                     printf(": unknown\n");
                 }
                 break;
             case 5:
-                print_key("Cell");
-                if (ws.ws_xpixel && ws.ws_ypixel && ws.ws_col && ws.ws_row) {
-                    unsigned int cw = (unsigned int)(ws.ws_xpixel / ws.ws_col);
-                    unsigned int ch = (unsigned int)(ws.ws_ypixel / ws.ws_row);
-                    printf(": ~%ux%u px\n", cw, ch);
+                printf("🏆 ");
+                print_key("CPU");
+                if (cpu && cpu[0]) {
+                    printf(": " CLR_VAL "%s" CLR_RESET "\n", cpu);
                 } else {
                     printf(": unknown\n");
                 }
                 break;
             case 6:
-                print_key("Uptime");
-                printf(": ");
-                print_uptime_human(sys_uptime_ms());
-                putchar('\n');
-                break;
-            case 7:
-                print_key("Memory");
-                if (mem_kb) {
-                    printf(": %lu MB\n", (unsigned long)(mem_kb / 1024u));
-                } else {
-                    printf(": unknown\n");
-                }
-                break;
-            case 8:
-                print_key("CPU");
-                if (cpu && cpu[0]) {
-                    printf(": %s\n", cpu);
-                } else {
-                    printf(": unknown\n");
-                }
-                break;
-            case 9:
+                printf("☀️  ");
                 print_key("RTC");
                 if (rtc_rc == 0) {
-                    printf(": %u-", (unsigned int)dt.year);
+                    printf(": " CLR_VAL "%u-", (unsigned int)dt.year);
                     print_2d(dt.month);
                     putchar('-');
                     print_2d(dt.day);
@@ -182,33 +170,21 @@ int main(int argc, char** argv) {
                     print_2d(dt.minute);
                     putchar(':');
                     print_2d(dt.second);
-                    putchar('\n');
+                    printf(CLR_RESET "\n");
                 } else {
                     errno = -rtc_rc;
                     printf(": unavailable (%s)\n", strerror(errno));
                 }
                 break;
-            case 10:
+            case 7:
+                printf("✅ ");
                 print_key("VFS");
-                printf(": %d files\n", vfs_files);
+                printf(": " CLR_VAL "%d files" CLR_RESET "\n", vfs_files);
                 break;
-            case 11:
+            case 8:
+                printf("⚡ ");
                 print_key("Tasks");
-                printf(": %d\n", tasks);
-                break;
-            case 12:
-                print_key("Symbols");
-                printf(": " CLR_ACCENT "%s" CLR_RESET "\n", mood);
-                break;
-            case 13:
-                print_key("Colors");
-                printf(": ");
-                // 16-color palette (background blocks).
-                fputs("\x1b[40m  \x1b[41m  \x1b[42m  \x1b[43m  \x1b[44m  \x1b[45m  \x1b[46m  \x1b[47m  "
-                      "\x1b[100m  \x1b[101m  \x1b[102m  \x1b[103m  \x1b[104m  \x1b[105m  \x1b[106m  \x1b[107m  "
-                      CLR_RESET,
-                      stdout);
-                putchar('\n');
+                printf(": " CLR_VAL "%d" CLR_RESET "\n", tasks);
                 break;
             default:
                 putchar('\n');

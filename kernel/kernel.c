@@ -22,6 +22,8 @@
 #include "string.h"
 #include "statusbar.h"
 #include "speaker.h"
+#include "dma.h"
+#include "sb16.h"
 
 // Multiboot magic number
 #define MULTIBOOT_MAGIC 0x2BADB002
@@ -274,6 +276,9 @@ void kernel_main(uint32_t magic, uint32_t* mboot_info) {
     mouse_init();
 
     speaker_init();
+
+    dma_init();
+    sb16_init();
 
     tasking_init();
 

@@ -17,6 +17,7 @@
 #include "keyboard.h"
 #include "serial.h"
 #include "speaker.h"
+#include "sb16.h"
 
 // Keep syscall argv marshalling bounded (argv strings are copied into
 // kernel memory before switching address spaces for exec/spawn).
@@ -116,7 +117,10 @@ enum {
     SYS_UNAME = 89,
     SYS_POLL = 90,
     SYS_BEEP = 91,
-    SYS_MAX = 92,
+    SYS_AUDIO_OPEN = 92,
+    SYS_AUDIO_WRITE = 93,
+    SYS_AUDIO_CLOSE = 94,
+    SYS_MAX = 95,
 };
 
 // Syscall counters - track how many times each syscall is invoked
@@ -216,6 +220,9 @@ static const char* syscall_names[SYS_MAX] = {
     [SYS_UNAME] = "uname",
     [SYS_POLL] = "poll",
     [SYS_BEEP] = "beep",
+    [SYS_AUDIO_OPEN] = "audio_open",
+    [SYS_AUDIO_WRITE] = "audio_write",
+    [SYS_AUDIO_CLOSE] = "audio_close",
 };
 
 typedef struct vos_task_info_user {
@@ -1941,6 +1948,88 @@ interrupt_frame_t* syscall_handle(interrupt_frame_t* frame) {
             uint32_t freq = frame->ebx;
             uint32_t duration_ms = frame->ecx;
             speaker_beep(freq, duration_ms);
+            frame->eax = 0;
+            return frame;
+        }
+
+        // audio_open(sample_rate, bits, channels)
+        case SYS_AUDIO_OPEN: {
+            uint32_t sample_rate = frame->ebx;
+            uint8_t bits = (uint8_t)frame->ecx;
+            uint8_t channels = (uint8_t)frame->edx;
+
+            if (!sb16_detected()) {
+                frame->eax = (uint32_t)-ENODEV;
+                return frame;
+            }
+
+            int ret = sb16_set_format(sample_rate, bits, channels);
+            if (ret < 0) {
+                frame->eax = (uint32_t)-EINVAL;
+                return frame;
+            }
+
+            // Return a handle (just 1 for now, single audio device)
+            frame->eax = 1;
+            return frame;
+        }
+
+        // audio_write(handle, samples, bytes)
+        case SYS_AUDIO_WRITE: {
+            int32_t handle = (int32_t)frame->ebx;
+            const void* samples_user = (const void*)frame->ecx;
+            uint32_t bytes = frame->edx;
+
+            if (handle != 1) {
+                frame->eax = (uint32_t)-EBADF;
+                return frame;
+            }
+
+            if (!sb16_detected()) {
+                frame->eax = (uint32_t)-ENODEV;
+                return frame;
+            }
+
+            if (!samples_user || bytes == 0) {
+                frame->eax = (uint32_t)-EINVAL;
+                return frame;
+            }
+
+            // Limit write size
+            if (bytes > 32768) {
+                bytes = 32768;
+            }
+
+            // Copy samples from user space (using a temporary buffer)
+            static uint8_t audio_copy_buf[32768];
+            if (!copy_from_user(audio_copy_buf, samples_user, bytes)) {
+                frame->eax = (uint32_t)-EFAULT;
+                return frame;
+            }
+
+            int written = sb16_write(audio_copy_buf, bytes);
+            if (written < 0) {
+                frame->eax = (uint32_t)-EIO;
+                return frame;
+            }
+
+            // Wait for playback to complete (blocking write)
+            sb16_wait();
+
+            frame->eax = (uint32_t)written;
+            return frame;
+        }
+
+        // audio_close(handle)
+        case SYS_AUDIO_CLOSE: {
+            int32_t handle = (int32_t)frame->ebx;
+
+            if (handle != 1) {
+                frame->eax = (uint32_t)-EBADF;
+                return frame;
+            }
+
+            sb16_stop();
             frame->eax = 0;
             return frame;
         }

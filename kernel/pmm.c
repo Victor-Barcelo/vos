@@ -242,6 +242,33 @@ uint32_t pmm_alloc_frame(void) {
     return 0;
 }
 
+// Allocate a frame below max_paddr (for ISA DMA which needs < 16MB)
+uint32_t pmm_alloc_frame_below(uint32_t max_paddr) {
+    pmm_reserve_new_early_alloc();
+
+    if (frames_total == 0 || max_paddr < PAGE_SIZE) {
+        return 0;
+    }
+
+    uint32_t max_frame = max_paddr / PAGE_SIZE;
+    if (max_frame > frames_total) {
+        max_frame = frames_total;
+    }
+
+    // Search from just below max_paddr downwards to find a free frame
+    for (uint32_t frame = max_frame; frame > 0; frame--) {
+        uint32_t f = frame - 1;
+        if (!bitmap_test(f)) {
+            mark_frame_used(f);
+            alloc_count++;
+            return f * PAGE_SIZE;
+        }
+    }
+
+    fail_count++;
+    return 0;
+}
+
 void pmm_free_frame(uint32_t paddr) {
     uint32_t frame = paddr / PAGE_SIZE;
     mark_frame_free(frame);

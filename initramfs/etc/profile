@@ -26,6 +26,9 @@ export PS1
 ll() { ls -la "$@"; }
 la() { ls -a "$@"; }
 
+# Load user's default font (if saved)
+font load 2>/dev/null
+
 # Welcome message on login
 echo ""
 echo "  Welcome to VOS"

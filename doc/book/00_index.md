@@ -216,6 +216,13 @@
     - Writing Code with Heredoc
     - Architecture and Troubleshooting
 
+36. [Emoji Support](36_emoji.md)
+    - Supported Emoji (89 color emoji)
+    - Implementation Details
+    - Alpha Blending and Double-Width Cells
+    - Using Emoji in Programs
+    - Generating Emoji Data
+
 ---
 
 ## About This Documentation

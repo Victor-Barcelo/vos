@@ -8,6 +8,8 @@
 
 #include "syscall.h"
 
+// VFS has overlay semantics: /etc/passwd prefers /disk/etc/passwd,
+// falling back to initramfs if not found
 #define PASSWD_PATH "/etc/passwd"
 
 typedef struct user_entry {

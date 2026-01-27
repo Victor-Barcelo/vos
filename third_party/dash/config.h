@@ -60,14 +60,14 @@
 /* BSD compatibility - enables sys/wait.h and related includes */
 #define BSD 1
 
-/* Use small/minimal build - disables history editing (libedit) */
-#define SMALL 1
+/* Enable history editing using VOS linenoise-based libedit compatibility */
+#undef SMALL
 
 /* Line number tracking in scripts */
 #define WITH_LINENO 1
 
-/* No libedit - disable history editing */
-#undef WITH_LIBEDIT
+/* Use our VOS-specific libedit compatibility layer (myhistedit.h) */
+#define WITH_LIBEDIT 1
 
 /* Disable mempcpy since newlib may not have it */
 #undef HAVE_MEMPCPY
@@ -76,6 +76,7 @@
 #define _PATH_BSHELL "/bin/sh"
 #define _PATH_DEVNULL "/dev/null"
 #define _PATH_TTY "/dev/tty"
+#define _PATH_TMP "/tmp/"
 
 /* Integer sizes for arithmetic */
 #define SIZEOF_INTMAX_T 4

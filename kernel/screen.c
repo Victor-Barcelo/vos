@@ -3117,6 +3117,34 @@ void screen_fill_row(int y, char c, uint8_t color) {
     }
 }
 
+void screen_fill_row_full(int y, char c, uint8_t color) {
+    // First fill the character cells
+    screen_fill_row(y, c, color);
+
+    // In framebuffer mode, also fill the entire pixel row to cover margins
+    if (backend == SCREEN_BACKEND_FRAMEBUFFER && fb_addr) {
+        uint8_t bg_vga = (uint8_t)((color >> 4) & 0x0Fu);
+        uint32_t bg_px = fb_color_from_vga(bg_vga);
+
+        // Calculate pixel row position (accounting for origin offset)
+        uint32_t row_y = fb_origin_y + (uint32_t)y * fb_font.height;
+        uint32_t row_h = fb_font.height;
+
+        // For the last row, extend all the way to actual screen bottom pixel
+        if (y >= screen_rows_value - 1) {
+            row_h = fb_height - row_y;
+        }
+
+        // Fill entire width of framebuffer (from 0 to fb_width)
+        fb_fill_rect(0, row_y, fb_width, row_h, bg_px);
+
+        // Re-render the text cells on top
+        for (int x = 0; x < screen_cols_value; x++) {
+            fb_render_cell(x, y);
+        }
+    }
+}
+
 void screen_cursor_set_enabled(bool enabled) {
     cursor_enabled = enabled;
     update_cursor();

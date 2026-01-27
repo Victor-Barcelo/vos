@@ -73,6 +73,7 @@ void screen_set_reserved_bottom_rows(int rows);
 void screen_write_char_at(int x, int y, char c, uint8_t color);
 void screen_write_string_at(int x, int y, const char* str, uint8_t color);
 void screen_fill_row(int y, char c, uint8_t color);
+void screen_fill_row_full(int y, char c, uint8_t color);  // Fills entire pixel row including margins
 
 // Enable/disable the VGA hardware cursor.
 void screen_cursor_set_enabled(bool enabled);

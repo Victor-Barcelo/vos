@@ -1,0 +1,39 @@
+# /etc/profile - System-wide shell configuration for VOS
+# This file is read by dash on login
+
+# Set up PATH
+export PATH="/bin:/usr/bin"
+
+# Set default editor
+export EDITOR="vi"
+
+# History settings
+export HISTSIZE=100
+
+# Terminal type
+export TERM="vt100"
+
+# Simple colored prompt - dash doesn't support \u, \w escapes like bash
+# Use a static prompt instead
+PS1='vos$ '
+export PS1
+
+# PS2 for continuation
+PS2='> '
+export PS2
+
+# Useful aliases (dash supports these via functions since alias may not work)
+ll() { ls -la "$@"; }
+la() { ls -a "$@"; }
+l() { ls -l "$@"; }
+
+# Welcome message on login
+echo ""
+echo "Welcome to VOS - POSIX shell (dash)"
+echo "Type 'help' for built-in commands"
+echo ""
+
+# Source user profile if it exists
+if [ -f "$HOME/.profile" ]; then
+    . "$HOME/.profile"
+fi

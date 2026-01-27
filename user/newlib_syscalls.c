@@ -85,6 +85,9 @@ const char * const sys_siglist[NSIG] = {
     [31] = "Bad system call",
 };
 
+// BSD-style optreset for getopt() - used by dash shell
+int optreset = 0;
+
 ssize_t getdelim(char** lineptr, size_t* n, int delim, FILE* stream) {
     return __getdelim(lineptr, n, delim, stream);
 }

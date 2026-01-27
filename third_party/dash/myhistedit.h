@@ -1,38 +1,56 @@
-/*-
- * Copyright (c) 1993
- *	The Regents of the University of California.  All rights reserved.
- * Copyright (c) 1997-2005
- *	Herbert Xu <herbert@gondor.apana.org.au>.  All rights reserved.
- *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions
- * are met:
- * 1. Redistributions of source code must retain the above copyright
- *    notice, this list of conditions and the following disclaimer.
- * 2. Redistributions in binary form must reproduce the above copyright
- *    notice, this list of conditions and the following disclaimer in the
- *    documentation and/or other materials provided with the distribution.
- * 3. Neither the name of the University nor the names of its contributors
- *    may be used to endorse or promote products derived from this software
- *    without specific prior written permission.
- *
- * THIS SOFTWARE IS PROVIDED BY THE REGENTS AND CONTRIBUTORS ``AS IS'' AND
- * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
- * ARE DISCLAIMED.  IN NO EVENT SHALL THE REGENTS OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
- * OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
- * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
- * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
- * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
- * SUCH DAMAGE.
- *
- *	@(#)myhistedit.h	8.2 (Berkeley) 5/4/95
+/*
+ * VOS-specific libedit compatibility layer using linenoise
+ * Provides minimal EditLine/History API for dash shell
  */
 
-#include <histedit.h>
+#ifndef MYHISTEDIT_H
+#define MYHISTEDIT_H
 
+#include <stdio.h>
+
+/* History event structure */
+typedef struct {
+    int num;
+    const char *str;
+} HistEvent;
+
+/* History commands */
+#define H_SETSIZE    1
+#define H_ENTER      2
+#define H_APPEND     3
+#define H_FIRST      4
+#define H_NEXT       5
+#define H_PREV       6
+#define H_LAST       7
+#define H_NEXT_EVENT 8
+#define H_PREV_STR   9
+
+/* EditLine commands */
+#define EL_PROMPT    1
+#define EL_EDITOR    2
+#define EL_HIST      3
+#define EL_TERMINAL  4
+
+/* Opaque types */
+typedef struct vos_editline EditLine;
+typedef struct vos_history History;
+
+/* History functions */
+History *history_init(void);
+void history_end(History *h);
+int history(History *h, HistEvent *ev, int op, ...);
+
+/* EditLine functions */
+EditLine *el_init(const char *prog, FILE *fin, FILE *fout, FILE *ferr);
+void el_end(EditLine *el);
+const char *el_gets(EditLine *el, int *count);
+int el_set(EditLine *el, int op, ...);
+int el_source(EditLine *el, const char *file);
+
+/* Prompt callback type */
+typedef char *(*el_pfunc_t)(EditLine *);
+
+/* Dash externs */
 extern History *hist;
 extern EditLine *el;
 extern int displayhist;
@@ -44,3 +62,4 @@ int histcmd(int, char **);
 int not_fcnumber(char *);
 int str_to_event(const char *, int);
 
+#endif /* MYHISTEDIT_H */

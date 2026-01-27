@@ -348,7 +348,8 @@ DASH_C_SOURCES = \
 	$(DASH_DIR)/var.c \
 	$(DASH_DIR)/bltin/printf.c \
 	$(DASH_DIR)/bltin/test.c \
-	$(DASH_DIR)/bltin/times.c
+	$(DASH_DIR)/bltin/times.c \
+	$(DASH_DIR)/vos_editline.c
 
 DASH_OBJECTS = $(patsubst $(DASH_DIR)/%.c,$(DASH_BUILD_DIR)/%.o,$(DASH_C_SOURCES))
 USER_DASH = $(USER_BUILD_DIR)/dash.elf
@@ -502,10 +503,10 @@ $(DASH_BUILD_DIR)/%.o: $(DASH_DIR)/%.c | $(USER_BUILD_DIR)
 	mkdir -p $(dir $@)
 	$(CC) -ffreestanding -fno-stack-protector -fno-pie -Wall -Wno-unused-parameter -Wno-sign-compare -O2 \
 		-DHAVE_CONFIG_H -DSHELL -include $(DASH_DIR)/config.h \
-		-I$(USER_DIR) -I$(DASH_DIR) -c $< -o $@
+		-I$(USER_DIR) -I$(DASH_DIR) -I$(THIRD_PARTY_DIR)/linenoise -c $< -o $@
 
-# Link dash shell
-$(USER_DASH): $(USER_RUNTIME_OBJECTS) $(DASH_OBJECTS) $(USER_RUNTIME_LIBS)
+# Link dash shell (includes linenoise for history/editing)
+$(USER_DASH): $(USER_RUNTIME_OBJECTS) $(DASH_OBJECTS) $(USER_LINENOISE_OBJ) $(USER_RUNTIME_LIBS)
 	$(USER_LINK_CMD)
 
 # Link userland uptime/date/setdate/ps/top (static, freestanding)

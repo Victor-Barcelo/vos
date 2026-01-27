@@ -1,5 +1,5 @@
 // Example: StateMachine.h - Event-Driven State Machine
-// Compile: tcc ex_StateMachine.c ../StateMachine.c -o ex_StateMachine
+// Compile: tcc ex_StateMachine.c -o ex_StateMachine
 // Note: Uses DataTypes.h and Fault.h stubs from gameResources
 
 #include <stdio.h>

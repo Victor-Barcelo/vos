@@ -5,6 +5,7 @@
 
 #include <math.h>
 #include <stdio.h>
+#include <stdbool.h>
 
 #define SR_RESOLVE_MAX(x, y) (x > y ? x : y)
 #define SR_RESOLVE_MIN(x, y) (x > y ? y : x)

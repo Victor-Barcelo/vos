@@ -11,11 +11,16 @@ static bool sb16_present = false;
 static uint16_t dsp_version = 0;
 static sb16_format_t current_format = {44100, 16, 2};
 
-// Double buffering for audio
-#define AUDIO_BUFFER_SIZE 32768  // 32KB per buffer
+// Double buffering for gapless audio playback
+// We use a single DMA buffer split into two halves (ping-pong)
+#define AUDIO_BUFFER_SIZE 32768  // Total buffer: 32KB (16KB per half)
+#define AUDIO_HALF_SIZE   (AUDIO_BUFFER_SIZE / 2)
+
 static dma_buffer_t* audio_buffer = NULL;
-static volatile bool buffer_ready = true;
+static volatile int current_half = 0;      // Which half is being played (0 or 1)
+static volatile bool half_ready[2] = {true, true};  // Which halves need data
 static volatile bool playing = false;
+static volatile bool auto_init_active = false;
 static volatile uint32_t irq_count = 0;
 
 // Wait for DSP to be ready for writing
@@ -40,7 +45,7 @@ static bool dsp_write(uint8_t value) {
 // Wait for DSP to have data available
 static bool dsp_read_ready(void) {
     for (int i = 0; i < 10000; i++) {
-        if (inb(SB_DSP_READ - 4 + 0x0E) & 0x80) {  // Read status at 0x22E
+        if (inb(SB_BASE + 0x0E) & 0x80) {  // Read status at 0x22E
             return true;
         }
     }
@@ -84,12 +89,17 @@ static bool dsp_reset(void) {
     return false;
 }
 
-// IRQ handler for SB16
+// IRQ handler for SB16 - called when a buffer half finishes playing
 static void sb16_irq_handler(interrupt_frame_t* frame) {
     (void)frame;
 
     irq_count++;
-    buffer_ready = true;
+
+    // Mark the half that just finished as needing new data
+    half_ready[current_half] = true;
+
+    // Switch to the other half
+    current_half = 1 - current_half;
 
     // Acknowledge the interrupt
     if (current_format.bits == 16) {
@@ -97,8 +107,6 @@ static void sb16_irq_handler(interrupt_frame_t* frame) {
     } else {
         inb(SB_DSP_INTR_ACK);
     }
-
-    serial_write_string("[SB16] IRQ\n");
 }
 
 int sb16_init(void) {
@@ -130,13 +138,16 @@ int sb16_init(void) {
         return -1;
     }
 
-    // Allocate DMA buffer
+    // Allocate DMA buffer (will be split into two halves)
     audio_buffer = dma_alloc_buffer(AUDIO_BUFFER_SIZE);
     if (!audio_buffer) {
         serial_write_string("[SB16] Failed to allocate DMA buffer\n");
         sb16_present = false;
         return -1;
     }
+
+    // Clear the buffer
+    memset(audio_buffer->virtual_addr, 0, AUDIO_BUFFER_SIZE);
 
     // Register IRQ handler
     irq_register_handler(SB_DEFAULT_IRQ, sb16_irq_handler);
@@ -159,7 +170,7 @@ int sb16_init(void) {
     dsp_write(DSP_CMD_SPEAKER_ON);
 
     sb16_present = true;
-    serial_write_string("[SB16] Initialization complete\n");
+    serial_write_string("[SB16] Initialization complete (double-buffered)\n");
 
     return 0;
 }
@@ -189,6 +200,11 @@ int sb16_set_format(uint32_t sample_rate, uint8_t bits, uint8_t channels) {
         return -1;
     }
 
+    // Stop any current playback before changing format
+    if (auto_init_active) {
+        sb16_stop();
+    }
+
     current_format.sample_rate = sample_rate;
     current_format.bits = bits;
     current_format.channels = channels;
@@ -209,87 +225,115 @@ int sb16_set_format(uint32_t sample_rate, uint8_t bits, uint8_t channels) {
     return 0;
 }
 
+// Start auto-init DMA playback
+static void start_auto_init_playback(void) {
+    if (auto_init_active) {
+        return;
+    }
+
+    uint8_t dma_channel;
+    uint8_t dma_mode;
+
+    // Set up DMA for auto-init mode on full buffer
+    if (current_format.bits == 16) {
+        dma_channel = SB_DEFAULT_DMA_16;
+        dma_mode = DMA_MODE_SINGLE | DMA_MODE_READ | DMA_MODE_AUTO;
+    } else {
+        dma_channel = SB_DEFAULT_DMA_8;
+        dma_mode = DMA_MODE_SINGLE | DMA_MODE_READ | DMA_MODE_AUTO;
+    }
+
+    // Program DMA for the full buffer (auto-init will loop it)
+    uint16_t count = (uint16_t)(AUDIO_BUFFER_SIZE - 1);
+    dma_setup_transfer(dma_channel, audio_buffer->physical_addr, count, dma_mode);
+    dma_start(dma_channel);
+
+    // Program DSP for auto-init playback
+    // The DSP will generate an IRQ every HALF_SIZE bytes
+    uint8_t cmd;
+    uint8_t mode = 0;
+    uint16_t sample_count;
+
+    if (current_format.bits == 16) {
+        cmd = DSP_CMD_PLAY_16;
+        mode = DSP_FORMAT_SIGNED;
+        if (current_format.channels == 2) {
+            mode |= DSP_FORMAT_STEREO;
+        }
+        // Count is per-half, in sample frames
+        sample_count = (AUDIO_HALF_SIZE / (current_format.channels * 2)) - 1;
+    } else {
+        cmd = DSP_CMD_PLAY_8;
+        mode = DSP_FORMAT_UNSIGNED;
+        if (current_format.channels == 2) {
+            mode |= DSP_FORMAT_STEREO;
+        }
+        sample_count = (AUDIO_HALF_SIZE / current_format.channels) - 1;
+    }
+
+    // Use auto-init mode (DSP_MODE_AUTO) with FIFO
+    dsp_write(cmd | DSP_MODE_FIFO | DSP_MODE_AUTO);
+    dsp_write(mode);
+    dsp_write((uint8_t)(sample_count & 0xFF));
+    dsp_write((uint8_t)(sample_count >> 8));
+
+    auto_init_active = true;
+    playing = true;
+    current_half = 0;
+}
+
 int sb16_write(const void* samples, uint32_t bytes) {
     if (!sb16_present || !audio_buffer || !samples || bytes == 0) {
         return -1;
     }
 
-    // Limit to buffer size
-    if (bytes > AUDIO_BUFFER_SIZE) {
-        bytes = AUDIO_BUFFER_SIZE;
+    // Limit to half buffer size (we fill one half at a time)
+    if (bytes > AUDIO_HALF_SIZE) {
+        bytes = AUDIO_HALF_SIZE;
     }
 
-    // Wait for buffer to be ready
-    while (!buffer_ready) {
-        // Could add timeout here
+    // Find a ready half to fill
+    int target_half = -1;
+
+    // Wait for a half to be ready
+    uint32_t timeout = 1000000;
+    while (timeout > 0) {
+        if (half_ready[0]) {
+            target_half = 0;
+            break;
+        }
+        if (half_ready[1]) {
+            target_half = 1;
+            break;
+        }
         __asm__ volatile("pause");
+        timeout--;
     }
 
-    // Copy data to DMA buffer
-    memcpy(audio_buffer->virtual_addr, samples, bytes);
-    buffer_ready = false;
-
-    // Calculate transfer count (bytes - 1 for DMA)
-    uint16_t count = (uint16_t)(bytes - 1);
-
-    // Set up DMA transfer
-    uint8_t dma_channel;
-    uint8_t dma_mode;
-
-    if (current_format.bits == 16) {
-        dma_channel = SB_DEFAULT_DMA_16;
-        // 16-bit: single cycle, read from memory (to device), auto-init
-        dma_mode = DMA_MODE_SINGLE | DMA_MODE_READ;
-    } else {
-        dma_channel = SB_DEFAULT_DMA_8;
-        // 8-bit: single cycle, read from memory
-        dma_mode = DMA_MODE_SINGLE | DMA_MODE_READ;
+    if (target_half < 0) {
+        // Timeout waiting for buffer
+        return -1;
     }
 
-    dma_setup_transfer(dma_channel, audio_buffer->physical_addr, count, dma_mode);
-    dma_start(dma_channel);
+    // Copy data to the target half
+    uint8_t* dest = (uint8_t*)audio_buffer->virtual_addr + (target_half * AUDIO_HALF_SIZE);
+    memcpy(dest, samples, bytes);
 
-    // Program the DSP for playback
-    uint8_t cmd;
-    uint8_t mode = 0;
-
-    if (current_format.bits == 16) {
-        cmd = DSP_CMD_PLAY_16;  // 16-bit playback
-        mode = DSP_FORMAT_SIGNED;
-        if (current_format.channels == 2) {
-            mode |= DSP_FORMAT_STEREO;
-        }
-
-        // Number of samples (16-bit) minus 1
-        uint16_t sample_count = (bytes / (current_format.bits / 8)) - 1;
-        if (current_format.channels == 2) {
-            sample_count = (bytes / ((current_format.bits / 8) * 2)) - 1;
-        }
-
-        dsp_write(cmd | DSP_MODE_FIFO);
-        dsp_write(mode);
-        dsp_write((uint8_t)(sample_count & 0xFF));
-        dsp_write((uint8_t)(sample_count >> 8));
-    } else {
-        cmd = DSP_CMD_PLAY_8;  // 8-bit playback
-        mode = DSP_FORMAT_UNSIGNED;
-        if (current_format.channels == 2) {
-            mode |= DSP_FORMAT_STEREO;
-        }
-
-        // Number of samples minus 1
-        uint16_t sample_count = bytes - 1;
-        if (current_format.channels == 2) {
-            sample_count = (bytes / 2) - 1;
-        }
-
-        dsp_write(cmd | DSP_MODE_FIFO);
-        dsp_write(mode);
-        dsp_write((uint8_t)(sample_count & 0xFF));
-        dsp_write((uint8_t)(sample_count >> 8));
+    // Zero-pad if less than half buffer
+    if (bytes < AUDIO_HALF_SIZE) {
+        memset(dest + bytes, 0, AUDIO_HALF_SIZE - bytes);
     }
 
-    playing = true;
+    // Mark half as filled
+    half_ready[target_half] = false;
+
+    // Start playback if not already running
+    if (!auto_init_active) {
+        // Fill both halves before starting for smooth playback
+        if (!half_ready[0] && !half_ready[1]) {
+            start_auto_init_playback();
+        }
+    }
 
     return (int)bytes;
 }
@@ -308,15 +352,22 @@ void sb16_start(void) {
 void sb16_stop(void) {
     if (!sb16_present) return;
 
+    // Exit auto-init mode
     if (current_format.bits == 16) {
+        dsp_write(DSP_CMD_EXIT_AUTOINIT_16);
         dsp_write(DSP_CMD_STOP_16);
         dma_stop(SB_DEFAULT_DMA_16);
     } else {
+        dsp_write(DSP_CMD_EXIT_AUTOINIT_8);
         dsp_write(DSP_CMD_STOP_8);
         dma_stop(SB_DEFAULT_DMA_8);
     }
+
     playing = false;
-    buffer_ready = true;
+    auto_init_active = false;
+    half_ready[0] = true;
+    half_ready[1] = true;
+    current_half = 0;
 }
 
 void sb16_set_volume(uint8_t volume) {
@@ -335,13 +386,16 @@ void sb16_set_volume(uint8_t volume) {
 }
 
 bool sb16_is_playing(void) {
-    return playing && !buffer_ready;
+    return playing && auto_init_active;
 }
 
 void sb16_wait(void) {
-    // Timeout after ~5 seconds (assumes ~1M iterations per second on typical CPU)
+    // Wait for both halves to be ready (nothing playing)
     uint32_t timeout = 5000000;
-    while (sb16_is_playing() && timeout > 0) {
+    while (auto_init_active && timeout > 0) {
+        if (half_ready[0] && half_ready[1]) {
+            break;
+        }
         __asm__ volatile("pause");
         timeout--;
     }

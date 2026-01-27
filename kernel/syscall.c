@@ -134,7 +134,10 @@ enum {
     SYS_AUDIO_OPEN = 92,
     SYS_AUDIO_WRITE = 93,
     SYS_AUDIO_CLOSE = 94,
-    SYS_MAX = 95,
+    SYS_CHOWN = 95,
+    SYS_FCHOWN = 96,
+    SYS_LCHOWN = 97,
+    SYS_MAX = 98,
 };
 
 // Syscall counters - track how many times each syscall is invoked
@@ -237,6 +240,9 @@ static const char* syscall_names[SYS_MAX] = {
     [SYS_AUDIO_OPEN] = "audio_open",
     [SYS_AUDIO_WRITE] = "audio_write",
     [SYS_AUDIO_CLOSE] = "audio_close",
+    [SYS_CHOWN] = "chown",
+    [SYS_FCHOWN] = "fchown",
+    [SYS_LCHOWN] = "lchown",
 };
 
 typedef struct vos_task_info_user {
@@ -2104,6 +2110,48 @@ interrupt_frame_t* syscall_handle(interrupt_frame_t* frame) {
 
             sb16_stop();
             frame->eax = 0;
+            return frame;
+        }
+
+        case SYS_CHOWN: {
+            const char* path_user = (const char*)frame->ebx;
+            uint32_t uid = frame->ecx;
+            uint32_t gid = frame->edx;
+
+            char path[256];
+            if (!copy_user_cstring(path, sizeof(path), path_user)) {
+                frame->eax = (uint32_t)-EINVAL;
+                return frame;
+            }
+
+            int32_t rc = tasking_chown(path, uid, gid);
+            frame->eax = (uint32_t)rc;
+            return frame;
+        }
+
+        case SYS_FCHOWN: {
+            int32_t fd = (int32_t)frame->ebx;
+            uint32_t uid = frame->ecx;
+            uint32_t gid = frame->edx;
+
+            int32_t rc = tasking_fd_fchown(fd, uid, gid);
+            frame->eax = (uint32_t)rc;
+            return frame;
+        }
+
+        case SYS_LCHOWN: {
+            const char* path_user = (const char*)frame->ebx;
+            uint32_t uid = frame->ecx;
+            uint32_t gid = frame->edx;
+
+            char path[256];
+            if (!copy_user_cstring(path, sizeof(path), path_user)) {
+                frame->eax = (uint32_t)-EINVAL;
+                return frame;
+            }
+
+            int32_t rc = tasking_lchown(path, uid, gid);
+            frame->eax = (uint32_t)rc;
             return frame;
         }
 

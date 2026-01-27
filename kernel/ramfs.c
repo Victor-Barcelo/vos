@@ -1012,15 +1012,18 @@ uint32_t ramfs_list_dir(const char* path, ramfs_dirent_t* out, uint32_t max) {
                 (void)dir_time_rel(child, &wtime, &wdate);
             }
             uint16_t mode = 0755u;
+            uint32_t d_uid = 0, d_gid = 0;
             for (int di = 0; di < RAMFS_MAX_DIRS; di++) {
                 if (dirs[di].path && ci_eq(dirs[di].path, child)) {
                     if (dirs[di].mode) {
                         mode = (uint16_t)(dirs[di].mode & 07777u);
                     }
+                    d_uid = dirs[di].uid;
+                    d_gid = dirs[di].gid;
                     break;
                 }
             }
-            add_unique(out, &count, max, seg, true, false, mode, 0u, wtime, wdate, 0u, 0u);
+            add_unique(out, &count, max, seg, true, false, mode, 0u, wtime, wdate, d_uid, d_gid);
         } else {
             uint16_t mode = files[i].mode ? files[i].mode : 0644u;
             add_unique(out,

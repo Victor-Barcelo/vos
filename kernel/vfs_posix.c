@@ -667,6 +667,12 @@ static int32_t vfs_lstat_abs(const char* abs_path, vfs_stat_t* out) {
         if (out->is_symlink) {
             out->is_dir = 0;
         }
+
+        // Get owner uid/gid.
+        uint32_t uid = 0, gid = 0;
+        (void)ramfs_get_owner(abs_path, &uid, &gid);
+        out->uid = uid;
+        out->gid = gid;
         return 0;
     }
 
@@ -1122,6 +1128,51 @@ int32_t vfs_chmod_path(const char* cwd, const char* path, uint16_t mode) {
 
     if (abs_is_mount(eff, "/ram")) {
         if (!ramfs_set_meta(eff, false, mode)) {
+            return -EIO;
+        }
+        return 0;
+    }
+
+    return -EROFS;
+}
+
+int32_t vfs_chown_path(const char* cwd, const char* path, uint32_t uid, uint32_t gid) {
+    char eff[VFS_PATH_MAX];
+    int32_t rc = vfs_prepare_existing_path(cwd, path, true, eff);
+    if (rc < 0) {
+        return rc;
+    }
+
+    // FAT16 doesn't support ownership - return ENOTSUP.
+    if (abs_is_mount(eff, "/disk")) {
+        return -ENOTSUP;
+    }
+
+    if (abs_is_mount(eff, "/ram")) {
+        if (!ramfs_set_owner(eff, uid, gid)) {
+            return -EIO;
+        }
+        return 0;
+    }
+
+    return -EROFS;
+}
+
+int32_t vfs_lchown_path(const char* cwd, const char* path, uint32_t uid, uint32_t gid) {
+    char eff[VFS_PATH_MAX];
+    // Don't follow symlinks for lchown.
+    int32_t rc = vfs_prepare_existing_path(cwd, path, false, eff);
+    if (rc < 0) {
+        return rc;
+    }
+
+    // FAT16 doesn't support ownership.
+    if (abs_is_mount(eff, "/disk")) {
+        return -ENOTSUP;
+    }
+
+    if (abs_is_mount(eff, "/ram")) {
+        if (!ramfs_set_owner(eff, uid, gid)) {
             return -EIO;
         }
         return 0;
@@ -2247,6 +2298,29 @@ int32_t vfs_fchmod(vfs_handle_t* h, uint16_t mode) {
 
     if (h->backend == VFS_BACKEND_RAMFS) {
         if (!ramfs_set_meta(h->abs_path, false, mode)) {
+            return -EIO;
+        }
+        return 0;
+    }
+
+    return -EROFS;
+}
+
+int32_t vfs_fchown(vfs_handle_t* h, uint32_t uid, uint32_t gid) {
+    if (!h) {
+        return -EINVAL;
+    }
+    if (h->backend == VFS_BACKEND_INITRAMFS) {
+        return -EROFS;
+    }
+
+    // FAT16 doesn't support ownership.
+    if (h->backend == VFS_BACKEND_FATDISK) {
+        return -ENOTSUP;
+    }
+
+    if (h->backend == VFS_BACKEND_RAMFS) {
+        if (!ramfs_set_owner(h->abs_path, uid, gid)) {
             return -EIO;
         }
         return 0;

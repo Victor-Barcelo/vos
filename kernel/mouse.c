@@ -420,7 +420,9 @@ void mouse_init(void) {
     prev_buttons = 0;
     packet_off = 0;
 
-    screen_mouse_set_enabled(true);
+    // Don't show visual mouse cursor in shell (no GUI use case yet)
+    // Mouse driver still works for VT mouse reporting in TUI apps
+    // screen_mouse_set_enabled(true);
     mouse_reset_position();
 
     irq_register_handler(12, mouse_irq_handler);

@@ -35,5 +35,6 @@
 #define ENAMETOOLONG 91
 #define ELOOP   92
 #define EOVERFLOW 139
+#define ENOTSUP 95
 
 #endif

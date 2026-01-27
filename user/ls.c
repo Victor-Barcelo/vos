@@ -6,7 +6,9 @@
 
 #include <dirent.h>
 #include <errno.h>
+#include <grp.h>
 #include <limits.h>
+#include <pwd.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -315,10 +317,23 @@ static void print_entry(const struct entry *e) {
             printf("%s", mode_str);
         }
 
-        printf(" %3lu %4u %4u ",
+        /* Look up user/group names */
+        struct passwd *pw = getpwuid(e->st.st_uid);
+        struct group *gr = getgrgid(e->st.st_gid);
+        char uid_str[16], gid_str[16];
+        if (pw) {
+            snprintf(uid_str, sizeof(uid_str), "%-8s", pw->pw_name);
+        } else {
+            snprintf(uid_str, sizeof(uid_str), "%-8u", (unsigned)e->st.st_uid);
+        }
+        if (gr) {
+            snprintf(gid_str, sizeof(gid_str), "%-8s", gr->gr_name);
+        } else {
+            snprintf(gid_str, sizeof(gid_str), "%-8u", (unsigned)e->st.st_gid);
+        }
+        printf(" %3lu %s %s",
                (unsigned long)e->st.st_nlink,
-               (unsigned)e->st.st_uid,
-               (unsigned)e->st.st_gid);
+               uid_str, gid_str);
 
         /* Color the size */
         if (!opt_nocolor)

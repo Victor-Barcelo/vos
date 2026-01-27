@@ -4167,6 +4167,52 @@ int32_t tasking_fd_fchmod(int32_t fd, uint16_t mode) {
     return vfs_fchmod(h, mode);
 }
 
+int32_t tasking_chown(const char* path, uint32_t uid, uint32_t gid) {
+    if (!current_task || !path) {
+        return -EINVAL;
+    }
+    // Only root can change ownership.
+    if (current_task->uid != 0) {
+        return -EPERM;
+    }
+    return vfs_chown_path(current_task->cwd, path, uid, gid);
+}
+
+int32_t tasking_lchown(const char* path, uint32_t uid, uint32_t gid) {
+    if (!current_task || !path) {
+        return -EINVAL;
+    }
+    // Only root can change ownership.
+    if (current_task->uid != 0) {
+        return -EPERM;
+    }
+    return vfs_lchown_path(current_task->cwd, path, uid, gid);
+}
+
+int32_t tasking_fd_fchown(int32_t fd, uint32_t uid, uint32_t gid) {
+    if (!current_task) {
+        return -EINVAL;
+    }
+    // Only root can change ownership.
+    if (current_task->uid != 0) {
+        return -EPERM;
+    }
+    if (fd < 0 || fd >= (int32_t)TASK_MAX_FDS) {
+        return -EBADF;
+    }
+
+    uint32_t irq_flags = irq_save();
+    fd_entry_t* ent = &current_task->fds[fd];
+    vfs_handle_t* h = ent->handle;
+    fd_kind_t kind = ent->kind;
+    irq_restore(irq_flags);
+
+    if (kind != FD_KIND_VFS || !h) {
+        return -EBADF;
+    }
+    return vfs_fchown(h, uid, gid);
+}
+
 int32_t tasking_fd_ftruncate(int32_t fd, uint32_t new_size) {
     if (!current_task) {
         return -EINVAL;

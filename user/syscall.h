@@ -182,6 +182,9 @@ enum {
     SYS_AUDIO_OPEN = 92,
     SYS_AUDIO_WRITE = 93,
     SYS_AUDIO_CLOSE = 94,
+    SYS_CHOWN = 95,
+    SYS_FCHOWN = 96,
+    SYS_LCHOWN = 97,
 };
 
 // For select() syscall

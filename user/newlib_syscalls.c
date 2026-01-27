@@ -506,6 +506,11 @@ static struct passwd* passwd_lookup_name(const char* name) {
         char* nl = strchr(line, '\n');
         if (nl) *nl = '\0';
 
+        // Skip empty lines and comments
+        if (line[0] == '\0' || line[0] == '#') {
+            continue;
+        }
+
         char* fields[6] = {0};
         int nf = 0;
         char* p = line;
@@ -565,6 +570,11 @@ struct passwd* getpwuid(uid_t uid) {
     while (fgets(line, sizeof(line), f)) {
         char* nl = strchr(line, '\n');
         if (nl) *nl = '\0';
+
+        // Skip empty lines and comments
+        if (line[0] == '\0' || line[0] == '#') {
+            continue;
+        }
 
         char* fields[6] = {0};
         int nf = 0;
@@ -643,6 +653,11 @@ static struct group* group_lookup_name(const char* name) {
         char* nl = strchr(line, '\n');
         if (nl) *nl = '\0';
 
+        // Skip empty lines and comments
+        if (line[0] == '\0' || line[0] == '#') {
+            continue;
+        }
+
         char* fields[4] = {0};
         int nf = 0;
         char* p = line;
@@ -693,6 +708,11 @@ struct group* getgrgid(gid_t gid) {
     while (fgets(line, sizeof(line), f)) {
         char* nl = strchr(line, '\n');
         if (nl) *nl = '\0';
+
+        // Skip empty lines and comments
+        if (line[0] == '\0' || line[0] == '#') {
+            continue;
+        }
 
         char* fields[4] = {0};
         int nf = 0;
@@ -795,6 +815,24 @@ enum {
     SYS_EXECVE = 69,
     SYS_WAITPID = 70,
     SYS_SELECT = 79,
+    SYS_THEME_COUNT = 80,
+    SYS_THEME_GET = 81,
+    SYS_THEME_INFO = 82,
+    SYS_THEME_SET = 83,
+    SYS_GETTIMEOFDAY = 84,
+    SYS_CLOCK_GETTIME = 85,
+    SYS_NANOSLEEP = 86,
+    SYS_ACCESS = 87,
+    SYS_ISATTY = 88,
+    SYS_UNAME = 89,
+    SYS_POLL = 90,
+    SYS_BEEP = 91,
+    SYS_AUDIO_OPEN = 92,
+    SYS_AUDIO_WRITE = 93,
+    SYS_AUDIO_CLOSE = 94,
+    SYS_CHOWN = 95,
+    SYS_FCHOWN = 96,
+    SYS_LCHOWN = 97,
 };
 
 // For select() syscall
@@ -815,6 +853,8 @@ typedef struct vos_stat {
     unsigned int size;
     unsigned short wtime;
     unsigned short wdate;
+    unsigned int uid;
+    unsigned int gid;
 } vos_stat_t;
 
 typedef struct vos_rtc_datetime {
@@ -1086,6 +1126,39 @@ static inline int vos_sys_fchmod(int fd, unsigned int mode) {
         "int $0x80"
         : "=a"(ret)
         : "a"(SYS_FCHMOD), "b"(fd), "c"(mode)
+        : "memory"
+    );
+    return ret;
+}
+
+static inline int vos_sys_chown(const char* path, unsigned int uid, unsigned int gid) {
+    int ret;
+    __asm__ volatile (
+        "int $0x80"
+        : "=a"(ret)
+        : "a"(SYS_CHOWN), "b"(path), "c"(uid), "d"(gid)
+        : "memory"
+    );
+    return ret;
+}
+
+static inline int vos_sys_fchown(int fd, unsigned int uid, unsigned int gid) {
+    int ret;
+    __asm__ volatile (
+        "int $0x80"
+        : "=a"(ret)
+        : "a"(SYS_FCHOWN), "b"(fd), "c"(uid), "d"(gid)
+        : "memory"
+    );
+    return ret;
+}
+
+static inline int vos_sys_lchown(const char* path, unsigned int uid, unsigned int gid) {
+    int ret;
+    __asm__ volatile (
+        "int $0x80"
+        : "=a"(ret)
+        : "a"(SYS_LCHOWN), "b"(path), "c"(uid), "d"(gid)
         : "memory"
     );
     return ret;
@@ -1541,8 +1614,8 @@ static void fill_stat_common(struct stat* st, const vos_stat_t* vst, const char*
         st->st_mode = S_IFREG | perm;
     }
     st->st_nlink = 1;
-    st->st_uid = getuid();
-    st->st_gid = getgid();
+    st->st_uid = (uid_t)vst->uid;
+    st->st_gid = (gid_t)vst->gid;
     st->st_size = (off_t)vst->size;
     st->st_blksize = 512;
     st->st_blocks = (blkcnt_t)((vst->size + 511u) / 512u);
@@ -1927,15 +2000,45 @@ int chmod(const char* path, mode_t mode) {
 }
 
 int chown(const char* path, uid_t owner, gid_t group) {
-    (void)path;
-    (void)owner;
-    (void)group;
-    // VOS does not currently persist ownership. Treat as success.
+    if (!path) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    int rc = vos_sys_chown(path, (unsigned int)owner, (unsigned int)group);
+    if (rc < 0) {
+        errno = -rc;
+        return -1;
+    }
     return 0;
 }
 
 int lchown(const char* path, uid_t owner, gid_t group) {
-    return chown(path, owner, group);
+    if (!path) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    int rc = vos_sys_lchown(path, (unsigned int)owner, (unsigned int)group);
+    if (rc < 0) {
+        errno = -rc;
+        return -1;
+    }
+    return 0;
+}
+
+int fchown(int fd, uid_t owner, gid_t group) {
+    if (fd < 0) {
+        errno = EBADF;
+        return -1;
+    }
+
+    int rc = vos_sys_fchown(fd, (unsigned int)owner, (unsigned int)group);
+    if (rc < 0) {
+        errno = -rc;
+        return -1;
+    }
+    return 0;
 }
 
 int mknod(const char* path, mode_t mode, dev_t dev) {

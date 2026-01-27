@@ -4,6 +4,34 @@
 #include "SDL_stdinc.h"
 #include "SDL_keyboard.h"
 
+/* Mouse cursor type (stub for VOS - no cursor changing support) */
+typedef struct SDL_Cursor SDL_Cursor;
+
+/* System cursor types */
+typedef enum {
+    SDL_SYSTEM_CURSOR_ARROW,
+    SDL_SYSTEM_CURSOR_IBEAM,
+    SDL_SYSTEM_CURSOR_WAIT,
+    SDL_SYSTEM_CURSOR_CROSSHAIR,
+    SDL_SYSTEM_CURSOR_WAITARROW,
+    SDL_SYSTEM_CURSOR_SIZENWSE,
+    SDL_SYSTEM_CURSOR_SIZENESW,
+    SDL_SYSTEM_CURSOR_SIZEWE,
+    SDL_SYSTEM_CURSOR_SIZENS,
+    SDL_SYSTEM_CURSOR_SIZEALL,
+    SDL_SYSTEM_CURSOR_NO,
+    SDL_SYSTEM_CURSOR_HAND,
+    SDL_NUM_SYSTEM_CURSORS
+} SDL_SystemCursor;
+
+/* Cursor functions (stubs for VOS - no cursor support) */
+SDL_Cursor* SDL_CreateSystemCursor(SDL_SystemCursor id);
+SDL_Cursor* SDL_CreateColorCursor(SDL_Surface *surface, int hot_x, int hot_y);
+void SDL_FreeCursor(SDL_Cursor *cursor);
+void SDL_SetCursor(SDL_Cursor *cursor);
+SDL_Cursor* SDL_GetCursor(void);
+SDL_Cursor* SDL_GetDefaultCursor(void);
+
 /**
  * SDL events subsystem for VOS
  *
@@ -77,6 +105,9 @@ typedef enum {
 #define SDL_BUTTON_X1MASK   (1 << (SDL_BUTTON_X1 - 1))
 #define SDL_BUTTON_X2MASK   (1 << (SDL_BUTTON_X2 - 1))
 
+/* Get the button mask for a button number */
+#define SDL_BUTTON(x)       (1 << ((x) - 1))
+
 /**
  * Keyboard event structure
  */
@@ -100,10 +131,10 @@ typedef struct SDL_MouseMotionEvent {
     Uint32 windowID;    /**< window with mouse focus */
     Uint32 which;       /**< mouse instance id */
     Uint32 state;       /**< button state */
-    Sint32 x;           /**< X coordinate, relative to window */
-    Sint32 y;           /**< Y coordinate, relative to window */
-    Sint32 xrel;        /**< relative X motion */
-    Sint32 yrel;        /**< relative Y motion */
+    int x;              /**< X coordinate, relative to window */
+    int y;              /**< Y coordinate, relative to window */
+    int xrel;           /**< relative X motion */
+    int yrel;           /**< relative Y motion */
 } SDL_MouseMotionEvent;
 
 /**
@@ -118,8 +149,8 @@ typedef struct SDL_MouseButtonEvent {
     Uint8 state;        /**< SDL_PRESSED or SDL_RELEASED */
     Uint8 clicks;       /**< 1 for single-click, 2 for double-click */
     Uint8 padding1;
-    Sint32 x;           /**< X coordinate, relative to window */
-    Sint32 y;           /**< Y coordinate, relative to window */
+    int x;              /**< X coordinate, relative to window */
+    int y;              /**< Y coordinate, relative to window */
 } SDL_MouseButtonEvent;
 
 /**
@@ -135,6 +166,27 @@ typedef struct SDL_MouseWheelEvent {
     Uint32 direction;   /**< scroll direction */
 } SDL_MouseWheelEvent;
 
+/* Window event IDs */
+typedef enum {
+    SDL_WINDOWEVENT_NONE,
+    SDL_WINDOWEVENT_SHOWN,
+    SDL_WINDOWEVENT_HIDDEN,
+    SDL_WINDOWEVENT_EXPOSED,
+    SDL_WINDOWEVENT_MOVED,
+    SDL_WINDOWEVENT_RESIZED,
+    SDL_WINDOWEVENT_SIZE_CHANGED,
+    SDL_WINDOWEVENT_MINIMIZED,
+    SDL_WINDOWEVENT_MAXIMIZED,
+    SDL_WINDOWEVENT_RESTORED,
+    SDL_WINDOWEVENT_ENTER,
+    SDL_WINDOWEVENT_LEAVE,
+    SDL_WINDOWEVENT_FOCUS_GAINED,
+    SDL_WINDOWEVENT_FOCUS_LOST,
+    SDL_WINDOWEVENT_CLOSE,
+    SDL_WINDOWEVENT_TAKE_FOCUS,
+    SDL_WINDOWEVENT_HIT_TEST
+} SDL_WindowEventID;
+
 /**
  * Window event structure
  */
@@ -142,7 +194,7 @@ typedef struct SDL_WindowEvent {
     Uint32 type;        /**< SDL_WINDOWEVENT */
     Uint32 timestamp;
     Uint32 windowID;
-    Uint8 event;
+    Uint8 event;        /**< SDL_WindowEventID */
     Uint8 padding1;
     Uint8 padding2;
     Uint8 padding3;
@@ -157,6 +209,30 @@ typedef struct SDL_QuitEvent {
     Uint32 type;        /**< SDL_QUIT */
     Uint32 timestamp;
 } SDL_QuitEvent;
+
+/**
+ * Text input event structure
+ */
+#define SDL_TEXTINPUTEVENT_TEXT_SIZE 32
+typedef struct SDL_TextInputEvent {
+    Uint32 type;        /**< SDL_TEXTINPUT */
+    Uint32 timestamp;
+    Uint32 windowID;
+    char text[SDL_TEXTINPUTEVENT_TEXT_SIZE];  /**< The input text */
+} SDL_TextInputEvent;
+
+/**
+ * Text editing event structure
+ */
+#define SDL_TEXTEDITINGEVENT_TEXT_SIZE 32
+typedef struct SDL_TextEditingEvent {
+    Uint32 type;        /**< SDL_TEXTEDITING */
+    Uint32 timestamp;
+    Uint32 windowID;
+    char text[SDL_TEXTEDITINGEVENT_TEXT_SIZE];  /**< The editing text */
+    Sint32 start;       /**< The start cursor of selected editing text */
+    Sint32 length;      /**< The length of selected editing text */
+} SDL_TextEditingEvent;
 
 /**
  * User event structure
@@ -176,6 +252,8 @@ typedef struct SDL_UserEvent {
 typedef union SDL_Event {
     Uint32 type;                    /**< event type */
     SDL_KeyboardEvent key;          /**< keyboard event data */
+    SDL_TextInputEvent text;        /**< text input event data */
+    SDL_TextEditingEvent edit;      /**< text editing event data */
     SDL_MouseMotionEvent motion;    /**< mouse motion event data */
     SDL_MouseButtonEvent button;    /**< mouse button event data */
     SDL_MouseWheelEvent wheel;      /**< mouse wheel event data */

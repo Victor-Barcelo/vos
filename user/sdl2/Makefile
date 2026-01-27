@@ -19,7 +19,9 @@ SRCS = src/SDL_main.c \
        src/SDL_video.c \
        src/SDL_audio.c \
        src/SDL_events.c \
-       src/SDL_timer.c
+       src/SDL_timer.c \
+       src/SDL_mutex.c \
+       src/SDL_rwops.c
 
 OBJS = $(SRCS:.c=.o)
 LIB = libvos-sdl2.a

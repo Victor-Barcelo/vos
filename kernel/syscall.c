@@ -141,7 +141,8 @@ enum {
     SYS_GFX_FLIP = 98,
     SYS_GFX_DOUBLE_BUFFER = 99,
     SYS_DISK_INFO = 100,
-    SYS_MAX = 101,
+    SYS_SET_CONSOLE = 101,
+    SYS_MAX = 102,
 };
 
 // Syscall counters - track how many times each syscall is invoked
@@ -250,6 +251,7 @@ static const char* syscall_names[SYS_MAX] = {
     [SYS_GFX_FLIP] = "gfx_flip",
     [SYS_GFX_DOUBLE_BUFFER] = "gfx_double_buffer",
     [SYS_DISK_INFO] = "disk_info",
+    [SYS_SET_CONSOLE] = "set_console",
 };
 
 typedef struct vos_task_info_user {
@@ -2272,6 +2274,13 @@ interrupt_frame_t* syscall_handle(interrupt_frame_t* frame) {
                 return frame;
             }
             frame->eax = 0;
+            return frame;
+        }
+
+        case SYS_SET_CONSOLE: {
+            int console = (int)frame->ebx;
+            int result = tasking_set_console(console);
+            frame->eax = (uint32_t)result;
             return frame;
         }
 

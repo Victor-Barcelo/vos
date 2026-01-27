@@ -69,4 +69,33 @@ Uint64 SDL_GetPerformanceCounter(void);
  */
 Uint64 SDL_GetPerformanceFrequency(void);
 
+/* Timer callback types */
+typedef Uint32 (*SDL_TimerCallback)(Uint32 interval, void *param);
+typedef int SDL_TimerID;
+
+/**
+ * Add a timer callback function.
+ *
+ * NOTE: VOS has no threading, so timers are NOT supported.
+ * This function always returns 0 (failure).
+ * Applications should use SDL_GetTicks() in their main loop instead.
+ *
+ * @param interval The timer delay (ms) passed to callback
+ * @param callback The timer callback function
+ * @param param A pointer passed to the callback
+ * @returns A timer ID, or 0 if timer creation failed.
+ */
+SDL_TimerID SDL_AddTimer(Uint32 interval, SDL_TimerCallback callback, void *param);
+
+/**
+ * Remove a timer created with SDL_AddTimer().
+ *
+ * NOTE: VOS has no threading, so timers are NOT supported.
+ * This function is a no-op stub.
+ *
+ * @param id The timer ID to remove
+ * @returns SDL_TRUE if timer was removed, SDL_FALSE if not found.
+ */
+int SDL_RemoveTimer(SDL_TimerID id);
+
 #endif /* SDL_TIMER_H */

@@ -61,3 +61,31 @@ Uint64 SDL_GetPerformanceCounter(void) {
 Uint64 SDL_GetPerformanceFrequency(void) {
     return 1000;  /* millisecond resolution */
 }
+
+/**
+ * Add a timer callback function.
+ *
+ * VOS has no threading support, so timer callbacks cannot be implemented.
+ * Applications must poll time manually using SDL_GetTicks() in their main loop.
+ *
+ * @returns Always 0 (failure).
+ */
+SDL_TimerID SDL_AddTimer(Uint32 interval, SDL_TimerCallback callback, void *param) {
+    (void)interval;
+    (void)callback;
+    (void)param;
+    /* VOS has no threading - timers not supported */
+    return 0;
+}
+
+/**
+ * Remove a timer.
+ *
+ * VOS has no threading support, so this is a no-op.
+ *
+ * @returns Always 0 (SDL_FALSE).
+ */
+int SDL_RemoveTimer(SDL_TimerID id) {
+    (void)id;
+    return 0;
+}

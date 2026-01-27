@@ -182,6 +182,12 @@ USER_GROUPDEL = $(USER_BUILD_DIR)/groupdel.elf
 # pocketmod and TinySoundFont directories
 POCKETMOD_DIR = $(THIRD_PARTY_DIR)/pocketmod
 TSF_DIR = $(THIRD_PARTY_DIR)/tsf
+
+# SDL2 shim library and test program
+USER_SDL2_DIR = $(USER_DIR)/sdl2
+USER_SDL2_LIB = $(USER_SDL2_DIR)/libvos-sdl2.a
+USER_SDLTEST_OBJ = $(USER_BUILD_DIR)/sdltest.o
+USER_SDLTEST = $(USER_BUILD_DIR)/sdltest.elf
 # ne editor (userland)
 # Zork I (userland)
 USER_ZORK_DIR = $(USER_DIR)/zork1c
@@ -327,6 +333,7 @@ USER_DASH = $(USER_BUILD_DIR)/dash.elf
 
 USER_BINS = $(USER_INIT) $(USER_ELIZA) $(USER_DF) $(USER_TREE) $(USER_UPTIME) $(USER_SETDATE) $(USER_PS) $(USER_TOP) $(USER_SYSVIEW) $(USER_NEOFETCH) $(USER_FONT) $(USER_THEME) $(USER_LS) $(USER_JSON) $(USER_IMG) $(USER_LOGIN) $(USER_S3LCUBE) $(USER_S3LFLY) $(USER_OLIVEDEMO) $(USER_NEXTVI) $(USER_MDVIEW) $(USER_BASIC) $(USER_ZORK) $(USER_TCC) $(USER_GBEMU) $(USER_NESEMU) $(USER_DASH) $(USER_ZIP) $(USER_UNZIP) $(USER_GZIP) $(USER_BEEP) $(USER_MODPLAY) $(USER_MIDIPLAY) $(USER_CHOWN) \
             $(USER_USERADD) $(USER_USERDEL) $(USER_GROUPADD) $(USER_GROUPDEL) \
+            $(USER_SDLTEST) \
             $(SBASE_TOOL_BINS)
 
 # QEMU defaults
@@ -340,9 +347,10 @@ DISK_SIZE_MB ?= 4096
 # Host helper to install a sysroot into $(DISK_IMG) under /usr.
 SYSROOT_SCRIPT = $(TOOLS_DIR)/install_sysroot.sh
 
-# Optional extra module: a small FAT12 image (for FAT12/16 support demo)
-MKFAT = $(TOOLS_BUILD_DIR)/mkfat
-FAT_IMG = $(ISO_DIR)/boot/fat.img
+# Optional extra module: a small FAT16 image (disabled - using MinixFS for disk)
+# To re-enable: uncomment these and add $(FAT_IMG) to $(ISO) dependencies
+# MKFAT = $(TOOLS_BUILD_DIR)/mkfat
+# FAT_IMG = $(ISO_DIR)/boot/fat.img
 
 # Default target
 all: $(ISO)
@@ -368,14 +376,14 @@ $(FONTS_BUILD_DIR)/%.o: $(FONTS_DIR)/%.psf | $(FONTS_BUILD_DIR)
 	mkdir -p $(dir $@)
 	$(LD) -r -b binary $< -o $@
 
-# Build host tool to generate a FAT image
-$(MKFAT): $(TOOLS_DIR)/mkfat.c | $(TOOLS_BUILD_DIR)
-	gcc -O2 $< -o $@
+# Build host tool to generate a FAT image (disabled - using MinixFS)
+# $(MKFAT): $(TOOLS_DIR)/mkfat.c | $(TOOLS_BUILD_DIR)
+# 	gcc -O2 $< -o $@
 
-# Generate the FAT image module
-$(FAT_IMG): $(MKFAT)
-	mkdir -p $(ISO_DIR)/boot
-	$(MKFAT) $@
+# Generate the FAT image module (disabled - using MinixFS)
+# $(FAT_IMG): $(MKFAT)
+# 	mkdir -p $(ISO_DIR)/boot
+# 	$(MKFAT) $@
 
 # Compile assembly
 $(BUILD_DIR)/boot.o: $(BOOT_DIR)/boot.asm | $(BUILD_DIR)
@@ -644,6 +652,18 @@ $(USER_NESEMU): $(USER_RUNTIME_OBJECTS) $(USER_NESEMU_OBJ) $(NOFRENDO_OBJECTS) $
 $(NOFRENDO_BUILD_DIR):
 	mkdir -p $(NOFRENDO_BUILD_DIR)/nes $(NOFRENDO_BUILD_DIR)/mappers
 
+# Build SDL2 shim library (call make in user/sdl2/)
+$(USER_SDL2_LIB):
+	$(MAKE) -C $(USER_SDL2_DIR)
+
+# Compile SDL2 test program
+$(USER_SDLTEST_OBJ): $(USER_SDL2_DIR)/test_sdl.c $(USER_SDL2_LIB) | $(USER_BUILD_DIR)
+	$(CC) -ffreestanding -fno-stack-protector -fno-pie -Wall -Wextra -O2 -I$(USER_DIR) -I$(USER_SDL2_DIR)/include -c $< -o $@
+
+# Link SDL2 test program (SDL2 library must come before other libs)
+$(USER_SDLTEST): $(USER_RUNTIME_OBJECTS) $(USER_SDLTEST_OBJ) $(USER_SDL2_LIB) $(USER_RUNTIME_LIBS)
+	$(CC) -nostartfiles -Wl,-T,$(USER_DIR)/linker.ld -Wl,--gc-sections -o $@ $(USER_RUNTIME_OBJECTS) $(USER_SDLTEST_OBJ) $(USER_SDL2_LIB) $(USER_RUNTIME_LIBS) -lc -lgcc
+
 # Compile C files
 $(BUILD_DIR)/%.o: $(KERNEL_DIR)/%.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) $< -o $@
@@ -657,7 +677,7 @@ $(KERNEL): $(OBJECTS)
 	$(LD) $(LDFLAGS) $(OBJECTS) -o $@
 
 # Create bootable ISO (includes TCC sysroot in initramfs)
-$(ISO): $(KERNEL) $(USER_BINS) $(FAT_IMG) $(INITRAMFS_FILES) $(INITRAMFS_DIRS) $(TCC_LIBTCC1) $(USER_CRTI_OBJ) $(USER_CRTN_OBJ)
+$(ISO): $(KERNEL) $(USER_BINS) $(INITRAMFS_FILES) $(INITRAMFS_DIRS) $(TCC_LIBTCC1) $(USER_CRTI_OBJ) $(USER_CRTN_OBJ)
 	mkdir -p $(ISO_DIR)/boot/grub
 	cp $(KERNEL) $(ISO_DIR)/boot/kernel.bin
 	rm -rf $(INITRAMFS_ROOT)
@@ -704,6 +724,7 @@ $(ISO): $(KERNEL) $(USER_BINS) $(FAT_IMG) $(INITRAMFS_FILES) $(INITRAMFS_DIRS) $
 	cp $(USER_USERDEL) $(INITRAMFS_ROOT)/bin/userdel
 	cp $(USER_GROUPADD) $(INITRAMFS_ROOT)/bin/groupadd
 	cp $(USER_GROUPDEL) $(INITRAMFS_ROOT)/bin/groupdel
+	cp $(USER_SDLTEST) $(INITRAMFS_ROOT)/bin/sdltest
 	for b in $(SBASE_TOOLS); do cp $(SBASE_BIN_DIR)/$$b.elf $(INITRAMFS_ROOT)/bin/$$b; done
 	@# Include TCC sysroot in initramfs - will be copied to /disk on first boot
 	mkdir -p $(INITRAMFS_ROOT)/sysroot/usr/lib/tcc/include
@@ -744,7 +765,6 @@ $(ISO): $(KERNEL) $(USER_BINS) $(FAT_IMG) $(INITRAMFS_FILES) $(INITRAMFS_DIRS) $
 	echo 'menuentry "VOS" {' >> $(ISO_DIR)/boot/grub/grub.cfg
 	echo '    multiboot /boot/kernel.bin' >> $(ISO_DIR)/boot/grub/grub.cfg
 	echo '    module /boot/initramfs.tar' >> $(ISO_DIR)/boot/grub/grub.cfg
-	echo '    module /boot/fat.img' >> $(ISO_DIR)/boot/grub/grub.cfg
 	echo '}' >> $(ISO_DIR)/boot/grub/grub.cfg
 	grub-mkrescue -o $(ISO) $(ISO_DIR)
 
@@ -814,7 +834,6 @@ clean:
 	rm -rf $(ISO_DIR)/boot/kernel.bin
 	rm -rf $(INITRAMFS_TAR)
 	rm -rf $(ISO_DIR)/boot/grub/grub.cfg
-	rm -rf $(FAT_IMG)
 	rm -f $(ISO)
 
 # Run in QEMU (includes Sound Blaster 16 audio support and persistent disk)

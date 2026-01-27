@@ -48,6 +48,7 @@ uint32_t tasking_current_pid(void);
 uint32_t tasking_current_ppid(void);
 uint32_t tasking_getpgrp(void);
 int tasking_current_console(void);
+int tasking_set_console(int console);
 uint32_t tasking_getuid(void);
 uint32_t tasking_getgid(void);
 int32_t tasking_setuid(uint32_t uid);

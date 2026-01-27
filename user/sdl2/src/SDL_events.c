@@ -922,3 +922,22 @@ Uint32 SDL_GetRelativeMouseState(int *x, int *y) {
     mouse_yrel = 0;
     return mouse_buttons;
 }
+
+/* Text input functions - VOS always accepts text input */
+static int text_input_active = 1;
+
+void SDL_StartTextInput(void) {
+    text_input_active = 1;
+}
+
+void SDL_StopTextInput(void) {
+    text_input_active = 0;
+}
+
+SDL_bool SDL_IsTextInputActive(void) {
+    return text_input_active ? SDL_TRUE : SDL_FALSE;
+}
+
+void SDL_SetTextInputRect(const SDL_Rect *rect) {
+    (void)rect;  /* No-op on VOS */
+}

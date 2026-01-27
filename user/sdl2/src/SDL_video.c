@@ -18,6 +18,7 @@
 #include "SDL2/SDL_render.h"
 #include "SDL2/SDL_pixels.h"
 #include "SDL2/SDL_stdinc.h"
+#include "SDL2/SDL_rwops.h"
 #include "syscall.h"
 #include <string.h>
 #include <stdlib.h>
@@ -32,6 +33,7 @@ struct SDL_Window {
     char title[256];
     int x, y;
     int w, h;
+    int min_w, min_h;           /* Minimum window size */
     Uint32 flags;
     SDL_Surface *surface;       /* Window surface for software rendering */
     struct SDL_Renderer *renderer;
@@ -426,6 +428,23 @@ void SDL_SetWindowTitle(SDL_Window *window, const char *title) {
     }
     if (title) {
         strncpy(window->title, title, sizeof(window->title) - 1);
+    }
+}
+
+void SDL_SetWindowMinimumSize(SDL_Window *window, int min_w, int min_h) {
+    if (window) {
+        window->min_w = min_w;
+        window->min_h = min_h;
+    }
+}
+
+void SDL_GetWindowMinimumSize(SDL_Window *window, int *w, int *h) {
+    if (window) {
+        if (w) *w = window->min_w;
+        if (h) *h = window->min_h;
+    } else {
+        if (w) *w = 0;
+        if (h) *h = 0;
     }
 }
 
@@ -1976,4 +1995,145 @@ void SDL_FreePalette(SDL_Palette *palette) {
         }
         free(palette);
     }
+}
+
+/* ========== BMP Loader ========== */
+
+/* BMP file header structure */
+#pragma pack(push, 1)
+typedef struct {
+    Uint16 bfType;          /* "BM" */
+    Uint32 bfSize;          /* File size */
+    Uint16 bfReserved1;
+    Uint16 bfReserved2;
+    Uint32 bfOffBits;       /* Offset to pixel data */
+} BMPFileHeader;
+
+typedef struct {
+    Uint32 biSize;          /* Size of this header (40 for BITMAPINFOHEADER) */
+    Sint32 biWidth;
+    Sint32 biHeight;        /* Positive = bottom-up, negative = top-down */
+    Uint16 biPlanes;
+    Uint16 biBitCount;
+    Uint32 biCompression;
+    Uint32 biSizeImage;
+    Sint32 biXPelsPerMeter;
+    Sint32 biYPelsPerMeter;
+    Uint32 biClrUsed;
+    Uint32 biClrImportant;
+} BMPInfoHeader;
+#pragma pack(pop)
+
+SDL_Surface* SDL_LoadBMP_RW(SDL_RWops *src, int freesrc)
+{
+    BMPFileHeader file_hdr;
+    BMPInfoHeader info_hdr;
+    SDL_Surface *surface = NULL;
+    Uint8 *row_buffer = NULL;
+    int width, height, pitch;
+    int topdown = 0;
+    int row_size;
+    Uint32 Rmask, Gmask, Bmask, Amask;
+
+    if (src == NULL) {
+        return NULL;
+    }
+
+    /* Read file header */
+    if (SDL_RWread(src, &file_hdr, sizeof(file_hdr), 1) != 1) {
+        goto done;
+    }
+
+    /* Check BMP signature */
+    if (file_hdr.bfType != 0x4D42) {  /* "BM" in little-endian */
+        goto done;
+    }
+
+    /* Read info header */
+    if (SDL_RWread(src, &info_hdr, sizeof(info_hdr), 1) != 1) {
+        goto done;
+    }
+
+    width = info_hdr.biWidth;
+    height = info_hdr.biHeight;
+
+    /* Negative height means top-down DIB */
+    if (height < 0) {
+        height = -height;
+        topdown = 1;
+    }
+
+    /* We only support 24-bit and 32-bit uncompressed BMPs for simplicity */
+    if (info_hdr.biCompression != 0 ||
+        (info_hdr.biBitCount != 24 && info_hdr.biBitCount != 32)) {
+        goto done;
+    }
+
+    /* Set up masks for ARGB8888 surface */
+    Rmask = 0x00FF0000;
+    Gmask = 0x0000FF00;
+    Bmask = 0x000000FF;
+    Amask = 0xFF000000;
+
+    /* Create the surface */
+    surface = SDL_CreateRGBSurface(0, width, height, 32, Rmask, Gmask, Bmask, Amask);
+    if (surface == NULL) {
+        goto done;
+    }
+
+    /* Seek to pixel data */
+    SDL_RWseek(src, file_hdr.bfOffBits, RW_SEEK_SET);
+
+    /* BMP rows are padded to 4-byte boundaries */
+    row_size = ((width * info_hdr.biBitCount + 31) / 32) * 4;
+    row_buffer = (Uint8 *)malloc(row_size);
+    if (row_buffer == NULL) {
+        SDL_FreeSurface(surface);
+        surface = NULL;
+        goto done;
+    }
+
+    pitch = surface->pitch;
+
+    /* Read pixel data */
+    for (int y = 0; y < height; y++) {
+        int dest_y = topdown ? y : (height - 1 - y);
+        Uint32 *dst = (Uint32 *)((Uint8 *)surface->pixels + dest_y * pitch);
+
+        if (SDL_RWread(src, row_buffer, row_size, 1) != 1) {
+            SDL_FreeSurface(surface);
+            surface = NULL;
+            goto done;
+        }
+
+        if (info_hdr.biBitCount == 24) {
+            /* 24-bit BGR -> ARGB */
+            Uint8 *src_ptr = row_buffer;
+            for (int x = 0; x < width; x++) {
+                Uint8 b = *src_ptr++;
+                Uint8 g = *src_ptr++;
+                Uint8 r = *src_ptr++;
+                dst[x] = 0xFF000000 | (r << 16) | (g << 8) | b;
+            }
+        } else {
+            /* 32-bit BGRA -> ARGB */
+            Uint8 *src_ptr = row_buffer;
+            for (int x = 0; x < width; x++) {
+                Uint8 b = *src_ptr++;
+                Uint8 g = *src_ptr++;
+                Uint8 r = *src_ptr++;
+                Uint8 a = *src_ptr++;
+                dst[x] = (a << 24) | (r << 16) | (g << 8) | b;
+            }
+        }
+    }
+
+done:
+    if (row_buffer) {
+        free(row_buffer);
+    }
+    if (freesrc && src) {
+        SDL_RWclose(src);
+    }
+    return surface;
 }

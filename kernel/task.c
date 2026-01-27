@@ -1119,6 +1119,13 @@ int tasking_current_console(void) {
     return (int)current_task->console;
 }
 
+int tasking_set_console(int console) {
+    if (!current_task) return -1;
+    if (console < 0 || console >= 4) return -1;  // 4 virtual consoles max
+    current_task->console = (uint8_t)console;
+    return 0;
+}
+
 int32_t tasking_alarm(uint32_t seconds) {
     if (!enabled || !current_task) {
         return -EINVAL;

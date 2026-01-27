@@ -4,6 +4,7 @@
 #include "SDL_stdinc.h"
 #include "SDL_keycode.h"
 #include "SDL_scancode.h"
+#include "SDL_rect.h"
 
 /**
  * SDL keyboard interface for VOS
@@ -72,5 +73,36 @@ const char *SDL_GetScancodeName(SDL_Scancode scancode);
  * @return a pointer to the name of the key
  */
 const char *SDL_GetKeyName(SDL_Keycode key);
+
+/**
+ * Start accepting Unicode text input events.
+ *
+ * This function will enable text input (SDL_TEXTINPUT events).
+ * On VOS, this is a no-op as text input is always enabled.
+ */
+void SDL_StartTextInput(void);
+
+/**
+ * Stop receiving any text input events.
+ *
+ * On VOS, this is a no-op as text input is always enabled.
+ */
+void SDL_StopTextInput(void);
+
+/**
+ * Check whether or not Unicode text input events are enabled.
+ *
+ * @returns SDL_TRUE if text input events are enabled, SDL_FALSE otherwise.
+ */
+SDL_bool SDL_IsTextInputActive(void);
+
+/**
+ * Set the rectangle used to type Unicode text inputs.
+ *
+ * On VOS, this is a no-op.
+ *
+ * @param rect the rectangle to use
+ */
+void SDL_SetTextInputRect(const SDL_Rect *rect);
 
 #endif /* SDL_keyboard_h_ */

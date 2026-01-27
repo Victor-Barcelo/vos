@@ -22,6 +22,10 @@ typedef Uint16 SDL_AudioFormat;
 #define AUDIO_S16       AUDIO_S16LSB  /* Default 16-bit format */
 #define AUDIO_U16       AUDIO_U16LSB
 
+/* System native byte order (little-endian on x86/VOS) */
+#define AUDIO_U16SYS    AUDIO_U16LSB
+#define AUDIO_S16SYS    AUDIO_S16LSB
+
 /* Macros for extracting format info */
 #define SDL_AUDIO_BITSIZE(x)    ((x) & 0xFF)
 #define SDL_AUDIO_ISSIGNED(x)   ((x) & 0x8000)

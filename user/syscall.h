@@ -206,6 +206,7 @@ enum {
     SYS_GFX_FLIP = 98,
     SYS_GFX_DOUBLE_BUFFER = 99,
     SYS_DISK_INFO = 100,
+    SYS_SET_CONSOLE = 101,
 };
 
 // For select() syscall
@@ -1043,6 +1044,18 @@ static inline int sys_audio_close(int handle) {
         "int $0x80"
         : "=a"(ret)
         : "a"(SYS_AUDIO_CLOSE), "b"(handle)
+        : "memory"
+    );
+    return ret;
+}
+
+// Virtual console syscall - set which console this process belongs to
+static inline int sys_set_console(int console) {
+    int ret;
+    __asm__ volatile (
+        "int $0x80"
+        : "=a"(ret)
+        : "a"(SYS_SET_CONSOLE), "b"(console)
         : "memory"
     );
     return ret;

@@ -20,6 +20,8 @@
 #include "SDL_events.h"
 #include "SDL_timer.h"
 #include "SDL_keyboard.h"
+#include "SDL_mutex.h"
+#include "SDL_rwops.h"
 
 /*
  * SDL initialization flags
@@ -134,5 +136,42 @@ const char *SDL_GetRevision(void);
  * Deprecated in SDL2, returns 0 for VOS.
  */
 int SDL_GetRevisionNumber(void);
+
+/*
+ * SDL_getenv() / SDL_setenv() - Environment variable functions
+ *
+ * These wrap standard C getenv/setenv for compatibility.
+ */
+char *SDL_getenv(const char *name);
+int SDL_setenv(const char *name, const char *value, int overwrite);
+
+/*
+ * SDL_SetWindowIcon() - Set window icon
+ *
+ * VOS stub - window icons are not supported.
+ */
+void SDL_SetWindowIcon(SDL_Window *window, SDL_Surface *icon);
+
+/*
+ * Message box flags
+ */
+#define SDL_MESSAGEBOX_ERROR        0x00000010
+#define SDL_MESSAGEBOX_WARNING      0x00000020
+#define SDL_MESSAGEBOX_INFORMATION  0x00000040
+
+/*
+ * SDL_ShowSimpleMessageBox() - Display a simple modal message box
+ *
+ * VOS stub - message boxes are printed to stderr.
+ *
+ * flags: SDL_MESSAGEBOX_* flags
+ * title: UTF-8 title text
+ * message: UTF-8 message text
+ * window: Parent window (can be NULL)
+ *
+ * Returns 0 on success, -1 on failure.
+ */
+int SDL_ShowSimpleMessageBox(Uint32 flags, const char *title,
+                             const char *message, SDL_Window *window);
 
 #endif /* SDL_h_ */

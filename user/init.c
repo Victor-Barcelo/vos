@@ -526,6 +526,8 @@ int main(int argc, char** argv) {
         }
 
         if (pid == 0) {
+            // Test: explicitly set console 0
+            sys_set_console(0);
             char* const largv[] = {"/bin/login", NULL};
             execve("/bin/login", largv, NULL);
             tag("[init] ", CLR_CYAN);

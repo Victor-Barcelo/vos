@@ -14,6 +14,7 @@
 #include "SDL2/SDL_error.h"
 #include <string.h>
 #include <stdint.h>
+#include "syscall.h"
 
 /* Track which subsystems are initialized */
 static Uint32 sdl_initialized_subsystems = 0;
@@ -228,13 +229,11 @@ int SDL_Error(SDL_errorcode code) {
 
 /* Delay function */
 void SDL_Delay(Uint32 ms) {
-    extern int sys_sleep(uint32_t ms);
     sys_sleep(ms);
 }
 
 /* Get ticks (milliseconds since SDL init) */
 Uint32 SDL_GetTicks(void) {
-    extern uint32_t sys_uptime_ms(void);
     return sys_uptime_ms();
 }
 

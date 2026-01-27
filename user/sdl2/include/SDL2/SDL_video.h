@@ -81,6 +81,9 @@ typedef struct SDL_Surface {
 #define SDL_DONTFREE        0x00000004
 #define SDL_SIMD_ALIGNED    0x00000008
 
+/* SDL_MUSTLOCK - check if surface needs locking before access */
+#define SDL_MUSTLOCK(surface) (((surface)->flags & SDL_RLEACCEL) != 0)
+
 /* Display mode structure */
 typedef struct SDL_DisplayMode {
     Uint32 format;              /* Pixel format */
@@ -198,6 +201,16 @@ const char* SDL_GetWindowTitle(SDL_Window *window);
  * Set the title of a window.
  */
 void SDL_SetWindowTitle(SDL_Window *window, const char *title);
+
+/**
+ * Set the minimum size of a window's client area.
+ */
+void SDL_SetWindowMinimumSize(SDL_Window *window, int min_w, int min_h);
+
+/**
+ * Get the minimum size of a window's client area.
+ */
+void SDL_GetWindowMinimumSize(SDL_Window *window, int *w, int *h);
 
 /**
  * Show a window.
@@ -372,6 +385,23 @@ SDL_Surface* SDL_ConvertSurface(SDL_Surface *src, const SDL_PixelFormat *fmt, Ui
  * Copy an existing surface to a new surface of the specified format.
  */
 SDL_Surface* SDL_ConvertSurfaceFormat(SDL_Surface *src, Uint32 pixel_format, Uint32 flags);
+
+/* Forward declare SDL_RWops */
+struct SDL_RWops;
+
+/**
+ * Load a BMP image from an SDL_RWops.
+ *
+ * src: The RWops to read from
+ * freesrc: If non-zero, the RWops will be closed after reading
+ * Returns a new SDL_Surface, or NULL on error.
+ */
+SDL_Surface* SDL_LoadBMP_RW(struct SDL_RWops *src, int freesrc);
+
+/**
+ * Load a BMP image from a file.
+ */
+#define SDL_LoadBMP(file)   SDL_LoadBMP_RW(SDL_RWFromFile(file, "rb"), 1)
 
 /* Convenience macro for BlitSurface */
 #define SDL_BlitSurface SDL_UpperBlit

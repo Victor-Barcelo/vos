@@ -1,13 +1,61 @@
 #include "vfs.h"
 
 #include "ctype.h"
-#include "fatdisk.h"
 #include "kerrno.h"
 #include "kheap.h"
+#include "minixfs.h"
 #include "paging.h"
 #include "pmm.h"
 #include "ramfs.h"
 #include "string.h"
+
+// Convert Unix timestamp to FAT date/time format
+static void unix_to_fat_ts(uint32_t unix_ts, uint16_t* out_wtime, uint16_t* out_wdate) {
+    // Days per month (non-leap year)
+    static const int mdays[] = {31,28,31,30,31,30,31,31,30,31,30,31};
+
+    // Calculate date/time from unix timestamp
+    uint32_t secs = unix_ts;
+    uint32_t days = secs / 86400;
+    secs %= 86400;
+
+    int hour = (int)(secs / 3600);
+    secs %= 3600;
+    int minute = (int)(secs / 60);
+    int second = (int)(secs % 60);
+
+    // Calculate year (starting from 1970)
+    int year = 1970;
+    while (1) {
+        int leap = (year % 4 == 0 && (year % 100 != 0 || year % 400 == 0));
+        int yday = leap ? 366 : 365;
+        if (days < (uint32_t)yday) break;
+        days -= yday;
+        year++;
+    }
+
+    // Calculate month and day
+    int leap = (year % 4 == 0 && (year % 100 != 0 || year % 400 == 0));
+    int month = 0;
+    while (month < 12) {
+        int mday = mdays[month];
+        if (month == 1 && leap) mday++;
+        if (days < (uint32_t)mday) break;
+        days -= mday;
+        month++;
+    }
+    int day = (int)days + 1;
+    month++;
+
+    // FAT date: bits 0-4 = day, 5-8 = month, 9-15 = year since 1980
+    int fat_year = year - 1980;
+    if (fat_year < 0) fat_year = 0;
+    if (fat_year > 127) fat_year = 127;
+    *out_wdate = (uint16_t)((fat_year << 9) | (month << 5) | day);
+
+    // FAT time: bits 0-4 = second/2, 5-10 = minute, 11-15 = hour
+    *out_wtime = (uint16_t)((hour << 11) | (minute << 5) | (second / 2));
+}
 
 // Keep these in sync with newlib's <sys/_default_fcntl.h>.
 enum {
@@ -31,7 +79,7 @@ enum {
 typedef enum {
     VFS_BACKEND_INITRAMFS = 0,
     VFS_BACKEND_RAMFS = 1,
-    VFS_BACKEND_FATDISK = 2,
+    VFS_BACKEND_MINIXFS = 2,
 } vfs_backend_t;
 
 typedef enum {
@@ -151,15 +199,19 @@ static bool abs_alias_to(const char* abs, const char* mount, const char* target,
 }
 
 // Check if a path exists (for overlay fallback logic).
-// Works with both /ram/... (ramfs) and /disk/... (fatdisk) paths.
+// Works with both /ram/... (ramfs) and /disk/... (minixfs) paths.
 static bool vfs_path_exists_raw(const char* path) {
     if (!path) return false;
-    bool is_dir;
-    // Check fatdisk for /disk/... paths
+    // Check minixfs for /disk/... paths
     if (ci_starts_with(path, "/disk") && (path[5] == '/' || path[5] == '\0')) {
-        return fatdisk_stat_ex(path, &is_dir, NULL, NULL, NULL);
+        if (!minixfs_is_ready()) return false;
+        const char* rel = path + 5;  // skip "/disk"
+        if (*rel == '\0') rel = "/";
+        minixfs_stat_t mst;
+        return minixfs_stat(rel, &mst);
     }
     // Check ramfs for /ram/... paths
+    bool is_dir;
     while (*path == '/') path++;
     return ramfs_stat_ex(path, &is_dir, NULL, NULL, NULL);
 }
@@ -550,17 +602,19 @@ static uint32_t initramfs_list_dir_abs(const char* abs_path, vfs_dirent_t* out, 
         bool is_dir = false;
         uint32_t size = 0;
 
-        if (fatdisk_is_ready()) {
-            (void)fatdisk_stat_ex("/disk", &is_dir, &size, &wtime, &wdate);
-        }
-        count = add_unique_dirent(out, count, max, "disk", true, 0, wtime, wdate);
+        // Add /disk mount point (Minix filesystem)
+        if (minixfs_is_ready()) {
+            minixfs_stat_t mst;
+            if (minixfs_stat("/", &mst)) {
+                unix_to_fat_ts(mst.mtime, &wtime, &wdate);
+            }
+            count = add_unique_dirent(out, count, max, "disk", true, 0, wtime, wdate);
 
-        wtime = 0;
-        wdate = 0;
-        is_dir = false;
-        size = 0;
-        if (fatdisk_is_ready() && fatdisk_stat_ex("/disk/usr", &is_dir, &size, &wtime, &wdate) && is_dir) {
-            count = add_unique_dirent(out, count, max, "usr", true, 0, wtime, wdate);
+            // Check if /disk/usr exists for /usr alias
+            if (minixfs_stat("/usr", &mst)) {
+                unix_to_fat_ts(mst.mtime, &wtime, &wdate);
+                count = add_unique_dirent(out, count, max, "usr", true, 0, wtime, wdate);
+            }
         }
 
         wtime = 0;
@@ -622,30 +676,24 @@ static int32_t vfs_lstat_abs(const char* abs_path, vfs_stat_t* out) {
     }
     memset(out, 0, sizeof(*out));
 
+    // /disk uses Minix filesystem for persistent storage
     if (abs_is_mount(abs_path, "/disk")) {
-        if (!fatdisk_is_ready()) {
+        if (!minixfs_is_ready()) {
             return -EIO;
         }
-        bool is_dir = false;
-        uint32_t size = 0;
-        uint16_t wtime = 0;
-        uint16_t wdate = 0;
-        if (!fatdisk_stat_ex(abs_path, &is_dir, &size, &wtime, &wdate)) {
+        const char* rel = abs_path + 5;  // skip "/disk"
+        if (*rel == '\0') rel = "/";
+        minixfs_stat_t mst;
+        if (!minixfs_stat(rel, &mst)) {
             return -ENOENT;
         }
-        out->is_dir = is_dir ? 1u : 0u;
-        out->size = size;
-        out->wtime = wtime;
-        out->wdate = wdate;
-
-        bool is_symlink = false;
-        uint16_t mode = is_dir ? 0755u : 0644u;
-        (void)fatdisk_get_meta(abs_path, &is_symlink, &mode);
-        out->is_symlink = is_symlink ? 1u : 0u;
-        out->mode = (uint16_t)(mode & 07777u);
-        if (out->is_symlink) {
-            out->is_dir = 0;
-        }
+        out->is_dir = MINIX_S_ISDIR(mst.mode) ? 1u : 0u;
+        out->is_symlink = MINIX_S_ISLNK(mst.mode) ? 1u : 0u;
+        out->size = mst.size;
+        out->mode = (uint16_t)(mst.mode & 07777u);
+        out->uid = mst.uid;
+        out->gid = mst.gid;
+        unix_to_fat_ts(mst.mtime, &out->wtime, &out->wdate);
         return 0;
     }
 
@@ -703,24 +751,28 @@ static int32_t vfs_readlink_abs(const char* abs_path, char* out, uint32_t cap, u
         return 0;
     }
 
+    // /disk uses Minix filesystem
     if (abs_is_mount(abs_path, "/disk")) {
-        uint8_t* data = NULL;
-        uint32_t size = 0;
-        if (!fatdisk_read_file_alloc(abs_path, &data, &size) || !data) {
+        if (!minixfs_is_ready()) {
             return -EIO;
         }
-
+        const char* rel = abs_path + 5;  // skip "/disk"
+        if (*rel == '\0') rel = "/";
+        char target[VFS_PATH_MAX];
+        if (!minixfs_readlink(rel, target, sizeof(target))) {
+            return -EIO;
+        }
+        uint32_t size = (uint32_t)strlen(target);
         uint32_t n = size;
         if (n > cap) {
             n = cap;
         }
         if (n != 0) {
-            memcpy(out, data, n);
+            memcpy(out, target, n);
         }
         if (out_len) {
             *out_len = size;
         }
-        kfree(data);
         return (int32_t)n;
     }
 
@@ -1005,16 +1057,17 @@ int32_t vfs_mkdir_path(const char* cwd, const char* path) {
         return rc;
     }
 
+    // /disk uses Minix filesystem
     if (abs_is_mount(eff, "/disk")) {
-        if (!fatdisk_is_ready()) {
+        if (!minixfs_is_ready()) {
             return -EIO;
         }
-        bool is_dir = false;
-        uint32_t size = 0;
-        if (fatdisk_stat(eff, &is_dir, &size)) {
+        const char* rel = eff + 5;  // skip "/disk"
+        if (*rel == '\0') rel = "/";
+        if (minixfs_is_dir(rel) || minixfs_is_file(rel)) {
             return -EEXIST;
         }
-        if (!fatdisk_mkdir(eff)) {
+        if (!minixfs_mkdir(rel)) {
             return -EIO;
         }
         return 0;
@@ -1056,20 +1109,17 @@ int32_t vfs_symlink_path(const char* cwd, const char* target, const char* linkpa
 
     uint32_t len = (uint32_t)strlen(target);
 
+    // /disk uses Minix filesystem
     if (abs_is_mount(eff, "/disk")) {
-        if (!fatdisk_is_ready()) {
+        if (!minixfs_is_ready()) {
             return -EIO;
         }
-        bool is_dir = false;
-        uint32_t size = 0;
-        if (fatdisk_stat(eff, &is_dir, &size)) {
+        const char* rel = eff + 5;  // skip "/disk"
+        if (*rel == '\0') rel = "/";
+        if (minixfs_is_dir(rel) || minixfs_is_file(rel)) {
             return -EEXIST;
         }
-        if (!fatdisk_write_file(eff, (const uint8_t*)target, len, false)) {
-            return -EIO;
-        }
-        if (!fatdisk_set_meta(eff, true, 0777u)) {
-            (void)fatdisk_unlink(eff);
+        if (!minixfs_symlink(target, rel)) {
             return -EIO;
         }
         return 0;
@@ -1119,11 +1169,14 @@ int32_t vfs_chmod_path(const char* cwd, const char* path, uint16_t mode) {
         return -EINVAL;
     }
 
+    // /disk uses Minix filesystem
     if (abs_is_mount(eff, "/disk")) {
-        if (!fatdisk_is_ready()) {
+        if (!minixfs_is_ready()) {
             return -EIO;
         }
-        if (!fatdisk_set_meta(eff, false, mode)) {
+        const char* rel = eff + 5;  // skip "/disk"
+        if (*rel == '\0') rel = "/";
+        if (!minixfs_chmod(rel, mode)) {
             return -EIO;
         }
         return 0;
@@ -1146,9 +1199,17 @@ int32_t vfs_chown_path(const char* cwd, const char* path, uint32_t uid, uint32_t
         return rc;
     }
 
-    // FAT16 doesn't support ownership - return ENOTSUP.
+    // /disk uses Minix filesystem
     if (abs_is_mount(eff, "/disk")) {
-        return -ENOTSUP;
+        if (!minixfs_is_ready()) {
+            return -EIO;
+        }
+        const char* rel = eff + 5;  // skip "/disk"
+        if (*rel == '\0') rel = "/";
+        if (!minixfs_chown(rel, (uint16_t)uid, (uint16_t)gid)) {
+            return -EIO;
+        }
+        return 0;
     }
 
     if (abs_is_mount(eff, "/ram")) {
@@ -1169,9 +1230,17 @@ int32_t vfs_lchown_path(const char* cwd, const char* path, uint32_t uid, uint32_
         return rc;
     }
 
-    // FAT16 doesn't support ownership.
+    // /disk uses Minix filesystem
     if (abs_is_mount(eff, "/disk")) {
-        return -ENOTSUP;
+        if (!minixfs_is_ready()) {
+            return -EIO;
+        }
+        const char* rel = eff + 5;  // skip "/disk"
+        if (*rel == '\0') rel = "/";
+        if (!minixfs_chown(rel, (uint16_t)uid, (uint16_t)gid)) {
+            return -EIO;
+        }
+        return 0;
     }
 
     if (abs_is_mount(eff, "/ram")) {
@@ -1196,17 +1265,19 @@ int32_t vfs_statfs_path(const char* cwd, const char* path, vfs_statfs_t* out) {
         return rc;
     }
 
+    // /disk uses Minix filesystem
     if (abs_is_mount(eff, "/disk")) {
-        uint32_t bsize = 0;
-        uint32_t blocks = 0;
-        uint32_t bfree = 0;
-        if (!fatdisk_statfs(&bsize, &blocks, &bfree)) {
+        uint32_t total_blocks = 0;
+        uint32_t free_blocks = 0;
+        uint32_t total_inodes = 0;
+        uint32_t free_inodes = 0;
+        if (!minixfs_statfs(&total_blocks, &free_blocks, &total_inodes, &free_inodes)) {
             return -EIO;
         }
-        out->bsize = bsize;
-        out->blocks = blocks;
-        out->bfree = bfree;
-        out->bavail = bfree;
+        out->bsize = MINIX_BLOCK_SIZE;
+        out->blocks = total_blocks;
+        out->bfree = free_blocks;
+        out->bavail = free_blocks;
         return 0;
     }
 
@@ -1266,13 +1337,19 @@ static int32_t open_dir_handle(vfs_backend_t backend, const char* abs_path, uint
     // Materialize directory entries.
     uint32_t count = 0;
 
-    if (backend == VFS_BACKEND_FATDISK) {
-        fatdisk_dirent_t* dents = (fatdisk_dirent_t*)kcalloc(VFS_MAX_DIR_ENTRIES, sizeof(fatdisk_dirent_t));
+    if (backend == VFS_BACKEND_MINIXFS) {
+        minixfs_dirent_t* dents = (minixfs_dirent_t*)kcalloc(VFS_MAX_DIR_ENTRIES, sizeof(minixfs_dirent_t));
         if (!dents) {
             kfree(h);
             return -ENOMEM;
         }
-        count = fatdisk_list_dir(abs_path, dents, VFS_MAX_DIR_ENTRIES);
+        // abs_path is like "/disk/foo", skip "/disk"
+        const char* rel = abs_path;
+        if (ci_starts_with(abs_path, "/disk")) {
+            rel = abs_path + 5;
+            if (*rel == '\0') rel = "/";
+        }
+        count = minixfs_readdir(rel, dents, VFS_MAX_DIR_ENTRIES);
         if (count > 0) {
             h->ents = (vfs_dirent_t*)kcalloc(count, sizeof(vfs_dirent_t));
             if (!h->ents) {
@@ -1284,11 +1361,28 @@ static int32_t open_dir_handle(vfs_backend_t backend, const char* abs_path, uint
                 strncpy(h->ents[i].name, dents[i].name, VFS_NAME_MAX - 1u);
                 h->ents[i].name[VFS_NAME_MAX - 1u] = '\0';
                 h->ents[i].is_dir = dents[i].is_dir ? 1u : 0u;
-                h->ents[i].is_symlink = dents[i].is_symlink ? 1u : 0u;
-                h->ents[i].mode = (uint16_t)(dents[i].mode & 07777u);
-                h->ents[i].size = dents[i].size;
-                h->ents[i].wtime = dents[i].wtime;
-                h->ents[i].wdate = dents[i].wdate;
+                // Get full info via stat
+                char full_path[VFS_PATH_MAX];
+                if (rel[0] == '/' && rel[1] == '\0') {
+                    full_path[0] = '/';
+                    strncpy(full_path + 1, dents[i].name, VFS_PATH_MAX - 2);
+                    full_path[VFS_PATH_MAX - 1] = '\0';
+                } else {
+                    strncpy(full_path, rel, VFS_PATH_MAX - 1);
+                    full_path[VFS_PATH_MAX - 1] = '\0';
+                    size_t len = strlen(full_path);
+                    if (len + 2 < VFS_PATH_MAX) {
+                        full_path[len] = '/';
+                        strncpy(full_path + len + 1, dents[i].name, VFS_PATH_MAX - len - 2);
+                        full_path[VFS_PATH_MAX - 1] = '\0';
+                    }
+                }
+                minixfs_stat_t mst;
+                if (minixfs_stat(full_path, &mst)) {
+                    h->ents[i].is_symlink = MINIX_S_ISLNK(mst.mode) ? 1u : 0u;
+                    h->ents[i].mode = (uint16_t)(mst.mode & 07777u);
+                    h->ents[i].size = mst.size;
+                }
             }
         }
         kfree(dents);
@@ -1550,17 +1644,18 @@ int32_t vfs_open_path(const char* cwd, const char* path, uint32_t flags, vfs_han
         return rc;
     }
 
-    // /disk
+    // /disk (minixfs)
     if (abs_is_mount(eff, "/disk")) {
-        if (!fatdisk_is_ready()) {
+        if (!minixfs_is_ready()) {
             return -EIO;
         }
+        const char* rel = eff + 5;  // skip "/disk"
+        if (*rel == '\0') rel = "/";
 
-        bool is_dir = false;
-        uint32_t size = 0;
-        bool exists = fatdisk_stat(eff, &is_dir, &size);
+        bool is_dir = minixfs_is_dir(rel);
+        bool is_file = minixfs_is_file(rel);
 
-        if (exists) {
+        if (is_dir || is_file) {
             if (want_dir && !is_dir) {
                 return -ENOTDIR;
             }
@@ -1568,16 +1663,15 @@ int32_t vfs_open_path(const char* cwd, const char* path, uint32_t flags, vfs_han
                 if (want_write) {
                     return -EISDIR;
                 }
-                return open_dir_handle(VFS_BACKEND_FATDISK, eff, flags, out);
+                return open_dir_handle(VFS_BACKEND_MINIXFS, eff, flags, out);
             }
             if ((flags & VFS_O_CREAT) && (flags & VFS_O_EXCL)) {
                 return -EEXIST;
             }
             if (want_write && (flags & VFS_O_TRUNC)) {
-                if (!fatdisk_write_file(eff, NULL, 0, true)) {
+                if (!minixfs_write_file(rel, NULL, 0)) {
                     return -EIO;
                 }
-                size = 0;
             }
         } else {
             if (want_dir) {
@@ -1587,37 +1681,24 @@ int32_t vfs_open_path(const char* cwd, const char* path, uint32_t flags, vfs_han
                 return -ENOENT;
             }
             // Create empty file.
-            if (!fatdisk_write_file(eff, NULL, 0, false)) {
+            if (!minixfs_write_file(rel, NULL, 0)) {
                 return -EIO;
             }
-            size = 0;
         }
 
         uint8_t* data = NULL;
-        if (!want_write && (flags & VFS_O_TRUNC) == 0) {
-            // Read-only: keep an owned buffer to simplify lifetime.
-            if (size) {
-                if (!fatdisk_read_file_alloc(eff, &data, &size) || !data) {
-                    return -EIO;
-                }
-            } else {
-                data = NULL;
-            }
-        } else if ((flags & VFS_O_TRUNC) == 0) {
-            if (size) {
-                if (!fatdisk_read_file_alloc(eff, &data, &size) || !data) {
-                    return -EIO;
-                }
-            }
+        uint32_t size = 0;
+        if ((flags & VFS_O_TRUNC) == 0) {
+            data = minixfs_read_file(rel, &size);
+            // data may be NULL for empty files
         }
 
-        rc = open_file_handle(VFS_BACKEND_FATDISK, eff, flags, data, size, out);
+        rc = open_file_handle(VFS_BACKEND_MINIXFS, eff, flags, data, size, out);
         if (rc < 0) {
             if (data) kfree(data);
             return rc;
         }
-        // For FAT-backed files we always treat `data` as owned (it came from kmalloc).
-        (*out)->buf = (uint8_t*)data;
+        (*out)->buf = data;
         (*out)->cap = size;
         (*out)->ro_data = (*out)->buf;
         return 0;
@@ -1715,8 +1796,11 @@ int32_t vfs_close(vfs_handle_t* h) {
 
     int32_t rc = 0;
     if (h->kind == VFS_HANDLE_FILE && h->dirty && handle_writable(h)) {
-        if (h->backend == VFS_BACKEND_FATDISK) {
-            if (!fatdisk_write_file(h->abs_path, h->buf, h->size, true)) {
+        if (h->backend == VFS_BACKEND_MINIXFS) {
+            // h->abs_path is "/disk/...", extract relative path
+            const char* rel = h->abs_path + 5;
+            if (*rel == '\0') rel = "/";
+            if (!minixfs_write_file(rel, h->buf, h->size)) {
                 rc = -EIO;
             }
         } else if (h->backend == VFS_BACKEND_RAMFS) {
@@ -1885,10 +1969,15 @@ int32_t vfs_fstat(vfs_handle_t* h, vfs_stat_t* out) {
     uint16_t wtime = 0;
     uint16_t wdate = 0;
 
-    if (h->backend == VFS_BACKEND_FATDISK) {
-        bool is_dir = false;
-        uint32_t size = 0;
-        if (fatdisk_stat_ex(h->abs_path, &is_dir, &size, &wtime, &wdate)) {
+    if (h->backend == VFS_BACKEND_MINIXFS) {
+        const char* rel = h->abs_path + 5;  // skip "/disk"
+        if (*rel == '\0') rel = "/";
+        minixfs_stat_t mst;
+        if (minixfs_stat(rel, &mst)) {
+            out->mode = (uint16_t)(mst.mode & 07777u);
+            out->uid = mst.uid;
+            out->gid = mst.gid;
+            unix_to_fat_ts(mst.mtime, &wtime, &wdate);
             out->wtime = wtime;
             out->wdate = wdate;
         }
@@ -1971,18 +2060,17 @@ int32_t vfs_unlink_path(const char* cwd, const char* path) {
     }
 
     if (abs_is_mount(eff, "/disk")) {
-        if (!fatdisk_is_ready()) {
+        if (!minixfs_is_ready()) {
             return -EIO;
         }
-        bool is_dir = false;
-        uint32_t size = 0;
-        if (!fatdisk_stat(eff, &is_dir, &size)) {
-            return -ENOENT;
-        }
-        if (is_dir) {
+        const char* rel = eff + 5;  // skip "/disk"
+        if (minixfs_is_dir(rel)) {
             return -EISDIR;
         }
-        if (!fatdisk_unlink(eff)) {
+        if (!minixfs_is_file(rel)) {
+            return -ENOENT;
+        }
+        if (!minixfs_unlink(rel)) {
             return -EIO;
         }
         return 0;
@@ -2024,33 +2112,14 @@ int32_t vfs_rmdir_path(const char* cwd, const char* path) {
     }
 
     if (abs_is_mount(eff, "/disk")) {
-        if (!fatdisk_is_ready()) {
+        if (!minixfs_is_ready()) {
             return -EIO;
         }
-        bool is_dir = false;
-        uint32_t size = 0;
-        if (!fatdisk_stat(eff, &is_dir, &size)) {
-            return -ENOENT;
+        const char* rel = eff + 5;  // skip "/disk"
+        if (!minixfs_is_dir(rel)) {
+            return minixfs_is_file(rel) ? -ENOTDIR : -ENOENT;
         }
-        if (!is_dir) {
-            return -ENOTDIR;
-        }
-
-        fatdisk_dirent_t* dents = (fatdisk_dirent_t*)kcalloc(VFS_MAX_DIR_ENTRIES, sizeof(fatdisk_dirent_t));
-        if (!dents) {
-            return -ENOMEM;
-        }
-        uint32_t n = fatdisk_list_dir(eff, dents, VFS_MAX_DIR_ENTRIES);
-        for (uint32_t i = 0; i < n; i++) {
-            if (ci_eq(dents[i].name, ".") || ci_eq(dents[i].name, "..")) {
-                continue;
-            }
-            kfree(dents);
-            return -ENOTEMPTY;
-        }
-        kfree(dents);
-
-        if (!fatdisk_rmdir(eff)) {
+        if (!minixfs_rmdir(rel)) {
             return -EIO;
         }
         return 0;
@@ -2168,25 +2237,18 @@ int32_t vfs_rename_path(const char* cwd, const char* old_path, const char* new_p
     bool new_disk = abs_is_mount(new_eff, "/disk");
     bool new_ram = abs_is_mount(new_eff, "/ram");
 
-    if ((old_disk && !new_disk) || (old_ram && !new_ram) || (!old_disk && !old_ram) || (!new_disk && !new_ram)) {
+    if ((old_disk && !new_disk) || (old_ram && !new_ram) ||
+        (!old_disk && !old_ram) || (!new_disk && !new_ram)) {
         return -EXDEV;
     }
 
     if (old_disk) {
-        if (!fatdisk_is_ready()) {
+        if (!minixfs_is_ready()) {
             return -EIO;
         }
-
-        // fatdisk_rename currently can't move across directories.
-        char old_dir[VFS_PATH_MAX];
-        char new_dir[VFS_PATH_MAX];
-        abs_dirname(old_eff, old_dir);
-        abs_dirname(new_eff, new_dir);
-        if (!ci_eq(old_dir, new_dir)) {
-            return -EXDEV;
-        }
-
-        if (!fatdisk_rename(old_eff, new_eff)) {
+        const char* old_rel = old_eff + 5;  // skip "/disk"
+        const char* new_rel = new_eff + 5;
+        if (!minixfs_rename(old_rel, new_rel)) {
             return -EIO;
         }
         return 0;
@@ -2255,8 +2317,10 @@ int32_t vfs_fsync(vfs_handle_t* h) {
     }
 
     int32_t rc = 0;
-    if (h->backend == VFS_BACKEND_FATDISK) {
-        if (!fatdisk_write_file(h->abs_path, h->buf, h->size, true)) {
+    if (h->backend == VFS_BACKEND_MINIXFS) {
+        const char* rel = h->abs_path + 5;  // skip "/disk"
+        if (*rel == '\0') rel = "/";
+        if (!minixfs_write_file(rel, h->buf, h->size)) {
             rc = -EIO;
         }
     } else if (h->backend == VFS_BACKEND_RAMFS) {
@@ -2289,11 +2353,11 @@ int32_t vfs_fchmod(vfs_handle_t* h, uint16_t mode) {
 
     mode &= 07777u;
 
-    if (h->backend == VFS_BACKEND_FATDISK) {
-        if (!fatdisk_is_ready()) {
+    if (h->backend == VFS_BACKEND_MINIXFS) {
+        if (!minixfs_is_ready()) {
             return -EIO;
         }
-        if (!fatdisk_set_meta(h->abs_path, false, mode)) {
+        if (!minixfs_chmod(h->abs_path + 5, mode)) {  // skip "/disk"
             return -EIO;
         }
         return 0;
@@ -2317,9 +2381,14 @@ int32_t vfs_fchown(vfs_handle_t* h, uint32_t uid, uint32_t gid) {
         return -EROFS;
     }
 
-    // FAT16 doesn't support ownership.
-    if (h->backend == VFS_BACKEND_FATDISK) {
-        return -ENOTSUP;
+    if (h->backend == VFS_BACKEND_MINIXFS) {
+        if (!minixfs_is_ready()) {
+            return -EIO;
+        }
+        if (!minixfs_chown(h->abs_path + 5, (uint16_t)uid, (uint16_t)gid)) {  // skip "/disk"
+            return -EIO;
+        }
+        return 0;
     }
 
     if (h->backend == VFS_BACKEND_RAMFS) {

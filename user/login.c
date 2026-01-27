@@ -8,9 +8,13 @@
 
 #include "syscall.h"
 
-// VFS has overlay semantics: /etc/passwd prefers /disk/etc/passwd,
-// falling back to initramfs if not found
-#define PASSWD_PATH "/etc/passwd"
+// Check /ram/etc/passwd first (set up by init), then /disk/etc/passwd
+static const char* const passwd_paths[] = {
+    "/ram/etc/passwd",
+    "/disk/etc/passwd",
+    "/etc/passwd",
+    NULL
+};
 
 typedef struct user_entry {
     char name[32];
@@ -62,14 +66,16 @@ static int parse_passwd_line(char* line, user_entry_t* out) {
         return -1;
     }
 
-    // name:pass:uid:gid:home:shell
-    char* fields[6] = {0};
+    // Standard passwd format: name:pass:uid:gid:gecos:home:shell (7 fields)
+    // Also accept shorter: name:pass:uid:gid:home:shell (6 fields, no gecos)
+    char* fields[7] = {0};
     int nf = 0;
     char* p = line;
-    for (; nf < 6; nf++) {
+    for (; nf < 7; nf++) {
         fields[nf] = p;
         char* c = strchr(p, ':');
         if (!c) {
+            nf++;  // count the last field
             break;
         }
         *c = '\0';
@@ -102,18 +108,38 @@ static int parse_passwd_line(char* line, user_entry_t* out) {
         out->gid = out->uid;
     }
 
-    if (fields[4] && fields[4][0] != '\0') {
-        strncpy(out->home, fields[4], sizeof(out->home) - 1u);
+    // Determine home and shell based on field count
+    // 7 fields: name:pass:uid:gid:gecos:home:shell
+    // 6 fields: name:pass:uid:gid:home:shell
+    const char* home_field = NULL;
+    const char* shell_field = NULL;
+
+    if (nf >= 7 && fields[6]) {
+        // 7-field format with GECOS
+        home_field = fields[5];
+        shell_field = fields[6];
+    } else if (nf >= 6) {
+        // 6-field format without GECOS
+        home_field = fields[4];
+        shell_field = fields[5];
+    } else {
+        // Not enough fields
+        home_field = NULL;
+        shell_field = NULL;
+    }
+
+    if (home_field && home_field[0] != '\0') {
+        strncpy(out->home, home_field, sizeof(out->home) - 1u);
         out->home[sizeof(out->home) - 1u] = '\0';
     } else {
         snprintf(out->home, sizeof(out->home), "/home/%s", out->name);
     }
 
-    if (fields[5] && fields[5][0] != '\0') {
-        strncpy(out->shell, fields[5], sizeof(out->shell) - 1u);
+    if (shell_field && shell_field[0] != '\0') {
+        strncpy(out->shell, shell_field, sizeof(out->shell) - 1u);
         out->shell[sizeof(out->shell) - 1u] = '\0';
     } else {
-        strncpy(out->shell, "/bin/sh", sizeof(out->shell) - 1u);
+        strncpy(out->shell, "/bin/dash", sizeof(out->shell) - 1u);
         out->shell[sizeof(out->shell) - 1u] = '\0';
     }
 
@@ -125,26 +151,30 @@ static int load_user(const char* username, user_entry_t* out) {
         return -1;
     }
 
-    FILE* f = fopen(PASSWD_PATH, "r");
-    if (!f) {
-        return -1;
-    }
-
-    char line[256];
-    while (fgets(line, sizeof(line), f)) {
-        trim_newline(line);
-        user_entry_t e;
-        if (parse_passwd_line(line, &e) != 0) {
+    // Try each passwd path in order
+    for (int i = 0; passwd_paths[i] != NULL; i++) {
+        FILE* f = fopen(passwd_paths[i], "r");
+        if (!f) {
             continue;
         }
-        if (strcmp(e.name, username) == 0) {
-            fclose(f);
-            *out = e;
-            return 0;
+
+        char line[256];
+        while (fgets(line, sizeof(line), f)) {
+            trim_newline(line);
+            user_entry_t e;
+            if (parse_passwd_line(line, &e) != 0) {
+                continue;
+            }
+            if (strcmp(e.name, username) == 0) {
+                fclose(f);
+                *out = e;
+                return 0;
+            }
         }
+
+        fclose(f);
     }
 
-    fclose(f);
     return -1;
 }
 

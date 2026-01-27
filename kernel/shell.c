@@ -18,7 +18,7 @@
 #include "ramfs.h"
 #include "editor.h"
 #include "microrl.h"
-#include "fatdisk.h"
+#include "minixfs.h"
 #include "kheap.h"
 #include "speaker.h"
 
@@ -474,7 +474,9 @@ static bool vfs_dir_exists(const char* abs_path) {
     }
 
     if (is_disk_path_abs(abs_path)) {
-        return fatdisk_is_dir(abs_path);
+        const char* rel = abs_path + 5;  // skip "/disk"
+        if (*rel == '\0') rel = "/";
+        return minixfs_is_dir(rel);
     }
 
     uint32_t count = vfs_file_count();
@@ -497,7 +499,9 @@ static bool vfs_dir_exists(const char* abs_path) {
 
 static bool vfs_file_exists(const char* abs_path) {
     if (is_disk_path_abs(abs_path)) {
-        return fatdisk_is_file(abs_path);
+        const char* rel = abs_path + 5;  // skip "/disk"
+        if (*rel == '\0') return false;  // /disk itself is a dir
+        return minixfs_is_file(rel);
     }
     const uint8_t* data = NULL;
     uint32_t size = 0;
@@ -1468,10 +1472,54 @@ static bool ls_stat_abs(const char* abs_path, bool* out_is_dir, uint32_t* out_si
     }
 
     if (is_disk_path_abs(abs_path)) {
-        if (!fatdisk_is_ready()) {
+        if (!minixfs_is_ready()) {
             return false;
         }
-        return fatdisk_stat_ex(abs_path, out_is_dir, out_size, out_wtime, out_wdate);
+        const char* rel = abs_path + 5;  // skip "/disk"
+        if (*rel == '\0') rel = "/";
+        minixfs_stat_t mst;
+        if (!minixfs_stat(rel, &mst)) {
+            return false;
+        }
+        if (out_is_dir) *out_is_dir = MINIX_S_ISDIR(mst.mode);
+        if (out_size) *out_size = mst.size;
+        if (out_wtime || out_wdate) {
+            // Convert Unix timestamp to FAT format
+            uint32_t unix_ts = mst.mtime;
+            static const int mdays[] = {31,28,31,30,31,30,31,31,30,31,30,31};
+            uint32_t secs = unix_ts;
+            uint32_t days = secs / 86400;
+            secs %= 86400;
+            int hour = (int)(secs / 3600);
+            secs %= 3600;
+            int minute = (int)(secs / 60);
+            int second = (int)(secs % 60);
+            int year = 1970;
+            while (1) {
+                int leap = (year % 4 == 0 && (year % 100 != 0 || year % 400 == 0));
+                int yday = leap ? 366 : 365;
+                if (days < (uint32_t)yday) break;
+                days -= yday;
+                year++;
+            }
+            int leap = (year % 4 == 0 && (year % 100 != 0 || year % 400 == 0));
+            int month = 0;
+            while (month < 12) {
+                int mday = mdays[month];
+                if (month == 1 && leap) mday++;
+                if (days < (uint32_t)mday) break;
+                days -= mday;
+                month++;
+            }
+            int day = (int)days + 1;
+            month++;
+            int fat_year = year - 1980;
+            if (fat_year < 0) fat_year = 0;
+            if (fat_year > 127) fat_year = 127;
+            if (out_wdate) *out_wdate = (uint16_t)((fat_year << 9) | (month << 5) | day);
+            if (out_wtime) *out_wtime = (uint16_t)((hour << 11) | (minute << 5) | (second / 2));
+        }
+        return true;
     }
 
     if (is_ram_path_abs(abs_path)) {
@@ -1560,27 +1608,78 @@ static void ls_list_dir_abs(const char* abs_dir, const ls_opts_t* opts) {
     int entry_count = 0;
 
     if (is_disk_path_abs(abs_dir)) {
-        if (!fatdisk_is_ready()) {
+        if (!minixfs_is_ready()) {
             screen_println("disk: not mounted");
             kfree(entries);
             return;
         }
 
-        fatdisk_dirent_t* dents = (fatdisk_dirent_t*)kmalloc(sizeof(fatdisk_dirent_t) * (size_t)LS_MAX_ENTRIES);
+        const char* rel = abs_dir + 5;  // skip "/disk"
+        if (*rel == '\0') rel = "/";
+
+        minixfs_dirent_t* dents = (minixfs_dirent_t*)kmalloc(sizeof(minixfs_dirent_t) * (size_t)LS_MAX_ENTRIES);
         if (!dents) {
             screen_println("ls: out of memory");
             kfree(entries);
             return;
         }
 
-        uint32_t n = fatdisk_list_dir(abs_dir, dents, (uint32_t)LS_MAX_ENTRIES);
+        uint32_t n = minixfs_readdir(rel, dents, (uint32_t)LS_MAX_ENTRIES);
         for (uint32_t i = 0; i < n && entry_count < LS_MAX_ENTRIES; i++) {
             strncpy(entries[entry_count].name, dents[i].name, sizeof(entries[entry_count].name) - 1u);
             entries[entry_count].name[sizeof(entries[entry_count].name) - 1u] = '\0';
             entries[entry_count].is_dir = dents[i].is_dir;
-            entries[entry_count].size = dents[i].size;
-            entries[entry_count].wtime = dents[i].wtime;
-            entries[entry_count].wdate = dents[i].wdate;
+            // Get size and mtime via stat
+            char full_path[SHELL_PATH_MAX];
+            if (rel[0] == '/' && rel[1] == '\0') {
+                full_path[0] = '/';
+                strncpy(full_path + 1, dents[i].name, SHELL_PATH_MAX - 2);
+                full_path[SHELL_PATH_MAX - 1] = '\0';
+            } else {
+                strncpy(full_path, rel, SHELL_PATH_MAX - 1);
+                full_path[SHELL_PATH_MAX - 1] = '\0';
+                size_t len = strlen(full_path);
+                if (len + 2 < SHELL_PATH_MAX) {
+                    full_path[len] = '/';
+                    strncpy(full_path + len + 1, dents[i].name, SHELL_PATH_MAX - len - 2);
+                    full_path[SHELL_PATH_MAX - 1] = '\0';
+                }
+            }
+            minixfs_stat_t mst;
+            if (minixfs_stat(full_path, &mst)) {
+                entries[entry_count].size = mst.size;
+                // Convert mtime to FAT format
+                uint32_t unix_ts = mst.mtime;
+                static const int mdays[] = {31,28,31,30,31,30,31,31,30,31,30,31};
+                uint32_t secs = unix_ts;
+                uint32_t days = secs / 86400;
+                secs %= 86400;
+                int hour = (int)(secs / 3600);
+                secs %= 3600;
+                int minute = (int)(secs / 60);
+                int second = (int)(secs % 60);
+                int year = 1970;
+                while (days >= (uint32_t)((year % 4 == 0 && (year % 100 != 0 || year % 400 == 0)) ? 366 : 365)) {
+                    days -= (year % 4 == 0 && (year % 100 != 0 || year % 400 == 0)) ? 366 : 365;
+                    year++;
+                }
+                int leap = (year % 4 == 0 && (year % 100 != 0 || year % 400 == 0));
+                int month = 0;
+                while (month < 12) {
+                    int mday = mdays[month];
+                    if (month == 1 && leap) mday++;
+                    if (days < (uint32_t)mday) break;
+                    days -= mday;
+                    month++;
+                }
+                int day = (int)days + 1;
+                month++;
+                int fat_year = year - 1980;
+                if (fat_year < 0) fat_year = 0;
+                if (fat_year > 127) fat_year = 127;
+                entries[entry_count].wdate = (uint16_t)((fat_year << 9) | (month << 5) | day);
+                entries[entry_count].wtime = (uint16_t)((hour << 11) | (minute << 5) | (second / 2));
+            }
             entry_count++;
         }
         kfree(dents);
@@ -1684,7 +1783,7 @@ static void ls_list_dir_abs(const char* abs_dir, const ls_opts_t* opts) {
                 entries[idx].is_dir = true;
             }
 
-            if (fatdisk_is_ready()) {
+            if (minixfs_is_ready()) {
                 idx = ls_find_entry(entries, entry_count, "disk");
                 if (idx < 0 && entry_count < LS_MAX_ENTRIES) {
                     strncpy(entries[entry_count].name, "disk", sizeof(entries[entry_count].name) - 1u);
@@ -1723,23 +1822,53 @@ static void ls_list_dir_abs(const char* abs_dir, const ls_opts_t* opts) {
             }
 
             idx = ls_find_entry(entries, entry_count, "disk");
-            if (idx >= 0 && fatdisk_is_ready()) {
-                fatdisk_dirent_t* dents = (fatdisk_dirent_t*)kmalloc(sizeof(fatdisk_dirent_t) * (size_t)LS_MAX_ENTRIES);
+            if (idx >= 0 && minixfs_is_ready()) {
+                minixfs_dirent_t* dents = (minixfs_dirent_t*)kmalloc(sizeof(minixfs_dirent_t) * (size_t)LS_MAX_ENTRIES);
                 if (dents) {
-                    uint32_t n = fatdisk_list_dir("/disk", dents, (uint32_t)LS_MAX_ENTRIES);
-                    uint16_t best_time = 0;
-                    uint16_t best_date = 0;
-                    uint32_t best_key = 0;
+                    uint32_t n = minixfs_readdir("/", dents, (uint32_t)LS_MAX_ENTRIES);
+                    uint32_t best_mtime = 0;
                     for (uint32_t i = 0; i < n; i++) {
-                        uint32_t key = ((uint32_t)dents[i].wdate << 16) | (uint32_t)dents[i].wtime;
-                        if (key > best_key) {
-                            best_key = key;
-                            best_time = dents[i].wtime;
-                            best_date = dents[i].wdate;
+                        char fpath[64];
+                        fpath[0] = '/';
+                        strncpy(fpath + 1, dents[i].name, sizeof(fpath) - 2);
+                        fpath[sizeof(fpath) - 1] = '\0';
+                        minixfs_stat_t mst;
+                        if (minixfs_stat(fpath, &mst) && mst.mtime > best_mtime) {
+                            best_mtime = mst.mtime;
                         }
                     }
-                    entries[idx].wtime = best_time;
-                    entries[idx].wdate = best_date;
+                    if (best_mtime > 0) {
+                        // Convert to FAT format
+                        static const int mdays[] = {31,28,31,30,31,30,31,31,30,31,30,31};
+                        uint32_t secs = best_mtime;
+                        uint32_t days = secs / 86400;
+                        secs %= 86400;
+                        int hour = (int)(secs / 3600);
+                        secs %= 3600;
+                        int minute = (int)(secs / 60);
+                        int second = (int)(secs % 60);
+                        int year = 1970;
+                        while (days >= (uint32_t)((year % 4 == 0 && (year % 100 != 0 || year % 400 == 0)) ? 366 : 365)) {
+                            days -= (year % 4 == 0 && (year % 100 != 0 || year % 400 == 0)) ? 366 : 365;
+                            year++;
+                        }
+                        int leap = (year % 4 == 0 && (year % 100 != 0 || year % 400 == 0));
+                        int month = 0;
+                        while (month < 12) {
+                            int mday = mdays[month];
+                            if (month == 1 && leap) mday++;
+                            if (days < (uint32_t)mday) break;
+                            days -= mday;
+                            month++;
+                        }
+                        int day = (int)days + 1;
+                        month++;
+                        int fat_year = year - 1980;
+                        if (fat_year < 0) fat_year = 0;
+                        if (fat_year > 127) fat_year = 127;
+                        entries[idx].wdate = (uint16_t)((fat_year << 9) | (month << 5) | day);
+                        entries[idx].wtime = (uint16_t)((hour << 11) | (minute << 5) | (second / 2));
+                    }
                     kfree(dents);
                 }
             }
@@ -1844,7 +1973,7 @@ static void cmd_ls(const char* args) {
             continue;
         }
 
-        if (is_disk_path_abs(abs) && !fatdisk_is_ready()) {
+        if (is_disk_path_abs(abs) && !minixfs_is_ready()) {
             screen_println("disk: not mounted");
             continue;
         }
@@ -1933,7 +2062,12 @@ static void cmd_mkdir(const char* args) {
     }
 
     if (is_disk_path_abs(path)) {
-        if (!fatdisk_mkdir(path)) {
+        const char* rel = path + 5;  // skip "/disk"
+        if (*rel == '\0') {
+            screen_println("mkdir: cannot create /disk");
+            return;
+        }
+        if (!minixfs_mkdir(rel)) {
             screen_println("mkdir failed.");
         }
         return;
@@ -1991,7 +2125,9 @@ static void cmd_cp(const char* args) {
     const uint8_t* data = NULL;
     uint32_t size = 0;
     if (is_disk_path_abs(src)) {
-        if (!fatdisk_read_file_alloc(src, &disk_buf, &size) || !disk_buf) {
+        const char* rel = src + 5;  // skip "/disk"
+        disk_buf = minixfs_read_file(rel, &size);
+        if (!disk_buf) {
             screen_println("cp: source not found.");
             return;
         }
@@ -2007,7 +2143,8 @@ static void cmd_cp(const char* args) {
     if (dst_ram) {
         ok = ramfs_write_file(dst_file, data, size, false);
     } else {
-        ok = fatdisk_write_file(dst_file, data, size, false);
+        const char* dst_rel = dst_file + 5;  // skip "/disk"
+        ok = minixfs_write_file(dst_rel, data, size);
     }
 
     if (disk_buf) {
@@ -2084,13 +2221,13 @@ static void cmd_mv(const char* args) {
         }
         ok = ramfs_rename(src, dst_file);
     } else {
-        bool is_dir = false;
-        uint32_t sz = 0;
-        if (!fatdisk_stat(src, &is_dir, &sz) || is_dir) {
+        const char* src_rel = src + 5;  // skip "/disk"
+        const char* dst_rel = dst_file + 5;
+        if (!minixfs_is_file(src_rel)) {
             screen_println("mv: source not found.");
             return;
         }
-        ok = fatdisk_rename(src, dst_file);
+        ok = minixfs_rename(src_rel, dst_rel);
     }
 
     if (!ok) {
@@ -2135,8 +2272,10 @@ static void cmd_nano(const char* args) {
 
         uint8_t* disk_data = NULL;
         uint32_t disk_size = 0;
-        if (fatdisk_is_file(src)) {
-            if (!fatdisk_read_file_alloc(src, &disk_data, &disk_size) || !disk_data) {
+        const char* src_rel = src + 5;  // skip "/disk"
+        if (minixfs_is_file(src_rel)) {
+            disk_data = minixfs_read_file(src_rel, &disk_size);
+            if (!disk_data && disk_size > 0) {
                 screen_println("nano: read failed");
                 return;
             }
@@ -2152,7 +2291,7 @@ static void cmd_nano(const char* args) {
             const uint8_t* buf = NULL;
             uint32_t sz = 0;
             if (ramfs_read_file(tmp_path, &buf, &sz) && buf) {
-                if (!fatdisk_write_file(src, buf, sz, true)) {
+                if (!minixfs_write_file(src_rel, buf, sz)) {
                     screen_println("nano: write to /disk failed");
                 }
             }
@@ -2253,15 +2392,20 @@ static void cmd_cat(const char* args) {
     }
 
     if (is_disk_path_abs(path)) {
-        if (!fatdisk_is_ready()) {
+        if (!minixfs_is_ready()) {
             screen_println("disk: not mounted");
             return;
         }
 
-        uint8_t* buf = NULL;
+        const char* rel = path + 5;  // skip "/disk"
         uint32_t sz = 0;
-        if (!fatdisk_read_file_alloc(path, &buf, &sz) || !buf) {
+        uint8_t* buf = minixfs_read_file(rel, &sz);
+        if (!buf && sz > 0) {
             screen_println("File not found.");
+            return;
+        }
+        if (!buf) {
+            // Empty file
             return;
         }
 
@@ -2336,11 +2480,13 @@ static void cmd_run(const char* args) {
     const uint8_t* data = NULL;
     uint32_t size = 0;
     if (is_disk_path_abs(path)) {
-        if (!fatdisk_is_ready()) {
+        if (!minixfs_is_ready()) {
             screen_println("disk: not mounted");
             return;
         }
-        if (!fatdisk_read_file_alloc(path, &disk_buf, &size) || !disk_buf || size == 0) {
+        const char* rel = path + 5;  // skip "/disk"
+        disk_buf = minixfs_read_file(rel, &size);
+        if (!disk_buf || size == 0) {
             screen_println("File not found.");
             return;
         }

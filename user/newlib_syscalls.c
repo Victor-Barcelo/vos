@@ -2898,6 +2898,57 @@ int fchmod(int fd, mode_t mode) {
     return 0;
 }
 
+int fchmodat(int dirfd, const char* path, mode_t mode, int flag) {
+    (void)flag;  // AT_SYMLINK_NOFOLLOW not supported
+
+    if (!path) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    // Handle AT_FDCWD or absolute path
+    if (dirfd == AT_FDCWD || path[0] == '/') {
+        return chmod(path, mode);
+    }
+
+    // For relative paths with dirfd, we'd need to resolve the path
+    // For simplicity, just use the path directly (assuming cwd context)
+    return chmod(path, mode);
+}
+
+int symlinkat(const char* target, int newdirfd, const char* linkpath) {
+    if (!target || !linkpath) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    // Handle AT_FDCWD or absolute path
+    if (newdirfd == AT_FDCWD || linkpath[0] == '/') {
+        return symlink(target, linkpath);
+    }
+
+    // For relative paths with dirfd, just use the path directly
+    return symlink(target, linkpath);
+}
+
+int linkat(int olddirfd, const char* oldpath, int newdirfd, const char* newpath, int flags) {
+    (void)flags;  // AT_SYMLINK_FOLLOW not supported
+
+    if (!oldpath || !newpath) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    // Handle AT_FDCWD or absolute paths
+    if ((olddirfd == AT_FDCWD || oldpath[0] == '/') &&
+        (newdirfd == AT_FDCWD || newpath[0] == '/')) {
+        return link(oldpath, newpath);
+    }
+
+    // For relative paths with dirfd, just use the paths directly
+    return link(oldpath, newpath);
+}
+
 static int vos_system_run(const char* command) {
     if (!command) {
         return 1;

@@ -18,7 +18,9 @@
 #include "gdt.h"
 #include "task.h"
 #include "elf.h"
-#include "fatdisk.h"
+#include "ata.h"
+#include "mbr.h"
+#include "minixfs.h"
 #include "string.h"
 #include "statusbar.h"
 #include "speaker.h"
@@ -221,7 +223,25 @@ void kernel_main(uint32_t magic, uint32_t* mboot_info) {
     pmm_init(magic, (const multiboot_info_t*)mboot_info, kernel_end);
     kheap_init();
     vfs_init((const multiboot_info_t*)mboot_info);
-    (void)fatdisk_init();
+
+    // Initialize ATA disk driver
+    (void)ata_init();
+
+    // Try to read MBR partition table and mount minixfs if found
+    if (ata_is_present() && mbr_read()) {
+        mbr_print_table();
+        // Look for a Minix partition
+        int minix_part = mbr_find_partition_by_type(MBR_TYPE_MINIX);
+        if (minix_part < 0) {
+            minix_part = mbr_find_partition_by_type(MBR_TYPE_MINIX_OLD);
+        }
+        if (minix_part >= 0) {
+            const mbr_partition_t* p = mbr_get_partition(minix_part);
+            if (p) {
+                (void)minixfs_init(p->lba_start);
+            }
+        }
+    }
 
     // Display boot message
     screen_set_color(VGA_LIGHT_CYAN, VGA_BLUE);

@@ -134,6 +134,8 @@ USER_S3LCUBE_OBJ = $(USER_BUILD_DIR)/s3lcube.o
 USER_S3LFLY_OBJ = $(USER_BUILD_DIR)/s3lfly.o
 USER_OLIVEDEMO_OBJ = $(USER_BUILD_DIR)/olivedemo.o
 USER_NEXTVI_OBJ = $(USER_BUILD_DIR)/nextvi/vi.o
+USER_MD4C_OBJ = $(USER_BUILD_DIR)/md4c.o
+USER_MDVIEW_OBJ = $(USER_BUILD_DIR)/mdview.o
 USER_ZIP_OBJ = $(USER_BUILD_DIR)/zip.o
 USER_UNZIP_OBJ = $(USER_BUILD_DIR)/unzip.o
 USER_GZIP_OBJ = $(USER_BUILD_DIR)/gzip.o
@@ -165,6 +167,7 @@ USER_S3LCUBE = $(USER_BUILD_DIR)/s3lcube.elf
 USER_S3LFLY = $(USER_BUILD_DIR)/s3lfly.elf
 USER_OLIVEDEMO = $(USER_BUILD_DIR)/olivedemo.elf
 USER_NEXTVI = $(USER_BUILD_DIR)/nextvi.elf
+USER_MDVIEW = $(USER_BUILD_DIR)/mdview.elf
 USER_ZIP = $(USER_BUILD_DIR)/zip.elf
 USER_UNZIP = $(USER_BUILD_DIR)/unzip.elf
 USER_GZIP = $(USER_BUILD_DIR)/gzip.elf
@@ -234,7 +237,7 @@ SBASE_LIBS = $(SBASE_LIBUTIL) $(SBASE_LIBUTF)
 SBASE_TOOLS = \
 	cat echo basename dirname head wc grep yes true false \
 	pwd cp mv rm mkdir rmdir tail cut tr sort uniq tee nl seq rev \
-	strings od printf sed du \
+	strings od printf sed du chmod ln \
 	cksum md5sum sha1sum sha256sum sha512sum \
 	cmp comm cols dd printenv expr fold join paste split sponge \
 	test tsort unexpand expand \
@@ -322,7 +325,7 @@ DASH_C_SOURCES = \
 DASH_OBJECTS = $(patsubst $(DASH_DIR)/%.c,$(DASH_BUILD_DIR)/%.o,$(DASH_C_SOURCES))
 USER_DASH = $(USER_BUILD_DIR)/dash.elf
 
-USER_BINS = $(USER_INIT) $(USER_ELIZA) $(USER_DF) $(USER_TREE) $(USER_UPTIME) $(USER_SETDATE) $(USER_PS) $(USER_TOP) $(USER_SYSVIEW) $(USER_NEOFETCH) $(USER_FONT) $(USER_THEME) $(USER_LS) $(USER_JSON) $(USER_IMG) $(USER_LOGIN) $(USER_S3LCUBE) $(USER_S3LFLY) $(USER_OLIVEDEMO) $(USER_NEXTVI) $(USER_BASIC) $(USER_ZORK) $(USER_TCC) $(USER_GBEMU) $(USER_NESEMU) $(USER_DASH) $(USER_ZIP) $(USER_UNZIP) $(USER_GZIP) $(USER_BEEP) $(USER_MODPLAY) $(USER_MIDIPLAY) $(USER_CHOWN) \
+USER_BINS = $(USER_INIT) $(USER_ELIZA) $(USER_DF) $(USER_TREE) $(USER_UPTIME) $(USER_SETDATE) $(USER_PS) $(USER_TOP) $(USER_SYSVIEW) $(USER_NEOFETCH) $(USER_FONT) $(USER_THEME) $(USER_LS) $(USER_JSON) $(USER_IMG) $(USER_LOGIN) $(USER_S3LCUBE) $(USER_S3LFLY) $(USER_OLIVEDEMO) $(USER_NEXTVI) $(USER_MDVIEW) $(USER_BASIC) $(USER_ZORK) $(USER_TCC) $(USER_GBEMU) $(USER_NESEMU) $(USER_DASH) $(USER_ZIP) $(USER_UNZIP) $(USER_GZIP) $(USER_BEEP) $(USER_MODPLAY) $(USER_MIDIPLAY) $(USER_CHOWN) \
             $(USER_USERADD) $(USER_USERDEL) $(USER_GROUPADD) $(USER_GROUPDEL) \
             $(SBASE_TOOL_BINS)
 
@@ -330,9 +333,9 @@ USER_BINS = $(USER_INIT) $(USER_ELIZA) $(USER_DF) $(USER_TREE) $(USER_UPTIME) $(
 QEMU_XRES ?= 1920
 QEMU_YRES ?= 1080
 
-# Persistent FAT16 disk image (mounted at /disk in VOS).
+# Persistent Minix disk image (mounted at /disk in VOS).
 DISK_IMG ?= vos-disk.img
-DISK_SIZE_MB ?= 256
+DISK_SIZE_MB ?= 512
 
 # Host helper to install a sysroot into $(DISK_IMG) under /usr.
 SYSROOT_SCRIPT = $(TOOLS_DIR)/install_sysroot.sh
@@ -600,6 +603,18 @@ $(USER_NEXTVI_OBJ): $(USER_DIR)/nextvi/vi.c | $(USER_BUILD_DIR)
 $(USER_NEXTVI): $(USER_RUNTIME_OBJECTS) $(USER_NEXTVI_OBJ) $(USER_RUNTIME_LIBS)
 	$(USER_LINK_CMD)
 
+# Compile MD4C library (single-file markdown parser)
+$(USER_MD4C_OBJ): $(THIRD_PARTY_DIR)/md4c/md4c.c $(THIRD_PARTY_DIR)/md4c/md4c.h | $(USER_BUILD_DIR)
+	$(CC) -ffreestanding -fno-stack-protector -fno-pie -Wall -Wextra -Wno-unused-parameter -O2 -I$(THIRD_PARTY_DIR)/md4c -c $< -o $@
+
+# Compile mdview (terminal markdown viewer)
+$(USER_MDVIEW_OBJ): $(USER_DIR)/mdview.c $(THIRD_PARTY_DIR)/md4c/md4c.h | $(USER_BUILD_DIR)
+	$(CC) -ffreestanding -fno-stack-protector -fno-pie -Wall -Wextra -O2 -D_POSIX_C_SOURCE=200809L -I$(USER_DIR) -I$(THIRD_PARTY_DIR)/md4c -c $< -o $@
+
+# Link mdview
+$(USER_MDVIEW): $(USER_RUNTIME_OBJECTS) $(USER_MD4C_OBJ) $(USER_MDVIEW_OBJ) $(USER_RUNTIME_LIBS)
+	$(USER_LINK_CMD)
+
 # Compile Game Boy emulator (uses Peanut-GB single-header library)
 $(USER_GBEMU_OBJ): $(USER_DIR)/gbemu.c $(PEANUT_GB_DIR)/peanut_gb.h | $(USER_BUILD_DIR)
 	$(CC) -ffreestanding -fno-stack-protector -fno-pie -Wall -Wextra -O2 -I$(THIRD_PARTY_DIR) -I$(USER_DIR) -c $< -o $@
@@ -669,6 +684,7 @@ $(ISO): $(KERNEL) $(USER_BINS) $(FAT_IMG) $(INITRAMFS_FILES) $(INITRAMFS_DIRS)
 	cp $(USER_S3LFLY) $(INITRAMFS_ROOT)/bin/s3lfly
 	cp $(USER_OLIVEDEMO) $(INITRAMFS_ROOT)/bin/olivedemo
 	cp $(USER_NEXTVI) $(INITRAMFS_ROOT)/bin/vi
+	cp $(USER_MDVIEW) $(INITRAMFS_ROOT)/bin/mdview
 	cp $(USER_BASIC) $(INITRAMFS_ROOT)/bin/basic
 	cp $(USER_ZORK) $(INITRAMFS_ROOT)/bin/zork
 	cp $(USER_TCC) $(INITRAMFS_ROOT)/bin/tcc
@@ -706,10 +722,31 @@ $(ISO): $(KERNEL) $(USER_BINS) $(FAT_IMG) $(INITRAMFS_FILES) $(INITRAMFS_DIRS)
 	echo '}' >> $(ISO_DIR)/boot/grub/grub.cfg
 	grub-mkrescue -o $(ISO) $(ISO_DIR)
 
-# Create a persistent FAT16 disk image for /disk (only when missing).
+# Create a persistent Minix disk image for /disk.
+# Uses MBR with a single Minix partition for compatibility.
+# NOTE: This only creates the partition table. Run 'make format-disk' to format.
 $(DISK_IMG):
+	@echo "Creating $(DISK_SIZE_MB)MB disk image with MBR partition table..."
 	truncate -s $(DISK_SIZE_MB)M $@
-	mkfs.fat -F 16 -n VOSDISK $@
+	@# Create MBR partition table with single Minix partition (type 0x81)
+	echo 'type=81' | sfdisk $@ >/dev/null 2>&1
+	@echo "Partition table created. Run 'make format-disk' to format as Minix."
+	@echo "(Requires sudo for loop device access)"
+
+# Format the Minix partition (requires sudo)
+format-disk: $(DISK_IMG)
+	@echo "Formatting Minix partition..."
+	@# Partition starts at sector 2048, size 1046528 sectors
+	sudo losetup -o $$((2048*512)) --sizelimit $$((1046528*512)) /dev/loop0 $(DISK_IMG)
+	sudo mkfs.minix -2 -n 30 /dev/loop0
+	sudo losetup -d /dev/loop0
+	@echo "Minix filesystem created on $(DISK_IMG)"
+
+# Force recreate the disk image
+disk-recreate:
+	rm -f $(DISK_IMG)
+	$(MAKE) $(DISK_IMG)
+	$(MAKE) format-disk
 
 # Install a sysroot onto $(DISK_IMG) so /usr is populated inside VOS.
 sysroot: $(USER_RUNTIME_OBJECTS) $(USER_RUNTIME_LIBS) $(USER_CRTI_OBJ) $(USER_CRTN_OBJ) $(TCC_LIBTCC1) $(USER_TCC) $(USER_OLIVE) $(DISK_IMG)
@@ -724,14 +761,16 @@ clean:
 	rm -rf $(FAT_IMG)
 	rm -f $(ISO)
 
-# Run in QEMU (includes Sound Blaster 16 audio support)
-run: $(ISO)
+# Run in QEMU (includes Sound Blaster 16 audio support and persistent disk)
+run: $(ISO) $(DISK_IMG)
 	qemu-system-i386 -cdrom $(ISO) -vga none -device bochs-display,xres=$(QEMU_XRES),yres=$(QEMU_YRES) \
+		-drive file=$(DISK_IMG),format=raw,if=ide \
 		-device sb16,audiodev=snd0 -audiodev pa,id=snd0
 
 # Run in QEMU with debug output
-debug: $(ISO)
+debug: $(ISO) $(DISK_IMG)
 	qemu-system-i386 -cdrom $(ISO) -vga none -device bochs-display,xres=$(QEMU_XRES),yres=$(QEMU_YRES) \
+		-drive file=$(DISK_IMG),format=raw,if=ide \
 		-device sb16,audiodev=snd0 -audiodev pa,id=snd0 -d int -no-reboot
 
 .PHONY: all clean run debug sysroot

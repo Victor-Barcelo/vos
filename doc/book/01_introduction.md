@@ -41,7 +41,7 @@ VOS (Victor's Operating System) is an educational operating system designed to d
 
 ### Process Management
 
-- **71 system calls** for comprehensive functionality
+- **101 system calls** for comprehensive functionality
 - **Preemptive multitasking** with round-robin scheduling
 - **fork() and execve()** for UNIX-style process creation
 - **Signals** (32 signals with handlers and delivery)
@@ -62,7 +62,7 @@ VOS (Victor's Operating System) is an educational operating system designed to d
 - **ELF32 loader** for executable programs
 - **Newlib C library** integration
 - **TCC (Tiny C Compiler)** for native compilation
-- **~89 user programs** including shell utilities
+- **105 user programs** including shell utilities
 - **uBASIC interpreter** with 10 example programs
 - **Graphics support** via olive.c and small3dlib
 
@@ -139,7 +139,7 @@ When VOS boots, users see a Linux-like filesystem structure. Understanding this 
 
 ```
 /                     (Root - ramfs)
-├── bin/              System binaries (~89 programs)
+├── bin/              System binaries (105 programs)
 ├── etc/              System configuration (overlay)
 │   ├── passwd        User accounts
 │   └── profile       Shell startup script
@@ -187,7 +187,7 @@ User accesses:    VOS checks:              Result:
 ### Key Directories Explained
 
 #### `/bin` - System Binaries
-Contains ~89 programs from the initramfs archive. This includes:
+Contains 105 programs from the initramfs archive. This includes:
 - **Core utilities**: `ls` (colorful), `cat`, `cp`, `mv`, `rm`, `mkdir`, `grep`
 - **Editors**: `vi` (nextvi - vim-like editor)
 - **Shells**: `sh`/`dash` (POSIX-compliant shell)

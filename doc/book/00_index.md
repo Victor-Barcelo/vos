@@ -130,7 +130,7 @@
 
 21. [System Calls](21_syscalls.md)
     - The Syscall Interface
-    - Complete Syscall Reference (75+ syscalls)
+    - Complete Syscall Reference (101 syscalls)
     - Error Handling
 
 22. [Signals and IPC](22_signals.md)
@@ -160,7 +160,7 @@
     - Kernel Shell
     - User Shell (dash - POSIX compliant)
     - Built-in Commands
-    - External Utilities (~89 programs)
+    - External Utilities (105 programs)
 
 26. [Newlib Integration](26_newlib.md)
     - C Library Support
@@ -298,11 +298,12 @@ This book was generated from the VOS source code and provides a comprehensive gu
 
 | Metric | Value |
 |--------|-------|
-| **Total Syscalls** | 75+ |
+| **Total Syscalls** | 101 |
 | **Kernel Size** | ~25,000 lines of C |
-| **User Programs** | ~89 utilities |
+| **User Programs** | 105 utilities |
 | **POSIX Compliance** | ~50% |
-| **Supported Fonts** | 5 built-in |
+| **Supported Fonts** | 42 built-in |
+| **Color Themes** | 16 |
 | **Virtual Consoles** | 4 |
 | **Audio Support** | Sound Blaster 16 |
 
@@ -312,7 +313,7 @@ This book was generated from the VOS source code and provides a comprehensive gu
 - **Framebuffer graphics** with multiple font sizes
 - **Minix persistent storage** with overlay filesystem
 - **Multi-user authentication** with privilege separation
-- **~89 userland utilities** including nextvi editor, emulators, and tools
+- **105 userland utilities** including nextvi editor, emulators, and tools
 - **Sound Blaster 16** audio driver with DMA
 - **MCP integration** for LLM-assisted development
 - **Emoji support** with alpha blending

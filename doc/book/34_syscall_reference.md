@@ -484,7 +484,7 @@ Event flags:
 
 ## Summary
 
-VOS provides 91 system calls covering:
+VOS provides 101 system calls covering:
 
 1. **Process management** (fork, exec, wait, exit)
 2. **File operations** (open, read, write, close, access)

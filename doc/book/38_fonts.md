@@ -6,10 +6,10 @@ VOS features a comprehensive font system supporting multiple PSF2 fonts, runtime
 
 The font system provides:
 
-1. **Multiple built-in fonts** - From 8x16 to 32x64 pixels
+1. **42 built-in fonts** - From 5x8 to 32x64 pixels
 2. **Runtime font switching** - Change fonts without rebooting
 3. **Auto font selection** - Optimal font for screen resolution
-4. **Color themes** - Predefined color palettes
+4. **16 color themes** - Predefined color palettes
 5. **Persistent preferences** - Saved across reboots
 
 ```
@@ -127,15 +127,25 @@ typedef struct {
 
 ### Built-in Fonts
 
-VOS includes several fonts for different resolutions:
+VOS includes **42 built-in fonts** for different resolutions and styles:
 
-| Font | Size | Best For | Characters |
-|------|------|----------|------------|
-| Terminus 8x16 | 8x16 | 800x600 | 80x37 cells |
-| Terminus 12x24 | 12x24 | 1280x720 | 106x30 cells |
-| Terminus 16x32 | 16x32 | 1920x1080 | 120x33 cells |
-| Unifont 16x16 | 16x16 | 1024x768 | 64x48 cells |
-| VGA 8x16 | 8x16 | Legacy | 80x25 cells |
+| Font Family | Sizes Available | Best For |
+|-------------|-----------------|----------|
+| VGA | 8x16, 28x16 | Legacy/Low-res |
+| Terminus | 8x16, 12x24, 14x28, 16x32, 18x36, 20x40, 24x48 | General use |
+| Cozette | 13x6 | Compact displays |
+| Cozette HiDPI | 26x12 | High-DPI displays |
+| Lat2-Terminus | 16x16 | International |
+| Unifont | 16x16 | Unicode coverage |
+| Spleen | 5x8, 6x12, 8x16, 12x24, 16x32, 32x64 | Modern look |
+| Tamzen | 7x14 | Clean aesthetic |
+| Gohufont | 11x11, 14x14 | Retro style |
+| Iosevka | 8x17, 11x24 | Programming |
+| Dina | 8x16 | Readability |
+| Creep | 11x4 | Minimal |
+| SSFN converted | Various | Extended chars |
+
+Use `font list` to see all 42 available fonts with their exact dimensions.
 
 ### Font Selection by Resolution
 
@@ -372,6 +382,8 @@ typedef struct color_theme {
 
 ### Available Themes
 
+VOS includes **16 color themes**:
+
 | Theme | Description |
 |-------|-------------|
 | Default | Standard VGA colors |
@@ -380,6 +392,18 @@ typedef struct color_theme {
 | Monokai | Vibrant programmer theme |
 | Dracula | Dark purple theme |
 | Nord | Arctic blue theme |
+| Gruvbox Dark | Retro groove dark |
+| Gruvbox Light | Retro groove light |
+| One Dark | Atom editor theme |
+| Tokyo Night | Modern dark theme |
+| Catppuccin | Pastel dark theme |
+| Zenburn | Low-contrast dark |
+| Tomorrow Night | Subdued colors |
+| Ayu Dark | Elegant dark |
+| Ayu Light | Clean light |
+| Material | Material design colors |
+
+Use `theme list` to see all 16 themes.
 
 ### Theme Syscalls
 
@@ -578,9 +602,9 @@ void screen_render_row(int y) {
 
 The VOS font system provides:
 
-1. **Multiple PSF2 fonts** for different resolutions
+1. **42 PSF2 fonts** for different resolutions and styles
 2. **Runtime switching** via syscalls and utilities
-3. **Color themes** for personalization
+3. **16 color themes** for personalization
 4. **Persistent settings** saved to `/disk/fontrc`
 5. **Unicode support** via Unifont
 6. **Optimized rendering** with cell buffering

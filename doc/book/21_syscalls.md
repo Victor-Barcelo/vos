@@ -1,6 +1,6 @@
 # Chapter 21: System Calls
 
-System calls are the interface between user programs and the kernel. VOS provides 71 syscalls covering files, processes, memory, time, signals, and more.
+System calls are the interface between user programs and the kernel. VOS provides 101 syscalls covering files, processes, memory, time, signals, and more.
 
 ## Syscall Interface
 
@@ -42,7 +42,7 @@ interrupt_frame_t* syscall_handle(interrupt_frame_t *frame) {
         case SYS_EXIT:      result = sys_exit(a); break;
         case SYS_READ:      result = sys_read(a, (void*)b, c); break;
         case SYS_WRITE:     result = sys_write(a, (void*)b, c); break;
-        // ... 68 more cases ...
+        // ... 98 more cases ...
         default:            result = -ENOSYS;
     }
 
@@ -340,7 +340,7 @@ int32_t sys_mmap(void *addr, size_t length, int prot, int flags,
 
 ## Summary
 
-VOS provides 91 system calls enabling:
+VOS provides 101 system calls enabling:
 
 1. **File I/O** - open, read, write, close, seek, stat, access
 2. **Directories** - mkdir, rmdir, readdir, chdir

@@ -148,12 +148,8 @@ user/
 ├── vos_screen.h            # VOS screen API
 ├── init.c                  # Init process
 ├── login.c                 # Login program
-├── sh.c                    # Shell
-├── lsh.c                   # Linenoise shell demo
-├── ved.c                   # Vi-like editor
 ├── eliza.c                 # Eliza chatbot
 ├── uptime.c                # Uptime command
-├── date.c                  # Date command
 ├── setdate.c               # Set date command
 ├── ps.c                    # Process list
 ├── top.c                   # Process monitor
@@ -182,12 +178,12 @@ user/
 
 | Category | Programs |
 |----------|----------|
-| System | init, login, sh |
-| Utilities | uptime, date, ps, top |
-| Editors | ved, ne |
+| System | init, login, dash (sh) |
+| Utilities | uptime, ps, top, sysview, neofetch |
+| Editors | vi (nextvi) |
 | Entertainment | eliza, zork, basic |
-| Graphics | s3lcube, olivedemo, img |
-| Development | tcc, font, json |
+| Graphics | s3lcube, s3lfly, olivedemo, img |
+| Development | tcc, font, theme, json |
 
 ## Third-Party Directory
 
@@ -220,9 +216,8 @@ third_party/
 │   ├── ls.c
 │   ├── grep.c
 │   └── ...
-├── ne/                     # Nice Editor
+├── ne/                     # Nice Editor (available, not built by default)
 │   └── src/
-│       ├── ne.c
 │       └── ...
 └── xv6-public/             # Reference material
 ```
@@ -248,13 +243,14 @@ build/
 │       └── spleen-16x32.o
 ├── user/                   # Userland objects
 │   ├── crt0.o
-│   ├── sh.o
-│   ├── sh.elf
+│   ├── dash/               # Dash shell objects
+│   ├── dash.elf
 │   └── ...
 ├── initramfs_root/         # Initramfs staging
 │   └── bin/
 │       ├── init
-│       ├── sh
+│       ├── sh (dash)
+│       ├── dash
 │       └── ...
 └── tools/                  # Build tools
     └── mkfat

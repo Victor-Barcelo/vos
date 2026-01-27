@@ -49,20 +49,24 @@ void shell_run(void) {
 }
 ```
 
-## User Shell (sh)
+## User Shell (dash)
 
-The user shell runs in ring 3 with full process support.
+VOS uses **dash** (Debian Almquist Shell) as the default user shell. It runs in ring 3 with full process support. Dash is a POSIX-compliant shell that is fast, lightweight, and well-tested.
+
+Both `/bin/sh` and `/bin/dash` point to dash.
 
 ### Features
 
-- Command execution
-- Argument parsing
+- POSIX-compliant shell scripting
+- Command execution with PATH search
+- Argument parsing and word expansion
 - Environment variables
 - Pipes (`|`)
-- Redirection (`>`, `>>`, `<`)
+- Redirection (`>`, `>>`, `<`, `2>&1`)
 - Background jobs (`&`)
 - Signal handling (Ctrl+C, Ctrl+Z)
-- Job control
+- Job control (fg, bg, jobs)
+- Shell builtins (cd, export, read, etc.)
 
 ### Built-in Commands
 

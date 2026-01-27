@@ -116,12 +116,9 @@ USER_LINK_CMD = $(CC) -nostartfiles -Wl,-T,$(USER_DIR)/linker.ld -Wl,--gc-sectio
 USER_LINK_CMD_MATH = $(CC) -nostartfiles -Wl,-T,$(USER_DIR)/linker.ld -Wl,--gc-sections -o $@ $(filter-out $(USER_RUNTIME_LIBS),$^) $(USER_RUNTIME_LIBS) -lc -lgcc -lm
 USER_INIT_OBJ = $(USER_BUILD_DIR)/init.o
 USER_ELIZA_OBJ = $(USER_BUILD_DIR)/eliza.o
-USER_LSH_OBJ = $(USER_BUILD_DIR)/lsh.o
-USER_SH_OBJ = $(USER_BUILD_DIR)/sh.o
 USER_DF_OBJ = $(USER_BUILD_DIR)/df.o
 USER_TREE_OBJ = $(USER_BUILD_DIR)/tree.o
 USER_UPTIME_OBJ = $(USER_BUILD_DIR)/uptime.o
-USER_DATE_OBJ = $(USER_BUILD_DIR)/date.o
 USER_SETDATE_OBJ = $(USER_BUILD_DIR)/setdate.o
 USER_PS_OBJ = $(USER_BUILD_DIR)/ps.o
 USER_TOP_OBJ = $(USER_BUILD_DIR)/top.o
@@ -133,7 +130,6 @@ USER_LS_OBJ = $(USER_BUILD_DIR)/ls.o
 USER_JSON_OBJ = $(USER_BUILD_DIR)/json.o
 USER_IMG_OBJ = $(USER_BUILD_DIR)/img.o
 USER_LOGIN_OBJ = $(USER_BUILD_DIR)/login.o
-USER_VED_OBJ = $(USER_BUILD_DIR)/ved.o
 USER_S3LCUBE_OBJ = $(USER_BUILD_DIR)/s3lcube.o
 USER_S3LFLY_OBJ = $(USER_BUILD_DIR)/s3lfly.o
 USER_OLIVEDEMO_OBJ = $(USER_BUILD_DIR)/olivedemo.o
@@ -146,12 +142,9 @@ USER_MODPLAY_OBJ = $(USER_BUILD_DIR)/modplay.o
 USER_MIDIPLAY_OBJ = $(USER_BUILD_DIR)/midiplay.o
 USER_INIT = $(USER_BUILD_DIR)/init.elf
 USER_ELIZA = $(USER_BUILD_DIR)/eliza.elf
-USER_LSH = $(USER_BUILD_DIR)/lsh.elf
-USER_SH = $(USER_BUILD_DIR)/sh.elf
 USER_DF = $(USER_BUILD_DIR)/df.elf
 USER_TREE = $(USER_BUILD_DIR)/tree.elf
 USER_UPTIME = $(USER_BUILD_DIR)/uptime.elf
-USER_DATE = $(USER_BUILD_DIR)/date.elf
 USER_SETDATE = $(USER_BUILD_DIR)/setdate.elf
 USER_PS = $(USER_BUILD_DIR)/ps.elf
 USER_TOP = $(USER_BUILD_DIR)/top.elf
@@ -163,7 +156,6 @@ USER_LS = $(USER_BUILD_DIR)/ls.elf
 USER_JSON = $(USER_BUILD_DIR)/json.elf
 USER_IMG = $(USER_BUILD_DIR)/img.elf
 USER_LOGIN = $(USER_BUILD_DIR)/login.elf
-USER_VED = $(USER_BUILD_DIR)/ved.elf
 USER_S3LCUBE = $(USER_BUILD_DIR)/s3lcube.elf
 USER_S3LFLY = $(USER_BUILD_DIR)/s3lfly.elf
 USER_OLIVEDEMO = $(USER_BUILD_DIR)/olivedemo.elf
@@ -178,7 +170,6 @@ USER_MIDIPLAY = $(USER_BUILD_DIR)/midiplay.elf
 POCKETMOD_DIR = $(THIRD_PARTY_DIR)/pocketmod
 TSF_DIR = $(THIRD_PARTY_DIR)/tsf
 # ne editor (userland)
-USER_NE = $(USER_BUILD_DIR)/ne.elf
 # Zork I (userland)
 USER_ZORK_DIR = $(USER_DIR)/zork1c
 USER_ZORK_C_SOURCES = $(USER_ZORK_DIR)/_parser.c $(USER_ZORK_DIR)/_game.c $(USER_ZORK_DIR)/_villains.c \
@@ -214,55 +205,6 @@ TCC_ALLOCA86_BT_OBJ = $(TCC_RUNTIME_BUILD_DIR)/alloca86-bt.o
 TCC_LIBTCC1_OBJS = $(TCC_LIBTCC1_OBJ) $(TCC_ALLOCA86_OBJ) $(TCC_ALLOCA86_BT_OBJ)
 TCC_LIBTCC1 = $(USER_BUILD_DIR)/libtcc1.a
 
-# ne (nice editor) - ANSI/termcap mode (no curses/terminfo)
-NE_DIR = $(THIRD_PARTY_DIR)/ne
-NE_SRC_DIR = $(NE_DIR)/src
-NE_BUILD_DIR = $(USER_BUILD_DIR)/ne
-
-# Build with the built-in ANSI termcap and without wide-char dependencies.
-NE_C_SOURCES = \
-	$(NE_SRC_DIR)/actions.c \
-	$(NE_SRC_DIR)/ansi.c \
-	$(NE_SRC_DIR)/autocomp.c \
-	$(NE_SRC_DIR)/buffer.c \
-	$(NE_SRC_DIR)/clips.c \
-	$(NE_SRC_DIR)/cm.c \
-	$(NE_SRC_DIR)/command.c \
-	$(NE_SRC_DIR)/display.c \
-	$(NE_SRC_DIR)/edit.c \
-	$(NE_SRC_DIR)/errors.c \
-	$(NE_SRC_DIR)/exec.c \
-	$(NE_SRC_DIR)/ext.c \
-	$(NE_SRC_DIR)/hash.c \
-	$(NE_SRC_DIR)/help.c \
-	$(NE_SRC_DIR)/input.c \
-	$(NE_SRC_DIR)/inputclass.c \
-	$(NE_SRC_DIR)/keys.c \
-	$(NE_SRC_DIR)/menu.c \
-	$(NE_SRC_DIR)/names.c \
-	$(NE_SRC_DIR)/navigation.c \
-	$(NE_SRC_DIR)/ne.c \
-	$(NE_SRC_DIR)/prefs.c \
-	$(NE_SRC_DIR)/regex.c \
-	$(NE_SRC_DIR)/request.c \
-	$(NE_SRC_DIR)/search.c \
-	$(NE_SRC_DIR)/signals.c \
-	$(NE_SRC_DIR)/streams.c \
-	$(NE_SRC_DIR)/support.c \
-	$(NE_SRC_DIR)/syn_hash.c \
-	$(NE_SRC_DIR)/syn_regex.c \
-	$(NE_SRC_DIR)/syn_utf8.c \
-	$(NE_SRC_DIR)/syn_utils.c \
-	$(NE_SRC_DIR)/syntax.c \
-	$(NE_SRC_DIR)/term.c \
-	$(NE_SRC_DIR)/termcap.c \
-	$(NE_SRC_DIR)/tparam.c \
-	$(NE_SRC_DIR)/info2cap.c \
-	$(NE_SRC_DIR)/undo.c \
-	$(NE_SRC_DIR)/utf8.c
-
-NE_OBJECTS = $(patsubst $(NE_SRC_DIR)/%.c,$(NE_BUILD_DIR)/%.o,$(NE_C_SOURCES))
-
 # sbase (portable Unix userland tools)
 SBASE_DIR = $(THIRD_PARTY_DIR)/sbase
 SBASE_BUILD_DIR = $(USER_BUILD_DIR)/sbase
@@ -281,7 +223,7 @@ SBASE_LIBS = $(SBASE_LIBUTIL) $(SBASE_LIBUTF)
 # Keep this list focused on tools that don't require fork/exec.
 SBASE_TOOLS = \
 	cat echo basename dirname head wc grep yes true false \
-	ls pwd cp mv rm mkdir rmdir tail cut tr sort uniq tee nl seq rev \
+	pwd cp mv rm mkdir rmdir tail cut tr sort uniq tee nl seq rev \
 	strings od printf sed du \
 	cksum md5sum sha1sum sha256sum sha512sum \
 	cmp comm cols dd printenv expr fold join paste split sponge \
@@ -369,7 +311,7 @@ DASH_C_SOURCES = \
 DASH_OBJECTS = $(patsubst $(DASH_DIR)/%.c,$(DASH_BUILD_DIR)/%.o,$(DASH_C_SOURCES))
 USER_DASH = $(USER_BUILD_DIR)/dash.elf
 
-USER_BINS = $(USER_INIT) $(USER_ELIZA) $(USER_LSH) $(USER_SH) $(USER_DF) $(USER_TREE) $(USER_UPTIME) $(USER_DATE) $(USER_SETDATE) $(USER_PS) $(USER_TOP) $(USER_SYSVIEW) $(USER_NEOFETCH) $(USER_FONT) $(USER_THEME) $(USER_JSON) $(USER_IMG) $(USER_LOGIN) $(USER_VED) $(USER_S3LCUBE) $(USER_S3LFLY) $(USER_OLIVEDEMO) $(USER_NEXTVI) $(USER_NE) $(USER_BASIC) $(USER_ZORK) $(USER_TCC) $(USER_GBEMU) $(USER_NESEMU) $(USER_ZIP) $(USER_UNZIP) $(USER_GZIP) $(USER_BEEP) $(USER_MODPLAY) $(USER_MIDIPLAY) \
+USER_BINS = $(USER_INIT) $(USER_ELIZA) $(USER_DF) $(USER_TREE) $(USER_UPTIME) $(USER_SETDATE) $(USER_PS) $(USER_TOP) $(USER_SYSVIEW) $(USER_NEOFETCH) $(USER_FONT) $(USER_THEME) $(USER_LS) $(USER_JSON) $(USER_IMG) $(USER_LOGIN) $(USER_S3LCUBE) $(USER_S3LFLY) $(USER_OLIVEDEMO) $(USER_NEXTVI) $(USER_BASIC) $(USER_ZORK) $(USER_TCC) $(USER_GBEMU) $(USER_NESEMU) $(USER_ZIP) $(USER_UNZIP) $(USER_GZIP) $(USER_BEEP) $(USER_MODPLAY) $(USER_MIDIPLAY) \
             $(SBASE_TOOL_BINS)
 
 # QEMU defaults
@@ -477,14 +419,6 @@ $(USER_INIT): $(USER_RUNTIME_OBJECTS) $(USER_INIT_OBJ) $(USER_RUNTIME_LIBS)
 $(USER_ELIZA): $(USER_RUNTIME_OBJECTS) $(USER_ELIZA_OBJ) $(USER_RUNTIME_LIBS)
 	$(USER_LINK_CMD)
 
-# Link userland linenoise demo
-$(USER_LSH): $(USER_RUNTIME_OBJECTS) $(USER_LINENOISE_OBJ) $(USER_LSH_OBJ) $(USER_RUNTIME_LIBS)
-	$(USER_LINK_CMD)
-
-# Link userland shell (linenoise)
-$(USER_SH): $(USER_RUNTIME_OBJECTS) $(USER_LINENOISE_OBJ) $(USER_SH_OBJ) $(USER_RUNTIME_LIBS)
-	$(USER_LINK_CMD)
-
 # Link userland df (filesystem stats)
 $(USER_DF): $(USER_RUNTIME_OBJECTS) $(USER_DF_OBJ) $(USER_RUNTIME_LIBS)
 	$(USER_LINK_CMD)
@@ -497,22 +431,6 @@ $(USER_TREE): $(USER_RUNTIME_OBJECTS) $(USER_TREE_OBJ) $(USER_RUNTIME_LIBS)
 $(USER_LOGIN): $(USER_RUNTIME_OBJECTS) $(USER_LOGIN_OBJ) $(USER_RUNTIME_LIBS)
 	$(USER_LINK_CMD)
 
-# Link userland full-screen editor (VED)
-$(USER_VED): $(USER_RUNTIME_OBJECTS) $(USER_VED_OBJ) $(USER_RUNTIME_LIBS)
-	$(USER_LINK_CMD)
-
-# Compile ne sources
-$(NE_BUILD_DIR)/%.o: $(NE_SRC_DIR)/%.c | $(USER_BUILD_DIR)
-	mkdir -p $(dir $@)
-	$(CC) -ffreestanding -fno-stack-protector -fno-pie -Wall -Wextra -O2 -std=c99 -fno-strict-aliasing \
-		-D_POSIX_C_SOURCE=200809L -D_GNU_SOURCE -D_REGEX_LARGE_OFFSETS -DSTDC_HEADERS -DHAVE_SNPRINTF \
-		-DNE_TERMCAP -DNE_ANSI -DNOWCHAR -DVOS_NE_MENUBAR -DVOS_NE_LINENUM -DGLOBALDIR=\"/usr/share/ne\" \
-		-I$(USER_DIR) -I$(NE_SRC_DIR) -c $< -o $@
-
-# Link ne editor
-$(USER_NE): $(USER_RUNTIME_OBJECTS) $(NE_OBJECTS) $(USER_RUNTIME_LIBS)
-	$(USER_LINK_CMD_MATH)
-
 # Compile dash sources
 $(DASH_BUILD_DIR)/%.o: $(DASH_DIR)/%.c | $(USER_BUILD_DIR)
 	mkdir -p $(dir $@)
@@ -524,11 +442,8 @@ $(DASH_BUILD_DIR)/%.o: $(DASH_DIR)/%.c | $(USER_BUILD_DIR)
 $(USER_DASH): $(USER_RUNTIME_OBJECTS) $(DASH_OBJECTS) $(USER_LINENOISE_OBJ) $(USER_RUNTIME_LIBS)
 	$(USER_LINK_CMD)
 
-# Link userland uptime/date/setdate/ps/top (static, freestanding)
+# Link userland uptime/setdate/ps/top (static, freestanding)
 $(USER_UPTIME): $(USER_RUNTIME_OBJECTS) $(USER_UPTIME_OBJ) $(USER_RUNTIME_LIBS)
-	$(USER_LINK_CMD)
-
-$(USER_DATE): $(USER_RUNTIME_OBJECTS) $(USER_DATE_OBJ) $(USER_RUNTIME_LIBS)
 	$(USER_LINK_CMD)
 
 $(USER_SETDATE): $(USER_RUNTIME_OBJECTS) $(USER_SETDATE_OBJ) $(USER_RUNTIME_LIBS)
@@ -708,14 +623,9 @@ $(ISO): $(KERNEL) $(USER_BINS) $(FAT_IMG) $(INITRAMFS_FILES) $(INITRAMFS_DIRS)
 	cp $(USER_INIT) $(INITRAMFS_ROOT)/bin/init
 	cp $(USER_LOGIN) $(INITRAMFS_ROOT)/bin/login
 	cp $(USER_ELIZA) $(INITRAMFS_ROOT)/bin/eliza
-	cp $(USER_LSH) $(INITRAMFS_ROOT)/bin/lsh
-	cp $(USER_SH) $(INITRAMFS_ROOT)/bin/sh
 	cp $(USER_DF) $(INITRAMFS_ROOT)/bin/df
 	cp $(USER_TREE) $(INITRAMFS_ROOT)/bin/tree
-	cp $(USER_VED) $(INITRAMFS_ROOT)/bin/ved
-	cp $(USER_NE) $(INITRAMFS_ROOT)/bin/ne
 	cp $(USER_UPTIME) $(INITRAMFS_ROOT)/bin/uptime
-	cp $(USER_DATE) $(INITRAMFS_ROOT)/bin/date
 	cp $(USER_SETDATE) $(INITRAMFS_ROOT)/bin/setdate
 	cp $(USER_PS) $(INITRAMFS_ROOT)/bin/ps
 	cp $(USER_TOP) $(INITRAMFS_ROOT)/bin/top
@@ -723,6 +633,7 @@ $(ISO): $(KERNEL) $(USER_BINS) $(FAT_IMG) $(INITRAMFS_FILES) $(INITRAMFS_DIRS)
 	cp $(USER_NEOFETCH) $(INITRAMFS_ROOT)/bin/neofetch
 	cp $(USER_FONT) $(INITRAMFS_ROOT)/bin/font
 	cp $(USER_THEME) $(INITRAMFS_ROOT)/bin/theme
+	cp $(USER_LS) $(INITRAMFS_ROOT)/bin/ls
 	cp $(USER_JSON) $(INITRAMFS_ROOT)/bin/json
 	cp $(USER_IMG) $(INITRAMFS_ROOT)/bin/img
 	cp $(USER_S3LCUBE) $(INITRAMFS_ROOT)/bin/s3lcube
@@ -735,6 +646,7 @@ $(ISO): $(KERNEL) $(USER_BINS) $(FAT_IMG) $(INITRAMFS_FILES) $(INITRAMFS_DIRS)
 	cp $(USER_GBEMU) $(INITRAMFS_ROOT)/bin/gbemu
 	cp $(USER_NESEMU) $(INITRAMFS_ROOT)/bin/nesemu
 	cp $(USER_DASH) $(INITRAMFS_ROOT)/bin/dash
+	cp $(USER_DASH) $(INITRAMFS_ROOT)/bin/sh
 	cp $(USER_ZIP) $(INITRAMFS_ROOT)/bin/zip
 	cp $(USER_UNZIP) $(INITRAMFS_ROOT)/bin/unzip
 	cp $(USER_GZIP) $(INITRAMFS_ROOT)/bin/gzip

@@ -7,9 +7,11 @@ VOS includes a Model Context Protocol (MCP) server that enables Large Language M
 The MCP server (`tools/mcp-server/`) provides a bridge between an LLM and VOS via:
 
 1. **QEMU Management** - Start/stop VOS in QEMU with configurable resolution and memory
-2. **Serial Console** - Execute commands and read output via serial connection
+2. **Serial Console** - Execute commands and read output via serial connection with marker-based completion detection
 3. **QMP Protocol** - Take screenshots and send keystrokes via QEMU Machine Protocol
 4. **File Upload** - Transfer files from host to VOS using heredoc
+5. **Batch Execution** - Run multiple commands efficiently in a single call
+6. **Text Screen Dump** - Get screen content as text without screenshots
 
 ## Installation
 
@@ -56,12 +58,30 @@ Stop the running QEMU instance and clean up connections.
 
 ### vos_exec
 
-Execute a command in the VOS shell and wait for output.
+Execute a command in the VOS shell and wait for output. Uses unique marker-based detection for reliable command completion.
 
 ```
 Parameters:
   command - Command to execute
   timeout - Timeout in ms (default: 10000)
+```
+
+### vos_exec_batch
+
+Execute multiple commands in a single call. More efficient than multiple `vos_exec` calls as it reduces round-trips.
+
+```
+Parameters:
+  commands - Array of commands to execute
+  timeout  - Total timeout in ms (default: 30000)
+
+Returns:
+  Formatted output with each command and its result
+```
+
+**Example:**
+```
+vos_exec_batch with commands=["pwd", "ls /bin", "uname -a"]
 ```
 
 ### vos_read
@@ -74,7 +94,18 @@ Write raw text to the serial console (for interactive programs).
 
 ### vos_screenshot
 
-Take a PNG screenshot of the VOS display. Returns the file path.
+Take a PNG screenshot of the VOS display. Returns the file path. Use this for graphical applications.
+
+### vos_screendump
+
+Get the current text screen buffer content as plain text. **Much faster than screenshot** for text-mode applications. Returns the visible text on screen.
+
+```
+Parameters:
+  timeout - Timeout in ms (default: 5000)
+```
+
+This calls the VOS `screendump` shell command which outputs the text console buffer via serial.
 
 ### vos_sendkeys
 
@@ -100,6 +131,63 @@ Parameters:
 ```
 
 Text files are uploaded using heredoc for clean transfer. Binary files use base64 encoding.
+
+## VOS Device Files
+
+VOS provides several `/dev` pseudo-devices for POSIX compatibility:
+
+| Device | Description |
+|--------|-------------|
+| `/dev/tty` | Controlling terminal - access terminal even with redirected I/O |
+| `/dev/null` | Discards all writes, returns EOF on read |
+| `/dev/zero` | Discards all writes, returns infinite zeros on read |
+
+**Example usage:**
+```bash
+# Discard output
+command > /dev/null
+
+# Create a file of zeros
+dd if=/dev/zero of=/tmp/zeros bs=1024 count=10
+
+# Access terminal in a pipeline
+cat file | grep pattern | interactive_prompt < /dev/tty
+```
+
+## Efficiency Tips
+
+### Use vos_screendump Instead of vos_screenshot
+
+For text-mode applications, `vos_screendump` is significantly faster:
+
+| Method | Latency | Use Case |
+|--------|---------|----------|
+| `vos_screenshot` | ~500ms | Graphics, games, visual validation |
+| `vos_screendump` | ~50ms | Shell output, text editors, logs |
+
+### Use vos_exec_batch for Multiple Commands
+
+Instead of multiple `vos_exec` calls:
+
+```
+# Slow: 3 round-trips
+vos_exec("pwd")
+vos_exec("ls")
+vos_exec("cat file.txt")
+
+# Fast: 1 round-trip
+vos_exec_batch(["pwd", "ls", "cat file.txt"])
+```
+
+### Marker-Based Command Detection
+
+The MCP server uses unique markers to reliably detect command completion:
+
+```
+command; echo "__VOS_CMD_END_1234__"
+```
+
+This is more reliable than prompt detection, especially for commands with varying output.
 
 ## LLM Workflow Guide
 
@@ -150,9 +238,14 @@ For larger files, use `vos_upload`:
 vos_upload with local_path="/host/path/program.c" remote_path="/tmp/program.c"
 ```
 
-### Taking Screenshots
+### Viewing Screen Content
 
-To see the VOS display:
+**For text mode (default):**
+```
+vos_screendump
+```
+
+**For graphical output:**
 ```
 vos_screenshot
 ```
@@ -165,7 +258,7 @@ For programs that need keyboard input (like editors or games):
 
 1. Start the program with `vos_exec`
 2. Use `vos_sendkeys` to send input
-3. Use `vos_screenshot` to see the display
+3. Use `vos_screendump` (text) or `vos_screenshot` (graphics) to see the display
 4. Send `q` or `esc` to quit
 
 Example with the 3D cube demo:
@@ -203,14 +296,19 @@ Here's how an LLM can write, compile, and run a graphics program:
 ```
 ┌─────────────────┐     ┌─────────────────┐
 │   LLM (Claude)  │────▶│   MCP Server    │
-└─────────────────┘     └────────┬────────┘
+└─────────────────┘     │   (v2.0)        │
+                        └────────┬────────┘
                                  │
                     ┌────────────┴────────────┐
                     │                         │
               ┌─────▼─────┐           ┌──────▼──────┐
               │  Serial   │           │    QMP      │
               │  (TCP)    │           │   (TCP)     │
+              │  :4567    │           │   :4568     │
               └─────┬─────┘           └──────┬──────┘
+                    │                        │
+                    │  Marker-based          │  Screenshots
+                    │  command exec          │  Keystrokes
                     │                        │
                     └──────────┬─────────────┘
                                │
@@ -218,6 +316,9 @@ Here's how an LLM can write, compile, and run a graphics program:
                     │   QEMU + VOS        │
                     │  ┌──────────────┐   │
                     │  │  VOS Shell   │   │
+                    │  │  /dev/tty    │   │
+                    │  │  /dev/null   │   │
+                    │  │  /dev/zero   │   │
                     │  └──────────────┘   │
                     └─────────────────────┘
 ```
@@ -226,7 +327,8 @@ Here's how an LLM can write, compile, and run a graphics program:
 
 - Used for command execution and text I/O
 - Connects to VOS kernel's serial driver
-- Commands sent as text, output read until shell prompt
+- Commands sent with unique markers for reliable completion detection
+- Event-driven data handling for low latency
 
 ### QMP Connection (Port 4568)
 
@@ -240,7 +342,14 @@ Here's how an LLM can write, compile, and run a graphics program:
 Call `vos_start` first to start QEMU and establish connections.
 
 ### Commands timing out
-Increase the timeout parameter, or check if VOS is waiting for input.
+- Increase the timeout parameter
+- Check if VOS is waiting for input
+- Use `vos_screendump` to see current screen state
+
+### Commands not completing
+The marker-based detection should handle most cases. If issues persist:
+- Try `vos_read` to see pending output
+- Use `vos_sendkeys` with `ctrl-c` to interrupt stuck commands
 
 ### Screenshots show wrong format
 The MCP server uses `format: "png"` for QEMU screendump. Requires QEMU 5.2+.
@@ -261,14 +370,16 @@ Environment variables:
 
 ## Summary
 
-The VOS MCP server enables powerful AI-assisted development:
+The VOS MCP server v2.0 enables powerful AI-assisted development:
 
-- **Autonomous coding** - LLMs can write, compile, and test code in VOS
-- **Visual feedback** - Screenshots allow LLMs to see graphical output
+- **Efficient command execution** - Marker-based detection and batch execution
+- **Fast text capture** - `vos_screendump` for instant text-mode screen content
+- **Visual feedback** - Screenshots for graphical output
 - **Interactive control** - Keystrokes enable use of editors and applications
 - **File transfer** - Upload source files from host for compilation
+- **POSIX devices** - `/dev/null`, `/dev/zero`, `/dev/tty` for standard workflows
 
-This creates a complete development environment that AI assistants can use to build and test software for VOS.
+This creates a complete development environment that AI assistants can use to build and test software for VOS efficiently.
 
 ---
 

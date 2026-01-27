@@ -202,16 +202,6 @@ $(TCC_BUILD_DIR)/%.o: $(TCC_DIR)/%.c
           -DCONFIG_TCC_STATIC -c $< -o $@
 ```
 
-### ne (Editor)
-
-```makefile
-NE_C_SOURCES = $(NE_SRC_DIR)/actions.c $(NE_SRC_DIR)/buffer.c ...
-
-$(NE_BUILD_DIR)/%.o: $(NE_SRC_DIR)/%.c
-    $(CC) $(USER_CFLAGS) -std=c99 -DNE_TERMCAP -DNE_ANSI \
-          -DNOWCHAR -c $< -o $@
-```
-
 ### Olive.c (Graphics)
 
 ```makefile
@@ -377,7 +367,7 @@ The VOS build system provides:
 1. **Cross-compilation** with i686-elf toolchain
 2. **Kernel building** with freestanding flags
 3. **Userland programs** linked with Newlib
-4. **Third-party integration** (sbase, TCC, ne, olive.c)
+4. **Third-party integration** (sbase, TCC, dash, olive.c, nextvi)
 5. **Font embedding** as binary objects
 6. **ISO generation** with GRUB
 7. **QEMU integration** for testing

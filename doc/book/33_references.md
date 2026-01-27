@@ -144,7 +144,8 @@ Download from: intel.com/content/www/us/en/developer/articles/technical/intel-sd
 | **Newlib** | sourceware.org/newlib | C library |
 | **TinyCC** | bellard.org/tcc | Native compiler |
 | **sbase** | git.suckless.org/sbase | Unix utilities |
-| **ne** | github.com/vigna/ne | Text editor |
+| **nextvi** | github.com/kyx0r/nextvi | Vim-like editor |
+| **dash** | git.kernel.org/pub/scm/utils/dash/dash.git | POSIX shell |
 | **olive.c** | github.com/tsoding/olive.c | 2D graphics |
 | **small3dlib** | gitlab.com/drummyfish/small3dlib | 3D renderer |
 | **linenoise** | github.com/antirez/linenoise | Line editing |

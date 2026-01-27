@@ -62,7 +62,7 @@ VOS (Victor's Operating System) is an educational operating system designed to d
 - **ELF32 loader** for executable programs
 - **Newlib C library** integration
 - **TCC (Tiny C Compiler)** for native compilation
-- **40+ user programs** including shell utilities
+- **~89 user programs** including shell utilities
 - **uBASIC interpreter** with 10 example programs
 - **Graphics support** via olive.c and small3dlib
 
@@ -139,7 +139,7 @@ When VOS boots, users see a Linux-like filesystem structure. Understanding this 
 
 ```
 /                     (Root - ramfs)
-├── bin/              System binaries (95+ programs)
+├── bin/              System binaries (~89 programs)
 ├── etc/              System configuration (overlay)
 │   ├── passwd        User accounts
 │   └── profile       Shell startup script
@@ -187,13 +187,14 @@ User accesses:    VOS checks:              Result:
 ### Key Directories Explained
 
 #### `/bin` - System Binaries
-Contains 95+ programs from the initramfs archive. This includes:
-- **Core utilities**: `ls`, `cat`, `cp`, `mv`, `rm`, `mkdir`, `grep`, `find`
-- **Editors**: `vi`, `ved`, `ne`
-- **System tools**: `ps`, `top`, `uptime`, `date`, `neofetch`
+Contains ~89 programs from the initramfs archive. This includes:
+- **Core utilities**: `ls` (colorful), `cat`, `cp`, `mv`, `rm`, `mkdir`, `grep`
+- **Editors**: `vi` (nextvi - vim-like editor)
+- **Shells**: `sh`/`dash` (POSIX-compliant shell)
+- **System tools**: `ps`, `top`, `uptime`, `date`, `neofetch`, `sysview`
 - **Development**: `tcc` (Tiny C Compiler)
 - **Entertainment**: `basic`, `zork`, `eliza`
-- **Audio**: `modplay`, `midi`
+- **Audio**: `modplay`, `midiplay`, `beep`
 
 All binaries are loaded from initramfs at boot and are read-only.
 

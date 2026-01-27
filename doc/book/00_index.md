@@ -158,9 +158,9 @@
 
 25. [Shell and Commands](25_shell.md)
     - Kernel Shell
-    - User Shell (dash)
+    - User Shell (dash - POSIX compliant)
     - Built-in Commands
-    - External Utilities (95+ programs)
+    - External Utilities (~89 programs)
 
 26. [Newlib Integration](26_newlib.md)
     - C Library Support
@@ -283,7 +283,7 @@ This book was generated from the VOS source code and provides a comprehensive gu
 |--------|-------|
 | **Total Syscalls** | 75+ |
 | **Kernel Size** | ~25,000 lines of C |
-| **User Programs** | 95+ utilities |
+| **User Programs** | ~89 utilities |
 | **POSIX Compliance** | ~50% |
 | **Supported Fonts** | 5 built-in |
 | **Virtual Consoles** | 4 |
@@ -295,7 +295,7 @@ This book was generated from the VOS source code and provides a comprehensive gu
 - **Framebuffer graphics** with multiple font sizes
 - **FAT16 persistent storage** with overlay filesystem
 - **Multi-user authentication** with privilege separation
-- **95+ userland utilities** including editors, emulators, and tools
+- **~89 userland utilities** including vi editor, emulators, and tools
 - **Sound Blaster 16** audio driver with DMA
 - **MCP integration** for LLM-assisted development
 - **Emoji support** with alpha blending

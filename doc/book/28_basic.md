@@ -362,9 +362,9 @@ static char string_variables[MAX_VARNUM][64]; // a$-z$ strings
 
 ### In VOS
 
-1. Create a file using an editor:
+1. Create a file using the vi editor:
 ```bash
-ne myprogram.bas
+vi myprogram.bas
 ```
 
 2. Run it:

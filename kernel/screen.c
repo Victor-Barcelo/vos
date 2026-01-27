@@ -540,6 +540,8 @@ typedef struct {
     uint32_t scrollback_head;
     uint32_t scrollback_count;
     uint32_t scrollback_view_offset;
+    int scrollback_cols;
+    bool cursor_force_hidden;
 
     // Is this console initialized?
     bool initialized;
@@ -4008,6 +4010,8 @@ static void vc_init_console(int console) {
     vc->scrollback_head = 0;
     vc->scrollback_count = 0;
     vc->scrollback_view_offset = 0;
+    vc->scrollback_cols = screen_cols_value;
+    vc->cursor_force_hidden = false;
 
     vc->initialized = true;
 }
@@ -4055,6 +4059,8 @@ static void vc_save_state(int console) {
     vc->scrollback_head = scrollback_head;
     vc->scrollback_count = scrollback_count;
     vc->scrollback_view_offset = scrollback_view_offset;
+    vc->scrollback_cols = scrollback_cols;
+    vc->cursor_force_hidden = cursor_force_hidden;
 
     vc->initialized = true;
 }
@@ -4106,6 +4112,8 @@ static void vc_restore_state(int console) {
     scrollback_head = vc->scrollback_head;
     scrollback_count = vc->scrollback_count;
     scrollback_view_offset = vc->scrollback_view_offset;
+    scrollback_cols = vc->scrollback_cols;
+    cursor_force_hidden = vc->cursor_force_hidden;
 }
 
 int screen_console_count(void) {

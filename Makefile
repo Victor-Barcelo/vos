@@ -725,6 +725,12 @@ $(ISO): $(KERNEL) $(USER_BINS) $(FAT_IMG) $(INITRAMFS_FILES) $(INITRAMFS_DIRS) $
 	cp $(USER_DIR)/sys/termios.h $(INITRAMFS_ROOT)/sysroot/usr/include/sys/termios.h
 	cp $(USER_DIR)/sys/ioctl.h $(INITRAMFS_ROOT)/sysroot/usr/include/sys/ioctl.h
 	cp $(USER_DIR)/sys/stat_tcc.h $(INITRAMFS_ROOT)/sysroot/usr/include/sys/stat.h
+	@# Game development resources (headers in /usr/dev/game/, examples in /usr/dev/game/examples/)
+	mkdir -p $(INITRAMFS_ROOT)/sysroot/usr/dev/game/doc
+	mkdir -p $(INITRAMFS_ROOT)/sysroot/usr/dev/game/examples
+	find gameResources -maxdepth 1 -type f -exec cp {} $(INITRAMFS_ROOT)/sysroot/usr/dev/game/ \;
+	cp -r gameResources/doc/* $(INITRAMFS_ROOT)/sysroot/usr/dev/game/doc/ 2>/dev/null || true
+	cp -r gameResources/gameExamples/* $(INITRAMFS_ROOT)/sysroot/usr/dev/game/examples/ 2>/dev/null || true
 	tar -C $(INITRAMFS_ROOT) -cf $(INITRAMFS_TAR) .
 	echo 'set timeout=0' > $(ISO_DIR)/boot/grub/grub.cfg
 	echo 'set default=0' >> $(ISO_DIR)/boot/grub/grub.cfg

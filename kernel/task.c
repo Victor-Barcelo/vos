@@ -199,6 +199,7 @@ typedef struct task {
     int32_t kill_exit_code;
     uint32_t alarm_tick; // 0 = disabled; timer_get_ticks() deadline for SIGALRM
     uint32_t cpu_ticks;
+    uint8_t console;     // Virtual console this task belongs to (0-3)
     char name[TASK_NAME_LEN + 1];
     struct task* next;
 } task_t;
@@ -931,6 +932,7 @@ static task_t* task_create_kernel(void (*entry)(void), const char* name) {
     t->exit_code = 0;
     t->alarm_tick = 0;
     t->cpu_ticks = 0;
+    t->console = (uint8_t)screen_console_active();
     task_set_name(t, name);
     t->next = NULL;
     return t;
@@ -996,6 +998,7 @@ static task_t* task_create_user(uint32_t entry, uint32_t user_esp, uint32_t* pag
     t->exit_code = 0;
     t->alarm_tick = 0;
     t->cpu_ticks = 0;
+    t->console = (uint8_t)screen_console_active();
     task_set_name(t, name);
     t->next = NULL;
     return t;
@@ -1109,6 +1112,11 @@ uint32_t tasking_getpgrp(void) {
     uint32_t pgid = current_task ? current_task->pgid : 0u;
     irq_restore(irq_flags);
     return pgid;
+}
+
+int tasking_current_console(void) {
+    if (!current_task) return 0;
+    return (int)current_task->console;
 }
 
 int32_t tasking_alarm(uint32_t seconds) {
@@ -1507,6 +1515,7 @@ void tasking_init(void) {
     boot->wait_pid = 0;
     boot->exit_code = 0;
     boot->cpu_ticks = 0;
+    boot->console = 0;
     task_set_name(boot, "boot");
     boot->next = boot;
     current_task = boot;
@@ -2785,6 +2794,7 @@ int32_t tasking_fork(interrupt_frame_t* frame) {
     child->kill_exit_code = 0;
     child->alarm_tick = current_task->alarm_tick;
     child->cpu_ticks = 0;
+    child->console = current_task->console;
     task_set_name(child, current_task->name);
     fd_clone(child, current_task);
     child->next = NULL;
@@ -3775,6 +3785,8 @@ int32_t tasking_fd_write(int32_t fd, const void* src_user, uint32_t len) {
 
     // FD_KIND_TTY writes behave like stdout
     if (kind == FD_KIND_STDOUT || kind == FD_KIND_STDERR || kind == FD_KIND_TTY) {
+        // Only output if this task's console matches the active console
+        bool output_visible = (current_task->console == (uint8_t)screen_console_active());
         while (total < len) {
             uint32_t chunk = len - total;
             if (chunk > (uint32_t)sizeof(tmp)) {
@@ -3783,8 +3795,10 @@ int32_t tasking_fd_write(int32_t fd, const void* src_user, uint32_t len) {
             if (!copy_from_user(tmp, (const uint8_t*)src_user + total, chunk)) {
                 return (total != 0) ? (int32_t)total : -EFAULT;
             }
-            for (uint32_t i = 0; i < chunk; i++) {
-                screen_putchar((char)tmp[i]);
+            if (output_visible) {
+                for (uint32_t i = 0; i < chunk; i++) {
+                    screen_putchar((char)tmp[i]);
+                }
             }
             total += chunk;
         }

@@ -8,8 +8,17 @@
 
 #define CLR_RESET "\x1b[0m"
 
+// Rainbow colors for logo
+#define C_RED     "\x1b[31;1m"
+#define C_ORANGE  "\x1b[33m"
+#define C_YELLOW  "\x1b[33;1m"
+#define C_GREEN   "\x1b[32;1m"
+#define C_CYAN    "\x1b[36;1m"
+#define C_BLUE    "\x1b[34;1m"
+#define C_MAGENTA "\x1b[35;1m"
+#define C_WHITE   "\x1b[37;1m"
+
 // Theme colors
-#define CLR_LOGO  "\x1b[36;1m" // bright cyan (logo)
 #define CLR_KEY   "\x1b[33;1m" // bright yellow (labels)
 #define CLR_VAL   "\x1b[37;1m" // bright white (values)
 
@@ -48,27 +57,47 @@ static void trim_left(char** s) {
     while (**s == ' ' || **s == '\t') (*s)++;
 }
 
+// Print the colorful logo line by line
+static void print_logo_line(int line) {
+    switch (line) {
+        case 0:
+            printf(C_RED    "        " C_MAGENTA "██╗   ██╗" C_BLUE " ██████╗ " C_CYAN "███████╗" CLR_RESET);
+            break;
+        case 1:
+            printf(C_RED    "  " C_YELLOW "╔═══╗" C_MAGENTA " ██║   ██║" C_BLUE "██╔═══██╗" C_CYAN "██╔════╝" CLR_RESET);
+            break;
+        case 2:
+            printf(C_ORANGE "  " C_YELLOW "║" C_GREEN "▓▓▓" C_YELLOW "║" C_MAGENTA " ██║   ██║" C_BLUE "██║   ██║" C_CYAN "███████╗" CLR_RESET);
+            break;
+        case 3:
+            printf(C_ORANGE "  " C_YELLOW "║" C_GREEN "▓▓▓" C_YELLOW "║" C_MAGENTA " ╚██╗ ██╔╝" C_BLUE "██║   ██║" C_CYAN "╚════██║" CLR_RESET);
+            break;
+        case 4:
+            printf(C_YELLOW "  " C_YELLOW "╚═══╝" C_MAGENTA "  ╚████╔╝ " C_BLUE "╚██████╔╝" C_CYAN "███████║" CLR_RESET);
+            break;
+        case 5:
+            printf(C_GREEN  "   " C_RED "◢██◣" C_MAGENTA "  ╚═══╝  " C_BLUE " ╚═════╝ " C_CYAN "╚══════╝" CLR_RESET);
+            break;
+        case 6:
+            printf(C_GREEN  "  " C_RED "◢" C_YELLOW "████" C_RED "◣ " C_WHITE "  Victor's Operating System " CLR_RESET);
+            break;
+        case 7:
+            printf(C_CYAN   " " C_RED "◢" C_ORANGE "██" C_YELLOW "██" C_GREEN "██" C_RED "◣" C_CYAN "   ─────────────────────────" CLR_RESET);
+            break;
+        case 8:
+            printf(C_BLUE   "◢" C_RED "██" C_ORANGE "██" C_YELLOW "██" C_GREEN "██" C_CYAN "██" C_RED "◣" C_MAGENTA "  ● " C_RED "● " C_ORANGE "● " C_YELLOW "● " C_GREEN "● " C_CYAN "● " C_BLUE "● " C_MAGENTA "●" CLR_RESET);
+            break;
+        default:
+            printf("                                           ");
+            break;
+    }
+}
+
 int main(int argc, char** argv) {
     (void)argc;
     (void)argv;
 
-    // Simple clean ASCII logo (avoid backslashes which render oddly)
-    static const char* const logo[] = {
-        "   _    _  ____   _____ ",
-        "  | |  | |/ __ \\ / ____|",
-        "  | |  | | |  | | (___  ",
-        "  | |  | | |  | |\\___ \\ ",
-        "   \\ \\/ /| |__| |____) |",
-        "    \\__/  \\____/|_____/ ",
-        "",
-    };
-    const int logo_lines = (int)(sizeof(logo) / sizeof(logo[0]));
-
-    int logo_width = 0;
-    for (int i = 0; i < logo_lines; i++) {
-        int len = (int)strlen(logo[i]);
-        if (len > logo_width) logo_width = len;
-    }
+    const int logo_lines = 10;
 
     struct winsize ws;
     memset(&ws, 0, sizeof(ws));
@@ -97,31 +126,26 @@ int main(int argc, char** argv) {
     const int info_lines = 10;
     int lines = (logo_lines > info_lines) ? logo_lines : info_lines;
 
-    for (int line = 0; line < lines; line++) {
-        const char* l = (line < logo_lines) ? logo[line] : "";
-        int l_len = (int)strlen(l);
+    printf("\n");  // Top padding
 
-        printf(CLR_LOGO "%s" CLR_RESET, l);
-        for (int i = l_len; i < logo_width; i++) putchar(' ');
+    for (int line = 0; line < lines; line++) {
+        print_logo_line(line);
         printf("  ");
 
-        // Using only emoji from VOS supported list (kernel/emoji_data.c)
+        // Using emoji from VOS supported list (kernel/emoji_data.c)
         switch (line) {
             case 0:
-                // U+1F60E sunglasses face
-                printf("\xF0\x9F\x98\x8E ");
+                printf("\xF0\x9F\x98\x8E ");  // sunglasses face
                 print_key("OS");
                 printf(": " CLR_VAL "VOS 0.1.0" CLR_RESET " (i386)\n");
                 break;
             case 1:
-                // U+1F525 fire
-                printf("\xF0\x9F\x94\xA5 ");
+                printf("\xF0\x9F\x94\xA5 ");  // fire
                 print_key("Kernel");
                 printf(": " CLR_VAL "VOS kernel" CLR_RESET " (Multiboot1)\n");
                 break;
             case 2:
-                // U+2B50 star
-                printf("\xE2\xAD\x90 ");
+                printf("\xE2\xAD\x90 ");  // star
                 print_key("Display");
                 if (ws.ws_xpixel && ws.ws_ypixel) {
                     printf(": " CLR_VAL "%ux%u" CLR_RESET " (%ux%u cells)\n",
@@ -135,16 +159,14 @@ int main(int argc, char** argv) {
                 }
                 break;
             case 3:
-                // U+1F3C6 trophy
-                printf("\xF0\x9F\x8F\x86 ");
+                printf("\xF0\x9F\x8F\x86 ");  // trophy
                 print_key("Uptime");
                 printf(": " CLR_VAL);
                 print_uptime_human(sys_uptime_ms());
                 printf(CLR_RESET "\n");
                 break;
             case 4:
-                // U+1F4A1 light bulb
-                printf("\xF0\x9F\x92\xA1 ");
+                printf("\xF0\x9F\x92\xA1 ");  // light bulb
                 print_key("Memory");
                 if (mem_kb) {
                     printf(": " CLR_VAL "%lu MB" CLR_RESET "\n", (unsigned long)(mem_kb / 1024u));
@@ -153,8 +175,7 @@ int main(int argc, char** argv) {
                 }
                 break;
             case 5:
-                // U+1F427 penguin
-                printf("\xF0\x9F\x90\xA7 ");
+                printf("\xF0\x9F\x90\xA7 ");  // penguin
                 print_key("CPU");
                 if (cpu && cpu[0]) {
                     printf(": " CLR_VAL "%s" CLR_RESET "\n", cpu);
@@ -163,8 +184,7 @@ int main(int argc, char** argv) {
                 }
                 break;
             case 6:
-                // U+2600 sun (no variation selector)
-                printf("\xE2\x98\x80 ");
+                printf("\xE2\x98\x80 ");  // sun
                 print_key("RTC");
                 if (rtc_rc == 0) {
                     printf(": " CLR_VAL "%u-", (unsigned int)dt.year);
@@ -184,14 +204,12 @@ int main(int argc, char** argv) {
                 }
                 break;
             case 7:
-                // U+2705 check mark
-                printf("\xE2\x9C\x85 ");
+                printf("\xE2\x9C\x85 ");  // check mark
                 print_key("VFS");
                 printf(": " CLR_VAL "%d files" CLR_RESET "\n", vfs_files);
                 break;
             case 8:
-                // U+26A1 lightning
-                printf("\xE2\x9A\xA1 ");
+                printf("\xE2\x9A\xA1 ");  // lightning
                 print_key("Tasks");
                 printf(": " CLR_VAL "%d" CLR_RESET "\n", tasks);
                 break;

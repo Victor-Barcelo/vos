@@ -324,15 +324,19 @@ static void initialize_disk(void) {
     mkdir("/disk/usr/bin", 0755);
     mkdir("/disk/usr/lib", 0755);
     mkdir("/disk/usr/share", 0755);
+    mkdir("/disk/usr/dev", 0755);
+    mkdir("/disk/usr/dev/game", 0755);
+    mkdir("/disk/usr/dev/game/doc", 0755);
+    mkdir("/disk/usr/dev/game/examples", 0755);
 
     // Copy binaries
     copy_binaries();
 
-    // Copy TCC sysroot (headers, libraries) from initramfs
+    // Copy TCC sysroot (headers, libraries, game dev resources) from initramfs
     struct stat st;
     if (stat("/sysroot", &st) == 0) {
         tag("[setup] ", CLR_CYAN);
-        printf("Installing development tools (TCC, libc)...\n");
+        printf("Installing development tools (TCC, libc, game libs)...\n");
         copy_tree("/sysroot/usr", "/disk/usr");
     }
 

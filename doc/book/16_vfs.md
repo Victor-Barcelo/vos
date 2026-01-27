@@ -17,7 +17,7 @@ The Virtual File System (VFS) provides a unified interface for different filesys
 +---------------------+
      |         |
 +--------+ +--------+
-| ramfs  | | FAT16  |
+| ramfs  | | minix  |
 +--------+ +--------+
      |         |
   Memory    ATA Disk
@@ -436,7 +436,8 @@ void vfs_init_stdio(void) {
 ├── usr/            (overlay: /disk/usr)
 ├── var/            (overlay: /disk/var)
 ├── ram/            (ramfs mount point)
-└── disk/           (FAT16 persistent storage)
+└── disk/           (Minix persistent storage)
+    ├── bin/        (persistent binaries)
     ├── etc/        (persistent config)
     ├── home/       (user home directories)
     ├── root/       (root's home)
@@ -467,9 +468,9 @@ static bool vfs_path_exists_raw(const char* path) {
     if (!path) return false;
     bool is_dir;
 
-    // Check fatdisk for /disk/... paths
+    // Check minixfs for /disk/... paths
     if (ci_starts_with(path, "/disk")) {
-        return fatdisk_stat_ex(path, &is_dir, NULL, NULL, NULL);
+        return minixfs_stat_ex(path + 5, &is_dir, NULL, NULL, NULL);
     }
 
     // Check ramfs for /ram/... paths
@@ -543,10 +544,10 @@ Step 2: Write changes
 |------|------|-------------|----------|
 | Initramfs | `/bin/*`, etc. | Read-only | OS binaries |
 | RAMFS | `/ram/*`, `/tmp/*` | Lost on reboot | Temp files |
-| FAT16 | `/disk/*` | Persistent | User data |
+| Minix | `/disk/*` | Persistent | User data |
 | Overlay | `/etc/*`, `/home/*` | Persistent* | Config, homes |
 
-*Overlay paths write to FAT16, read from FAT16 or initramfs
+*Overlay paths write to Minix, read from Minix or initramfs
 
 ## Summary
 
@@ -558,7 +559,7 @@ The VFS provides:
 4. **Directory tree** navigation
 5. **Pluggable filesystem** backends
 6. **Overlay aliases** for Linux-like path compatibility
-7. **Persistence** via FAT16 with initramfs fallback
+7. **Persistence** via Minix filesystem with initramfs fallback
 
 This abstraction allows VOS to support multiple filesystems transparently while providing a familiar Linux directory structure.
 

@@ -53,7 +53,7 @@ VOS (Victor's Operating System) is an educational operating system designed to d
 
 - **Virtual File System (VFS)** with mount points
 - **RAM filesystem (ramfs)** for temporary storage
-- **FAT16 filesystem** for persistent disk storage
+- **Minix filesystem** for persistent disk storage
 - **initramfs** (tar) for initial root filesystem
 - **POSIX-like file operations** (open, read, write, seek, stat, etc.)
 
@@ -149,7 +149,7 @@ When VOS boots, users see a Linux-like filesystem structure. Understanding this 
 ├── tmp/              Temporary files (ephemeral)
 ├── ram/              RAM filesystem mount point
 │   └── tmp/          Actual /tmp storage
-└── disk/             FAT16 persistent storage
+└── disk/             Minix persistent storage
     ├── etc/          Persistent configuration
     ├── home/         Persistent user data
     │   └── victor/   Victor's files (survives reboot)
@@ -166,7 +166,7 @@ VOS uses three storage tiers:
 |------|---------|-------------|----------|
 | **Initramfs** | `/bin/*` | Read-only | OS binaries, default configs |
 | **RAMFS** | `/ram/*`, `/tmp/*` | Lost on reboot | Temporary files |
-| **FAT16** | `/disk/*` | Survives reboot | User data, custom configs |
+| **Minix** | `/disk/*` | Survives reboot | User data, custom configs |
 
 ### Overlay Aliases
 
@@ -206,7 +206,7 @@ System configuration files. On first boot, defaults come from initramfs:
 After setup, `/disk/etc` is created and overlays the defaults, allowing persistent customization.
 
 #### `/home` and `/root` - Home Directories (Overlay)
-User home directories, persistent via FAT16:
+User home directories, persistent via Minix filesystem:
 - `/home/victor` → `/disk/home/victor` (if exists)
 - `/root` → `/disk/root` (root's home)
 
@@ -219,7 +219,7 @@ Always aliases to `/ram/tmp`. Contents are lost on reboot. Use for:
 - Files that don't need persistence
 
 #### `/disk` - Persistent Storage
-Direct access to the FAT16 partition. Anything written here survives reboots:
+Direct access to the Minix partition. Anything written here survives reboots:
 - `/disk/etc/passwd` - Customized user list
 - `/disk/home/victor/` - Your files
 - `/disk/fontrc` - Font preferences
@@ -275,7 +275,7 @@ $ ls /tmp/
 - Any modern x86/x64 Linux system
 - QEMU with i386 emulation
 - 64MB RAM allocated to VM (minimum)
-- 4GB disk image for FAT16 partition
+- 512MB disk image for Minix partition
 
 ### For Running on Real Hardware
 - i386 or newer CPU (32-bit mode)

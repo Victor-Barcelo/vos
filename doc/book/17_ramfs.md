@@ -410,4 +410,4 @@ It serves as the root filesystem and /tmp storage in VOS.
 ---
 
 *Previous: [Chapter 16: Virtual File System](16_vfs.md)*
-*Next: [Chapter 18: FAT16 Filesystem](18_fat16.md)*
+*Next: [Chapter 18: Minix Filesystem](18_minix.md)*

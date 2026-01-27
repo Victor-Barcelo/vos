@@ -93,20 +93,30 @@ Legacy VGA compatibility.
 
 ## Disk Images
 
-### FAT16 Persistent Disk
+### Minix Persistent Disk
 
-VOS supports a persistent FAT16 disk mounted at `/disk`:
+VOS supports a persistent Minix disk mounted at `/disk`:
 
 ```bash
-# Create disk image
-truncate -s 256M vos-disk.img
-mkfs.fat -F 16 -n VOSDISK vos-disk.img
+# Create 512MB disk image with MBR partition table
+dd if=/dev/zero of=disk.img bs=1M count=512
+
+# Create partition (Minix type 0x81, starting at sector 2048)
+echo -e "o\nn\np\n1\n2048\n\nt\n81\nw" | fdisk disk.img
+
+# Format the Minix partition
+dd if=disk.img of=part.img bs=512 skip=2048 count=$((512*2048-2048))
+mkfs.minix -2 -n 30 part.img
+dd if=part.img of=disk.img bs=512 seek=2048 conv=notrunc
+rm part.img
 
 # Run with disk
 qemu-system-i386 -cdrom vos.iso -vga none \
     -device bochs-display,xres=1920,yres=1080 \
-    -drive file=vos-disk.img,format=raw,if=ide
+    -drive file=disk.img,format=raw,if=ide
 ```
+
+On first boot with a blank disk, VOS will prompt to initialize it.
 
 ### IDE/ATA Configuration
 

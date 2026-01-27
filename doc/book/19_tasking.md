@@ -432,5 +432,5 @@ This forms the foundation for running multiple programs concurrently.
 
 ---
 
-*Previous: [Chapter 18: FAT16 Filesystem](18_fat16.md)*
+*Previous: [Chapter 18: Minix Filesystem](18_minix.md)*
 *Next: [Chapter 20: User Mode and ELF](20_usermode.md)*

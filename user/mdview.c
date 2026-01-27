@@ -145,39 +145,43 @@ static void output_text(const char *text, size_t size) {
             continue;
         }
 
-        /* Find word boundary */
-        size_t word_start = i;
-        size_t word_end = i;
-
-        /* Skip leading spaces */
-        while (word_end < size && text[word_end] == ' ') {
-            word_end++;
-        }
-
-        /* Find end of word */
-        while (word_end < size && text[word_end] != ' ' && text[word_end] != '\n') {
-            word_end++;
-        }
-
-        size_t word_len = word_end - word_start;
-
-        /* Check if word fits on current line */
-        if (state.col + (int)word_len > max_col && state.col > state.indent * 2) {
-            newline();
-            do_indent();
-            /* Skip leading space after wrap */
-            if (text[word_start] == ' ') {
-                word_start++;
-            }
-        }
-
-        /* Output the word */
-        for (size_t j = word_start; j < word_end && j < size; j++) {
-            putchar(text[j]);
+        /* In tables, output without wrapping */
+        if (state.in_table) {
+            putchar(text[i]);
             state.col++;
+            i++;
+            continue;
         }
 
-        i = word_end;
+        /* Handle spaces */
+        if (text[i] == ' ') {
+            /* Check if there's a word coming that won't fit */
+            size_t word_len = 0;
+            size_t j = i + 1;
+            while (j < size && text[j] != ' ' && text[j] != '\n') {
+                word_len++;
+                j++;
+            }
+
+            /* If adding space + word would overflow, wrap instead */
+            if (state.col + 1 + (int)word_len > max_col && state.col > state.indent * 2 + 1) {
+                newline();
+                do_indent();
+                i++;  /* Skip the space */
+                continue;
+            }
+
+            /* Output the space */
+            putchar(' ');
+            state.col++;
+            i++;
+            continue;
+        }
+
+        /* Output regular character */
+        putchar(text[i]);
+        state.col++;
+        i++;
     }
 }
 

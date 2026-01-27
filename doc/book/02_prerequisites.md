@@ -136,8 +136,8 @@ make run-serial
 # Clean build artifacts
 make clean
 
-# Build disk image with FAT16
-make disk
+# Build disk image with Minix filesystem
+make disk format-disk
 ```
 
 ### QEMU Testing Setup

@@ -107,11 +107,11 @@
     - Directory Tree
     - Initramfs Integration
 
-18. [FAT16 Filesystem](18_fat16.md)
-    - FAT Structure
-    - Cluster Chains
-    - Directory Entries
-    - Long Filenames
+18. [Minix Filesystem](18_minix.md)
+    - Minix v2 Structure
+    - Inodes and Zones
+    - Directory Entries (30-char names)
+    - First-Boot Initialization
     - Persistent Storage
 
 ## Part V: Process Management
@@ -310,7 +310,7 @@ This book was generated from the VOS source code and provides a comprehensive gu
 
 - **Multiboot-compliant** kernel bootable via GRUB
 - **Framebuffer graphics** with multiple font sizes
-- **FAT16 persistent storage** with overlay filesystem
+- **Minix persistent storage** with overlay filesystem
 - **Multi-user authentication** with privilege separation
 - **~89 userland utilities** including nextvi editor, emulators, and tools
 - **Sound Blaster 16** audio driver with DMA

@@ -57,7 +57,7 @@ kernel/
 ├── vfs.c                   # Virtual filesystem
 ├── vfs_posix.c             # POSIX wrappers
 ├── ramfs.c                 # RAM filesystem
-├── fatdisk.c               # FAT16 filesystem
+├── minixfs.c               # Minix filesystem
 ├── task.c                  # Process management
 ├── syscall.c               # System call dispatcher
 ├── elf.c                   # ELF loader
@@ -85,7 +85,7 @@ kernel/
 | gdt.c, idt.c, interrupts.c | CPU management |
 | paging.c, pmm.c, kheap.c | Memory management |
 | task.c, syscall.c, elf.c | Process management |
-| vfs.c, ramfs.c, fatdisk.c | Filesystem |
+| vfs.c, ramfs.c, minixfs.c | Filesystem |
 | keyboard.c, mouse.c | Input devices |
 | screen.c, serial.c | Output devices |
 
@@ -105,7 +105,7 @@ include/
 ├── early_alloc.h           # Early allocator
 ├── vfs.h                   # VFS interface
 ├── ramfs.h                 # RAMFS interface
-├── fatdisk.h               # FAT interface
+├── minixfs.h               # Minix interface
 ├── task.h                  # Task structures
 ├── elf.h                   # ELF structures
 ├── keyboard.h              # Keyboard interface
@@ -337,7 +337,7 @@ boot.asm
         ├── screen.c
         ├── vfs.c
         │   ├── ramfs.c
-        │   └── fatdisk.c
+        │   └── minixfs.c
         │       └── ata.c
         ├── task.c
         │   ├── elf.c

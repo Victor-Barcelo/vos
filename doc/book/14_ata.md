@@ -340,15 +340,14 @@ void disk_init(void) {
     // Read partition table
     read_partition_table();
 
-    // Mount first FAT16 partition
+    // Mount first Minix partition (type 0x81)
     for (int i = 0; i < 4; i++) {
         mbr_t mbr;
         ata_read(0, 1, &mbr);
         partition_entry_t *p = &mbr.partitions[i];
 
-        if (p->type == 0x04 || p->type == 0x06 || p->type == 0x0E) {
-            fat16_mount(&ata_device, p->lba_start);
-            vfs_mount("/disk", &fat16_fs);
+        if (p->type == 0x81) {  // Minix partition type
+            minixfs_init(p->lba_start);
             break;
         }
     }
@@ -365,7 +364,7 @@ The VOS ATA driver provides:
 4. **MBR partition parsing** for disk layout
 5. **Block device interface** for filesystem use
 
-This enables persistent storage through the FAT16 filesystem.
+This enables persistent storage through the Minix filesystem.
 
 ---
 

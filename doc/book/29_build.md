@@ -293,18 +293,22 @@ make run QEMU_XRES=1280 QEMU_YRES=720
 
 ## Sysroot Installation
 
-The sysroot target installs development files to a FAT16 disk image:
+The sysroot target installs development files to a Minix disk image:
 
 ```makefile
-DISK_IMG ?= vos-disk.img
-DISK_SIZE_MB ?= 256
+DISK_IMG ?= disk.img
+DISK_SIZE_MB ?= 512
 
 $(DISK_IMG):
-    truncate -s $(DISK_SIZE_MB)M $@
-    mkfs.fat -F 16 -n VOSDISK $@
+    dd if=/dev/zero of=$@ bs=1M count=$(DISK_SIZE_MB)
+    echo -e "o\nn\np\n1\n2048\n\nt\n81\nw" | fdisk $@
 
-sysroot: $(USER_RUNTIME_OBJECTS) $(TCC_LIBTCC1) $(DISK_IMG)
-    bash $(SYSROOT_SCRIPT) $(DISK_IMG)
+format-disk: $(DISK_IMG)
+    # Format the Minix partition (type 0x81)
+    dd if=$(DISK_IMG) of=part.img bs=512 skip=2048
+    mkfs.minix -2 -n 30 part.img
+    dd if=part.img of=$(DISK_IMG) bs=512 seek=2048 conv=notrunc
+    rm part.img
 ```
 
 The script installs:

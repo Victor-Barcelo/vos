@@ -40,12 +40,12 @@ The user management system provides:
 
 ### Format
 
-VOS uses a simplified `/etc/passwd` format:
+VOS uses the standard 7-field `/etc/passwd` format:
 
 ```
-# name:pass:uid:gid:home:shell
-root::0:0:/root:/bin/dash
-victor::1000:1000:/home/victor:/bin/dash
+# name:pass:uid:gid:gecos:home:shell
+root::0:0:System Administrator:/root:/bin/dash
+victor::1000:1000:Victor:/home/victor:/bin/dash
 ```
 
 | Field | Description |
@@ -54,8 +54,11 @@ victor::1000:1000:/home/victor:/bin/dash
 | pass | Password (empty = no prompt, `!` = locked) |
 | uid | User ID (0 = root) |
 | gid | Group ID |
+| gecos | Full name / comment (optional) |
 | home | Home directory path |
 | shell | Login shell |
+
+VOS also accepts 6-field format (without gecos) for compatibility.
 
 ### Parsing Implementation
 
@@ -74,20 +77,25 @@ static int parse_passwd_line(char* line, user_entry_t* out) {
     while (*line == ' ' || *line == '\t') line++;
     if (*line == '\0' || *line == '#') return -1;
 
-    // Split by colons: name:pass:uid:gid:home:shell
-    char* fields[6] = {0};
+    // Split by colons - supports both formats:
+    // 7 fields: name:pass:uid:gid:gecos:home:shell
+    // 6 fields: name:pass:uid:gid:home:shell
+    char* fields[7] = {0};
     int nf = 0;
     char* p = line;
 
-    for (; nf < 6; nf++) {
+    for (; nf < 7; nf++) {
         fields[nf] = p;
         char* c = strchr(p, ':');
-        if (!c) break;
+        if (!c) {
+            nf++;  // Count last field
+            break;
+        }
         *c = '\0';
         p = c + 1;
     }
 
-    // Validate and copy fields
+    // Validate username
     if (!fields[0] || fields[0][0] == '\0') return -1;
 
     memset(out, 0, sizeof(*out));
@@ -100,16 +108,30 @@ static int parse_passwd_line(char* line, user_entry_t* out) {
     if (fields[2]) parse_u32(fields[2], &out->uid);
     if (fields[3]) parse_u32(fields[3], &out->gid);
 
-    if (fields[4] && fields[4][0]) {
-        strncpy(out->home, fields[4], sizeof(out->home) - 1);
+    // Determine home/shell based on field count
+    const char* home_field = NULL;
+    const char* shell_field = NULL;
+
+    if (nf >= 7 && fields[6]) {
+        // 7-field format with GECOS
+        home_field = fields[5];
+        shell_field = fields[6];
+    } else if (nf >= 6) {
+        // 6-field format without GECOS
+        home_field = fields[4];
+        shell_field = fields[5];
+    }
+
+    if (home_field && home_field[0]) {
+        strncpy(out->home, home_field, sizeof(out->home) - 1);
     } else {
         snprintf(out->home, sizeof(out->home), "/home/%s", out->name);
     }
 
-    if (fields[5] && fields[5][0]) {
-        strncpy(out->shell, fields[5], sizeof(out->shell) - 1);
+    if (shell_field && shell_field[0]) {
+        strncpy(out->shell, shell_field, sizeof(out->shell) - 1);
     } else {
-        strcpy(out->shell, "/bin/sh");
+        strcpy(out->shell, "/bin/dash");
     }
 
     return 0;
@@ -118,7 +140,7 @@ static int parse_passwd_line(char* line, user_entry_t* out) {
 
 ## VFS Overlay for /etc
 
-VOS uses an overlay system where `/etc` maps to `/disk/etc` if files exist there, otherwise falls back to the initramfs.
+VOS uses an overlay system where `/etc` maps to `/disk/etc` if files exist there, otherwise falls back to the initramfs. The `/disk` mount point uses the Minix filesystem.
 
 ### Overlay Semantics
 
@@ -128,9 +150,9 @@ static bool vfs_path_exists_raw(const char* path) {
     if (!path) return false;
     bool is_dir;
 
-    // Check fatdisk for /disk/... paths
+    // Check minixfs for /disk/... paths
     if (ci_starts_with(path, "/disk")) {
-        return fatdisk_stat_ex(path, &is_dir, NULL, NULL, NULL);
+        return minixfs_stat_ex(path + 5, &is_dir, NULL, NULL, NULL);
     }
 
     // Check ramfs for /ram/... paths
@@ -157,6 +179,20 @@ static const char* abs_apply_posix_aliases(const char* abs, char tmp[]) {
 
 ## The login Program
 
+### Passwd File Search
+
+Login searches multiple locations for the passwd file:
+
+```c
+// Check /ram/etc/passwd first (set up by init), then /disk/etc/passwd
+static const char* const passwd_paths[] = {
+    "/ram/etc/passwd",
+    "/disk/etc/passwd",
+    "/etc/passwd",
+    NULL
+};
+```
+
 ### Main Loop
 
 ```c
@@ -171,7 +207,7 @@ int main(int argc, char** argv) {
 
         if (username[0] == '\0') continue;
 
-        // 2. Look up user in passwd
+        // 2. Look up user in passwd (tries multiple paths)
         user_entry_t user;
         if (load_user(username, &user) != 0) {
             printf("Login incorrect\n");
@@ -310,94 +346,137 @@ case SYS_SETUID: {
 
 ## Init and First Boot
 
-### Directory Setup
+### First-Boot Initialization
 
-Init creates required directories on boot:
+When VOS detects a blank Minix disk, init prompts the user:
+
+```
+  ╔══════════════════════════════════════════════════════════════╗
+  ║   ██╗   ██╗ ██████╗ ███████╗    First Boot Setup            ║
+  ╚══════════════════════════════════════════════════════════════╝
+
+  A blank disk has been detected.
+
+  Options:
+    [Y] Initialize disk for VOS
+    [N] Boot in Live Mode
+
+  Initialize disk for VOS? [Y/n]
+```
+
+### Disk Detection
 
 ```c
 // In user/init.c
-// Set up persistent directories on /disk
-mkdir("/disk/etc", 0755);
-mkdir("/disk/home", 0755);
-mkdir("/disk/root", 0700);   // Root's home
-mkdir("/disk/home/victor", 0755);
+static int disk_available(void) {
+    struct stat st;
+    if (stat("/disk", &st) < 0) return 0;
 
-// Copy passwd to persistent storage if not present
-struct stat st;
-if (stat("/disk/etc/passwd", &st) < 0) {
-    printf("First boot: copying /etc/passwd to /disk/etc/passwd\n");
+    // Try creating a test file to verify write access
+    int fd = open("/disk/.test", O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    if (fd < 0) return 0;
+    close(fd);
+    unlink("/disk/.test");
+    return 1;
+}
 
-    int src = open("/etc/passwd", O_RDONLY);
-    if (src >= 0) {
-        int dst = open("/disk/etc/passwd", O_WRONLY | O_CREAT | O_TRUNC, 0644);
-        if (dst >= 0) {
-            char buf[256];
-            int n;
-            while ((n = read(src, buf, sizeof(buf))) > 0) {
-                write(dst, buf, n);
-            }
-            close(dst);
-        }
-        close(src);
-    }
+static int disk_initialized(void) {
+    return path_exists("/disk/.vos-initialized");
+}
+```
+
+### Directory Setup
+
+When user selects [Y], init creates the full directory structure:
+
+```c
+// In user/init.c
+static void initialize_disk(void) {
+    // Create directory structure
+    mkdir("/disk/bin", 0755);
+    mkdir("/disk/etc", 0755);
+    mkdir("/disk/home", 0755);
+    mkdir("/disk/root", 0700);
+    mkdir("/disk/tmp", 01777);
+    mkdir("/disk/var", 0755);
+    mkdir("/disk/usr", 0755);
+
+    // Copy all binaries from /bin to /disk/bin
+    copy_binaries();
+
+    // Create default users (root, victor)
+    create_default_users();
+
+    // Create system config (/etc/profile, /etc/motd, etc.)
+    create_system_config();
+
+    // Create home directories with .profile
+    create_home_directories();
+
+    // Write initialization marker
+    write_file("/disk/.vos-initialized", "VOS initialized\n", 0644);
 }
 ```
 
 ### Default Users
 
-The initramfs includes default users:
+Init creates default users with 7-field passwd format:
 
-```
-# /etc/passwd (in initramfs)
-# name:pass:uid:gid:home:shell
-root::0:0:/root:/bin/dash
-victor::1000:1000:/home/victor:/bin/dash
+```c
+const char* passwd =
+    "root::0:0:System Administrator:/root:/bin/dash\n"
+    "victor::1000:1000:Victor:/home/victor:/bin/dash\n";
+write_file("/disk/etc/passwd", passwd, 0644);
 ```
 
 Both users have empty passwords, meaning no password prompt at login.
+
+### Live Mode
+
+If the user selects [N], VOS boots in live mode:
+- Uses RAM-based `/ram/etc/passwd` for user database
+- No changes written to disk
+- All data lost on reboot
+- Useful for testing or rescue operations
 
 ## Shell Profile
 
 ### /etc/profile
 
-System-wide shell configuration:
+System-wide shell configuration. Note that dash doesn't support bash-style prompt escapes (`\u`, `\w`, `\[`, `\]`), so VOS uses direct ANSI escape characters:
 
 ```bash
 # /etc/profile - System-wide shell configuration for VOS
 
-# Set up PATH
-export PATH="/bin:/usr/bin"
+# Set up PATH (includes /disk/bin for persistent binaries)
+export PATH="/bin:/usr/bin:/disk/bin"
 
-# Set default editor
-export EDITOR="vi"
+# Terminal and editor settings
+export TERM=vt100
+export EDITOR=edit
 
-# History settings
-export HISTSIZE=100
-
-# Terminal type
-export TERM="xterm"
-
-# Colored prompt
-if [ "${USER}" = "root" ]; then
-    PS1="$(printf '\033[1;31m')root$(printf '\033[0m')@vos# "
+# Colored prompt using direct ANSI escapes (ESC = 0x1b)
+# Dash doesn't support \e or \033 in PS1, so init writes actual ESC chars
+if [ "$USER" = "root" ]; then
+    PS1='<ESC>[1;31mroot<ESC>[0m@<ESC>[1;36mvos<ESC>[0m:<ESC>[1;33m$PWD<ESC>[0m# '
 else
-    PS1="$(printf '\033[1;32m')${USER}$(printf '\033[0m')@vos$ "
+    PS1='<ESC>[1;32m$USER<ESC>[0m@<ESC>[1;36mvos<ESC>[0m:<ESC>[1;33m$PWD<ESC>[0m$ '
 fi
-export PS1
 
 # Useful aliases
-ll() { ls -la "$@"; }
-la() { ls -a "$@"; }
+alias ll='ls -la'
+alias la='ls -A'
+alias l='ls -l'
+alias ..='cd ..'
+alias ...='cd ../..'
 
-# Load user's default font
-font load 2>/dev/null
-
-# Welcome message
-echo ""
-echo "  Welcome to VOS"
-echo "  Use arrow keys for command history"
-echo ""
+# Source user profile if exists
+if [ -f "$HOME/.profile" ]; then
+    . "$HOME/.profile"
+fi
 ```
+
+The `<ESC>` above represents the actual escape character (0x1b). Init writes these directly into the profile file.
 
 ### Login Shell Detection
 
@@ -556,12 +635,14 @@ setgid(1000);
 
 VOS user management provides:
 
-1. **Multi-user authentication** via `/etc/passwd`
-2. **Overlay filesystem** for persistent configuration
-3. **Privilege separation** with root vs regular users
-4. **Per-user home directories** on persistent storage
-5. **Login shell** with profile scripts
-6. **Basic file permissions** for access control
+1. **Multi-user authentication** via `/etc/passwd` (7-field format)
+2. **First-boot initialization** with interactive disk setup
+3. **Overlay filesystem** for persistent configuration on Minix
+4. **Privilege separation** with root vs regular users
+5. **Per-user home directories** on persistent storage
+6. **Login shell** with dash-compatible profile scripts
+7. **Live mode** option for testing without persistence
+8. **Basic file permissions** for access control
 
 This creates a familiar Linux-like environment while maintaining simplicity.
 

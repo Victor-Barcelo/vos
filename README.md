@@ -97,7 +97,18 @@ To add a static file, just put it in the appropriate `initramfs/` subdirectory.
 - `/var/` - Aliased to disk
 - `/root/` - Aliased to disk
 
-**Why?** VOS aliases paths like `/usr` to `/disk/usr`. If `/usr` exists in initramfs, it will be visible in Live Mode (no disk) causing conflicts. Put application resources in `/res/appname/` instead, and copy to `/disk/usr/` in `init.c` during first-boot setup.
+**Why?** VOS aliases paths like `/usr` to `/disk/usr`. If `/usr` exists in initramfs, it will be visible in Live Mode (no disk) causing conflicts.
+
+**Correct approach for app resources:**
+```
+initramfs/res/
+├── klystrack/    # Klystrack tracker resources
+├── roms/         # Game ROMs for emulators
+├── music/        # Music files
+└── myapp/        # Your app's resources go here
+```
+
+Then in `user/init.c`, copy from `/res/myapp/` to `/disk/usr/myapp/` during first-boot setup (see `initialize_disk()` function for examples).
 
 ### Adding Files to Persistent Disk
 

@@ -155,9 +155,9 @@ qemu-system-i386 -cdrom vos.iso \
 qemu-system-i386 -cdrom vos.iso \
     -serial stdio
 
-# With disk image
+# With disk image (default 4GB disk)
 qemu-system-i386 -cdrom vos.iso \
-    -drive file=disk.img,format=raw,if=ide
+    -drive file=vos-disk.img,format=raw,if=ide
 ```
 
 ### Cross-Compiler Setup (Recommended)

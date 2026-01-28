@@ -354,17 +354,55 @@ With TCC inside VOS:
 tcc -o demo demo.c -lolive
 ```
 
+## SDL2 Shim
+
+VOS includes an SDL2 shim layer that provides a subset of SDL2 API for portable graphics code:
+
+```c
+#include <SDL2/SDL.h>
+
+int main(void) {
+    SDL_Init(SDL_INIT_VIDEO);
+    SDL_Window *win = SDL_CreateWindow("VOS App",
+        SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
+        800, 600, 0);
+    SDL_Renderer *rend = SDL_CreateRenderer(win, -1, 0);
+
+    // Drawing loop
+    SDL_SetRenderDrawColor(rend, 0, 0, 255, 255);
+    SDL_RenderClear(rend);
+    SDL_RenderPresent(rend);
+
+    // ... event loop ...
+
+    SDL_DestroyRenderer(rend);
+    SDL_DestroyWindow(win);
+    SDL_Quit();
+    return 0;
+}
+```
+
+SDL_image is also available for loading images:
+
+```c
+#include <SDL2/SDL_image.h>
+
+SDL_Surface *image = IMG_Load("/disk/images/photo.png");
+```
+
 ## Summary
 
 VOS graphics programming provides:
 
 1. **Framebuffer access** via syscalls
-2. **Olive.c** for 2D rendering
-3. **Small3dlib** for 3D software rendering
-4. **Performance techniques** for smooth animation
-5. **Status bar awareness** for proper screen usage
+2. **SDL2 shim** for portable graphics code
+3. **SDL_image** for image loading (PNG, etc.)
+4. **Olive.c** for 2D software rendering
+5. **Small3dlib** for 3D software rendering
+6. **Performance techniques** for smooth animation
+7. **Status bar awareness** for proper screen usage
 
-This enables graphical applications like games, visualizations, and image viewers.
+This enables graphical applications like games, visualizations, image viewers, and emulators.
 
 ---
 

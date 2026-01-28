@@ -49,7 +49,11 @@ kernel/
 ├── mouse.c                 # Mouse driver
 ├── screen.c                # Console/framebuffer
 ├── serial.c                # Serial port (COM1)
+├── speaker.c               # PC speaker driver
+├── sb16.c                  # Sound Blaster 16 audio driver
+├── dma.c                   # DMA controller for audio
 ├── ata.c                   # ATA disk driver
+├── mbr.c                   # Master Boot Record parsing
 ├── paging.c                # Virtual memory
 ├── pmm.c                   # Physical memory manager
 ├── kheap.c                 # Kernel heap
@@ -58,6 +62,7 @@ kernel/
 ├── vfs_posix.c             # POSIX wrappers
 ├── ramfs.c                 # RAM filesystem
 ├── minixfs.c               # Minix filesystem
+├── fatdisk.c               # Legacy FAT16 support (deprecated)
 ├── task.c                  # Process management
 ├── syscall.c               # System call dispatcher
 ├── elf.c                   # ELF loader
@@ -71,6 +76,7 @@ kernel/
 ├── font8x8.c               # Built-in 8x8 font
 ├── font_vga_psf2.c         # VGA font data
 ├── font_terminus_psf2.c    # Terminus font data
+├── emoji_data.c            # 89 color emoji with alpha blending
 ├── ubasic.c                # BASIC interpreter (kernel)
 ├── tokenizer.c             # BASIC tokenizer
 ├── basic_programs.c        # BASIC demo programs
@@ -86,8 +92,11 @@ kernel/
 | paging.c, pmm.c, kheap.c | Memory management |
 | task.c, syscall.c, elf.c | Process management |
 | vfs.c, ramfs.c, minixfs.c | Filesystem |
+| ata.c, mbr.c | Storage |
 | keyboard.c, mouse.c | Input devices |
 | screen.c, serial.c | Output devices |
+| sb16.c, dma.c, speaker.c | Audio |
+| emoji_data.c, font_psf2.c | Graphics/fonts |
 
 ## Include Directory
 
@@ -106,6 +115,8 @@ include/
 ├── vfs.h                   # VFS interface
 ├── ramfs.h                 # RAMFS interface
 ├── minixfs.h               # Minix interface
+├── fatdisk.h               # FAT16 interface (legacy)
+├── mbr.h                   # MBR parsing
 ├── task.h                  # Task structures
 ├── elf.h                   # ELF structures
 ├── keyboard.h              # Keyboard interface
@@ -114,6 +125,9 @@ include/
 ├── timer.h                 # Timer interface
 ├── rtc.h                   # RTC interface
 ├── serial.h                # Serial interface
+├── speaker.h               # PC speaker interface
+├── sb16.h                  # Sound Blaster 16 interface
+├── dma.h                   # DMA controller interface
 ├── ata.h                   # ATA interface
 ├── io.h                    # Port I/O
 ├── string.h                # String functions
@@ -122,6 +136,7 @@ include/
 ├── usercopy.h              # User copy interface
 ├── font.h                  # Font interface
 ├── font8x8.h               # 8x8 font data
+├── emoji.h                 # Emoji rendering interface
 ├── shell.h                 # Shell interface
 ├── editor.h                # Editor interface
 ├── statusbar.h             # Status bar interface
@@ -142,23 +157,42 @@ user/
 ├── crti.asm                # Init section begin
 ├── crtn.asm                # Init section end
 ├── linker.ld               # Userland linker script
-├── newlib_syscalls.c       # Newlib syscall stubs
+├── newlib_syscalls.c       # Newlib syscall stubs (~3,390 lines)
 ├── env.c                   # Environment variables
 ├── syscall.h               # Syscall wrappers
 ├── vos_screen.h            # VOS screen API
-├── init.c                  # Init process
+├── init.c                  # Init process (termbox2 installer UI)
 ├── login.c                 # Login program
 ├── eliza.c                 # Eliza chatbot
 ├── uptime.c                # Uptime command
 ├── setdate.c               # Set date command
 ├── ps.c                    # Process list
 ├── top.c                   # Process monitor
+├── sysview.c               # System information viewer
 ├── neofetch.c              # System info display
 ├── font.c                  # Font selector
+├── theme.c                 # Color theme selector
 ├── json.c                  # JSON parser tool
-├── img.c                   # Image viewer
+├── img.c                   # Image viewer (SDL_image)
+├── df.c                    # Disk usage statistics
+├── tree.c                  # Directory tree visualization
 ├── s3lcube.c               # 3D cube demo
+├── s3lfly.c                # 3D flight demo
 ├── olivedemo.c             # 2D graphics demo
+├── gbemu.c                 # Game Boy emulator (Peanut-GB)
+├── nesemu.c                # NES emulator (Nofrendo)
+├── modplay.c               # MOD/tracker player (pocketmod)
+├── midiplay.c              # MIDI player (TinySoundFont)
+├── beep.c                  # PC speaker beeper
+├── mdview.c                # Markdown viewer
+├── gzip.c                  # Gzip compression
+├── zip.c                   # ZIP archive tool
+├── unzip.c                 # ZIP extraction tool
+├── useradd.c               # Add user accounts
+├── userdel.c               # Delete user accounts
+├── groupadd.c              # Add groups
+├── groupdel.c              # Delete groups
+├── chown.c                 # Change file ownership
 ├── basic/                  # BASIC interpreter
 │   ├── basic.c             # Main entry
 │   ├── ubasic.c            # Interpreter
@@ -168,6 +202,8 @@ user/
 │   ├── _parser.c
 │   ├── _game.c
 │   └── ...
+├── nextvi/                 # Vi editor port (41 files)
+│   └── vi.c
 └── sys/                    # System headers
     ├── stat.h
     ├── sysmacros.h
@@ -179,11 +215,13 @@ user/
 | Category | Programs |
 |----------|----------|
 | System | init, login, dash (sh) |
-| Utilities | uptime, ps, top, sysview, neofetch |
-| Editors | vi (nextvi) |
-| Entertainment | eliza, zork, basic |
+| Utilities | uptime, ps, top, sysview, neofetch, df, tree |
+| Editors | vi (nextvi), mdview |
+| Entertainment | eliza, zork, basic, gbemu, nesemu |
 | Graphics | s3lcube, s3lfly, olivedemo, img |
-| Development | tcc, font, theme, json |
+| Audio | modplay, midiplay, beep |
+| Development | tcc, font, theme, json, gzip, zip, unzip |
+| User Management | useradd, userdel, groupadd, groupdel, chown |
 
 ## Third-Party Directory
 
@@ -197,28 +235,52 @@ third_party/
 │   └── linenoise.h
 ├── jsmn/                   # JSON parser
 │   └── jsmn.h
-├── stb/                    # stb_image
+├── sheredom_json/          # JSON writer
+│   └── json.h
+├── stb/                    # stb single-header libraries
 │   └── stb_image.h
 ├── small3dlib/             # 3D software renderer
 │   └── small3dlib.h
 ├── olive/                  # 2D graphics library
 │   ├── olive.c
 │   └── olive.h
-├── fonts/                  # PSF2 fonts
+├── nofrendo/               # NES emulator (14+ files)
+│   ├── nes.c
+│   └── ...
+├── peanut-gb/              # Game Boy emulator (single-header)
+│   └── peanut_gb.h
+├── pocketmod/              # MOD player library
+│   └── pocketmod.h
+├── tsf/                    # TinySoundFont (MIDI synthesis)
+│   └── tsf.h
+├── md4c/                   # Markdown parser
+│   └── md4c.h
+├── miniz/                  # Compression library
+│   └── miniz.h
+├── termbox2/               # TUI library
+│   └── termbox2.h
+├── fonts/                  # PSF2 fonts (42 fonts)
 │   ├── spleen/
 │   └── terminus/
+├── emoji/                  # Emoji data (89 color emoji)
+│   └── ...
 ├── tcc/                    # Tiny C Compiler
 │   ├── tcc.c
 │   ├── libtcc.c
 │   └── ...
-├── sbase/                  # Portable Unix utilities
+├── dash/                   # POSIX shell (40 source files)
+│   └── ...
+├── sbase/                  # Portable Unix utilities (60+ tools)
 │   ├── cat.c
 │   ├── ls.c
 │   ├── grep.c
 │   └── ...
-├── ne/                     # Nice Editor (available, not built by default)
-│   └── src/
-│       └── ...
+├── nextvi/                 # Vi editor port (41 files)
+│   └── ...
+├── klystrack/              # Chiptune tracker (separate build)
+│   └── ...
+├── sdl2/                   # SDL2 shim for VOS
+│   └── ...
 └── xv6-public/             # Reference material
 ```
 
@@ -315,11 +377,13 @@ Approximate line counts:
 
 | Component | Lines |
 |-----------|-------|
-| Kernel C | ~15,000 |
+| Kernel C | ~39,000 |
 | Kernel ASM | ~500 |
-| Userland | ~8,000 |
-| Third-party | ~50,000+ |
-| Total (VOS code) | ~23,500 |
+| Userland | ~51,000 |
+| Third-party | ~100,000+ |
+| Total (VOS code) | ~90,000+ |
+
+> **Note**: These statistics include the core VOS kernel and userland programs. Third-party code (dash, TCC, nofrendo, sbase, etc.) is not counted in the VOS total but is included in the project.
 
 ## Dependency Graph
 

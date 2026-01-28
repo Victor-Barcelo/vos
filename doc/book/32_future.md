@@ -35,8 +35,9 @@ Limited hardware support:
 
 - No USB
 - No ACPI power management
-- No audio
 - No modern graphics acceleration
+
+> **Note**: Audio is now supported via Sound Blaster 16 driver (see Chapter 37).
 
 ## Planned Enhancements
 
@@ -203,13 +204,12 @@ Advanced Configuration and Power Interface:
 - Thermal management
 - System shutdown/reboot
 
-#### Audio
+#### Additional Audio Hardware
 
-Sound support:
+Sound Blaster 16 is already implemented (Chapter 37). Future audio support could include:
 
-- Sound Blaster 16 (legacy)
-- AC'97 (older)
-- Intel HDA (modern)
+- AC'97 (older PCI audio)
+- Intel HDA (modern, more complex)
 
 ### Phase 5: SMP
 

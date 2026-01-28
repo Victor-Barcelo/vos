@@ -254,6 +254,31 @@ VOS includes many sbase utilities:
 | diff | Compare files |
 | patch | Apply patches |
 
+### Audio
+
+| Command | Description |
+|---------|-------------|
+| modplay | MOD/tracker music player |
+| midiplay | MIDI file player |
+| beep | PC speaker beeps |
+
+### Emulators
+
+| Command | Description |
+|---------|-------------|
+| gbemu | Game Boy emulator |
+| nesemu | NES emulator |
+
+### User Management
+
+| Command | Description |
+|---------|-------------|
+| useradd | Add user account |
+| userdel | Delete user account |
+| groupadd | Add group |
+| groupdel | Delete group |
+| chown | Change file ownership |
+
 ## Command Line Parsing
 
 ```c

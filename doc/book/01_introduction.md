@@ -30,6 +30,8 @@ VOS (Victor's Operating System) is an educational operating system designed to d
 - **Serial port (COM1)** at 115200 baud for debugging
 - **PIT timer** (uptime, sleep, scheduler tick)
 - **CMOS RTC** (date/time, settable)
+- **Sound Blaster 16** audio with DMA transfers
+- **PC Speaker** for simple beeps
 
 ### Memory Management
 
@@ -65,6 +67,14 @@ VOS (Victor's Operating System) is an educational operating system designed to d
 - **105 user programs** including shell utilities
 - **uBASIC interpreter** with 10 example programs
 - **Graphics support** via olive.c and small3dlib
+- **Game Boy emulator** (Peanut-GB)
+- **NES emulator** (Nofrendo)
+- **MOD player** for tracker music (pocketmod)
+- **MIDI player** with SoundFont synthesis (TinySoundFont)
+- **89 color emoji** with alpha blending
+- **42 PSF2 fonts** with runtime switching
+- **16 color themes** for terminal customization
+- **4 virtual consoles** (Alt+1/2/3/4)
 
 ## Why Build an OS from Scratch?
 
@@ -275,7 +285,7 @@ $ ls /tmp/
 - Any modern x86/x64 Linux system
 - QEMU with i386 emulation
 - 64MB RAM allocated to VM (minimum)
-- 512MB disk image for Minix partition
+- 4GB disk image for Minix partition (default)
 
 ### For Running on Real Hardware
 - i386 or newer CPU (32-bit mode)

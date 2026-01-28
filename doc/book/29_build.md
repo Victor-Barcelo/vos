@@ -296,8 +296,8 @@ make run QEMU_XRES=1280 QEMU_YRES=720
 The sysroot target installs development files to a Minix disk image:
 
 ```makefile
-DISK_IMG ?= disk.img
-DISK_SIZE_MB ?= 512
+DISK_IMG ?= vos-disk.img
+DISK_SIZE_MB ?= 4096
 
 $(DISK_IMG):
     dd if=/dev/zero of=$@ bs=1M count=$(DISK_SIZE_MB)
@@ -371,11 +371,15 @@ The VOS build system provides:
 1. **Cross-compilation** with i686-elf toolchain
 2. **Kernel building** with freestanding flags
 3. **Userland programs** linked with Newlib
-4. **Third-party integration** (sbase, TCC, dash, olive.c, nextvi)
-5. **Font embedding** as binary objects
-6. **ISO generation** with GRUB
-7. **QEMU integration** for testing
-8. **Sysroot installation** for native development
+4. **Third-party integration** (sbase, TCC, dash, olive.c, nextvi, nofrendo, peanut-gb, pocketmod, tsf)
+5. **Font embedding** as binary objects (42 fonts)
+6. **Emoji data** embedded with alpha blending support
+7. **Audio libraries** (pocketmod for MOD, TinySoundFont for MIDI)
+8. **Emulators** (NES via nofrendo, Game Boy via peanut-gb)
+9. **ISO generation** with GRUB
+10. **QEMU integration** for testing (with SB16 audio support)
+11. **Sysroot installation** for native development
+12. **4GB persistent disk** (vos-disk.img with Minix v2 filesystem)
 
 ---
 

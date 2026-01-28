@@ -299,24 +299,31 @@ This book was generated from the VOS source code and provides a comprehensive gu
 | Metric | Value |
 |--------|-------|
 | **Total Syscalls** | 101 |
-| **Kernel Size** | ~25,000 lines of C |
+| **Kernel Size** | ~39,000 lines of C |
+| **Userland Size** | ~51,000 lines of C |
 | **User Programs** | 105 utilities |
 | **POSIX Compliance** | ~50% |
 | **Supported Fonts** | 42 built-in |
 | **Color Themes** | 16 |
 | **Virtual Consoles** | 4 |
+| **Color Emoji** | 89 |
 | **Audio Support** | Sound Blaster 16 |
+| **Emulators** | Game Boy, NES |
 
 ## Key Features
 
 - **Multiboot-compliant** kernel bootable via GRUB
-- **Framebuffer graphics** with multiple font sizes
+- **Framebuffer graphics** with multiple font sizes (42 fonts)
 - **Minix persistent storage** with overlay filesystem
 - **Multi-user authentication** with privilege separation
-- **105 userland utilities** including nextvi editor, emulators, and tools
+- **105 userland utilities** including nextvi editor and sbase tools
 - **Sound Blaster 16** audio driver with DMA
+- **Game Boy emulator** (Peanut-GB) and **NES emulator** (Nofrendo)
+- **MOD/MIDI audio playback** via pocketmod and TinySoundFont
 - **MCP integration** for LLM-assisted development
-- **Emoji support** with alpha blending
+- **89 color emoji** with alpha blending
+- **4 virtual consoles** (Alt+1/2/3/4 switching)
+- **TCC native compiler** for in-VOS development
 
 ## Quick Start
 

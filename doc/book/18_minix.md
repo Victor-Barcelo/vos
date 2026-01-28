@@ -509,17 +509,17 @@ When VOS detects a blank Minix disk, it offers to initialize it:
 ## Creating a Minix Disk Image
 
 ```bash
-# Create 512MB disk image with MBR
-dd if=/dev/zero of=disk.img bs=1M count=512
+# Create 4GB disk image with MBR (default VOS size)
+dd if=/dev/zero of=vos-disk.img bs=1M count=4096
 
 # Create partition table (Minix partition starting at sector 2048)
-echo -e "o\nn\np\n1\n2048\n\nt\n81\nw" | fdisk disk.img
+echo -e "o\nn\np\n1\n2048\n\nt\n81\nw" | fdisk vos-disk.img
 
 # Create Minix filesystem on the partition
 # Extract partition, format, replace
-dd if=disk.img of=part.img bs=512 skip=2048 count=$((512*2048-2048))
+dd if=vos-disk.img of=part.img bs=512 skip=2048
 mkfs.minix -2 -n 30 part.img
-dd if=part.img of=disk.img bs=512 seek=2048 conv=notrunc
+dd if=part.img of=vos-disk.img bs=512 seek=2048 conv=notrunc
 rm part.img
 ```
 

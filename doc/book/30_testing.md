@@ -98,31 +98,31 @@ Legacy VGA compatibility.
 VOS supports a persistent Minix disk mounted at `/disk`:
 
 ```bash
-# Create 512MB disk image with MBR partition table
-dd if=/dev/zero of=disk.img bs=1M count=512
+# Create 4GB disk image with MBR partition table (default size)
+dd if=/dev/zero of=vos-disk.img bs=1M count=4096
 
 # Create partition (Minix type 0x81, starting at sector 2048)
-echo -e "o\nn\np\n1\n2048\n\nt\n81\nw" | fdisk disk.img
+echo -e "o\nn\np\n1\n2048\n\nt\n81\nw" | fdisk vos-disk.img
 
 # Format the Minix partition
-dd if=disk.img of=part.img bs=512 skip=2048 count=$((512*2048-2048))
+dd if=vos-disk.img of=part.img bs=512 skip=2048
 mkfs.minix -2 -n 30 part.img
-dd if=part.img of=disk.img bs=512 seek=2048 conv=notrunc
+dd if=part.img of=vos-disk.img bs=512 seek=2048 conv=notrunc
 rm part.img
 
 # Run with disk
 qemu-system-i386 -cdrom vos.iso -vga none \
     -device bochs-display,xres=1920,yres=1080 \
-    -drive file=disk.img,format=raw,if=ide
+    -drive file=vos-disk.img,format=raw,if=ide
 ```
 
-On first boot with a blank disk, VOS will prompt to initialize it.
+On first boot with a blank disk, VOS will prompt to initialize it with a termbox2-based UI.
 
 ### IDE/ATA Configuration
 
 ```bash
 # Primary master (hda)
--drive file=disk.img,format=raw,if=ide,index=0
+-drive file=vos-disk.img,format=raw,if=ide,index=0
 
 # Primary slave (hdb)
 -drive file=disk2.img,format=raw,if=ide,index=1
@@ -141,6 +141,42 @@ qemu-system-i386 -cdrom vos.iso -m 256
 
 # 512 MB RAM
 qemu-system-i386 -cdrom vos.iso -m 512
+```
+
+## Audio Configuration
+
+VOS supports Sound Blaster 16 audio. Enable it in QEMU:
+
+### PulseAudio Backend (Linux)
+
+```bash
+qemu-system-i386 -cdrom vos.iso \
+    -audiodev pa,id=audio0 \
+    -machine pcspk-audiodev=audio0 \
+    -device sb16,audiodev=audio0
+```
+
+### SDL Audio Backend
+
+```bash
+qemu-system-i386 -cdrom vos.iso \
+    -audiodev sdl,id=audio0 \
+    -device sb16,audiodev=audio0
+```
+
+### Test Audio
+
+Once booted, test audio with:
+
+```bash
+# Play a MOD file
+modplay /res/music/axelf.mod
+
+# Play a MIDI file
+midiplay /res/music/furelise.mid
+
+# Simple PC speaker beep
+beep 440 500
 ```
 
 ## Serial Console

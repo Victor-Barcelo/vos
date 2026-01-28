@@ -12,8 +12,10 @@ NEWLIB_PREFIX = $(CURDIR)/../../toolchain/opt/newlib
 NEWLIB_INC = $(NEWLIB_PREFIX)/$(CROSS_TARGET)/include
 NEWLIB_LIB = $(NEWLIB_PREFIX)/$(CROSS_TARGET)/lib
 
+STB_INC = $(CURDIR)/../../third_party/stb
+
 CFLAGS = -O2 -Wall -Wextra -ffreestanding -nostdlib \
-         -I./include -I.. -I$(NEWLIB_INC)
+         -I./include -I.. -I$(NEWLIB_INC) -I$(STB_INC)
 
 SRCS = src/SDL_main.c \
        src/SDL_video.c \
@@ -21,7 +23,8 @@ SRCS = src/SDL_main.c \
        src/SDL_events.c \
        src/SDL_timer.c \
        src/SDL_mutex.c \
-       src/SDL_rwops.c
+       src/SDL_rwops.c \
+       src/SDL_image.c
 
 OBJS = $(SRCS:.c=.o)
 LIB = libvos-sdl2.a

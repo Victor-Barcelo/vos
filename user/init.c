@@ -57,7 +57,8 @@ static int copy_file_mode(const char* src, const char* dst, mode_t mode) {
         return -1;
     }
 
-    char buf[4096];
+    // Use 32KB buffer for faster copying
+    static char buf[32768];
     ssize_t n;
     while ((n = read(sfd, buf, sizeof(buf))) > 0) {
         ssize_t written = 0;
@@ -570,6 +571,7 @@ static void initialize_disk(void) {
         DIR* d = opendir("/bin");
         if (d) {
             struct dirent* ent;
+            int file_count = 0;
             while ((ent = readdir(d)) != NULL) {
                 if (ent->d_name[0] == '.') continue;
 
@@ -577,10 +579,14 @@ static void initialize_disk(void) {
                 snprintf(srcpath, sizeof(srcpath), "/bin/%s", ent->d_name);
                 snprintf(dstpath, sizeof(dstpath), "/disk/bin/%s", ent->d_name);
 
-                ins_update(INS_STEP_BINARIES, ent->d_name);
+                // Only update UI every 10 files to reduce overhead
+                if (file_count % 10 == 0) {
+                    ins_update(INS_STEP_BINARIES, ent->d_name);
+                }
 
                 if (stat(srcpath, &st) == 0 && S_ISREG(st.st_mode)) {
                     copy_file_mode(srcpath, dstpath, st.st_mode | 0111);
+                    file_count++;
                 }
             }
             closedir(d);

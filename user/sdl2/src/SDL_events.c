@@ -827,13 +827,39 @@ SDL_bool SDL_HasEvents(Uint32 minType, Uint32 maxType) {
 }
 
 void SDL_FlushEvents(Uint32 minType, Uint32 maxType) {
-    /* Simple implementation: clear entire queue if range matches */
+    /* Full flush if entire range requested */
     if (minType <= SDL_FIRSTEVENT && maxType >= SDL_LASTEVENT) {
         queue_head = 0;
         queue_tail = 0;
         queue_count = 0;
+        return;
     }
-    /* TODO: selective flush */
+
+    /* Selective flush: rebuild queue without matching events */
+    if (queue_count == 0) {
+        return;
+    }
+
+    SDL_Event temp_queue[EVENT_QUEUE_SIZE];
+    int temp_count = 0;
+
+    /* Copy non-matching events to temp queue */
+    for (int i = 0; i < queue_count; i++) {
+        int idx = (queue_head + i) % EVENT_QUEUE_SIZE;
+        Uint32 type = event_queue[idx].type;
+        if (type < minType || type > maxType) {
+            /* Keep this event */
+            temp_queue[temp_count++] = event_queue[idx];
+        }
+    }
+
+    /* Copy back to main queue */
+    queue_head = 0;
+    queue_tail = temp_count;
+    queue_count = temp_count;
+    for (int i = 0; i < temp_count; i++) {
+        event_queue[i] = temp_queue[i];
+    }
 }
 
 SDL_Keymod SDL_GetModState(void) {

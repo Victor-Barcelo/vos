@@ -37,6 +37,8 @@ struct SDL_Window {
     Uint32 flags;
     SDL_Surface *surface;       /* Window surface for software rendering */
     struct SDL_Renderer *renderer;
+    Uint32 *rgba_buffer;        /* Persistent buffer for ARGB->RGBA conversion */
+    int rgba_buffer_size;       /* Size of rgba_buffer in pixels */
 };
 
 /* Internal renderer structure */
@@ -310,6 +312,13 @@ void SDL_DestroyWindow(SDL_Window *window) {
         window->surface = NULL;
     }
 
+    /* Free RGBA conversion buffer */
+    if (window->rgba_buffer) {
+        free(window->rgba_buffer);
+        window->rgba_buffer = NULL;
+        window->rgba_buffer_size = 0;
+    }
+
     /* Remove from window list */
     for (i = 0; i < video_state.window_count; i++) {
         if (video_state.windows[i] == window) {
@@ -334,6 +343,18 @@ SDL_Surface* SDL_GetWindowSurface(SDL_Window *window) {
     if (!window->surface) {
         window->surface = SDL_CreateRGBSurfaceWithFormat(
             0, window->w, window->h, 32, SDL_PIXELFORMAT_ARGB8888);
+
+        /* Pre-allocate RGBA conversion buffer for SDL_UpdateWindowSurface */
+        if (window->surface) {
+            int pixel_count = window->w * window->h;
+            if (!window->rgba_buffer || window->rgba_buffer_size < pixel_count) {
+                if (window->rgba_buffer) {
+                    free(window->rgba_buffer);
+                }
+                window->rgba_buffer = (Uint32 *)malloc(pixel_count * sizeof(Uint32));
+                window->rgba_buffer_size = pixel_count;
+            }
+        }
     }
 
     return window->surface;
@@ -344,24 +365,30 @@ int SDL_UpdateWindowSurface(SDL_Window *window) {
         return -1;
     }
 
-    /* Convert ARGB to RGBA and blit to VOS framebuffer */
     int pixel_count = window->surface->w * window->surface->h;
-    Uint32 *rgba_buffer = (Uint32 *)malloc(pixel_count * 4);
 
-    if (!rgba_buffer) {
-        video_state.error = "SDL_UpdateWindowSurface: out of memory";
-        return -1;
+    /* Ensure we have a conversion buffer (allocate or resize if needed) */
+    if (!window->rgba_buffer || window->rgba_buffer_size < pixel_count) {
+        if (window->rgba_buffer) {
+            free(window->rgba_buffer);
+        }
+        window->rgba_buffer = (Uint32 *)malloc(pixel_count * sizeof(Uint32));
+        window->rgba_buffer_size = pixel_count;
+        if (!window->rgba_buffer) {
+            video_state.error = "SDL_UpdateWindowSurface: out of memory";
+            window->rgba_buffer_size = 0;
+            return -1;
+        }
     }
 
-    convert_argb_to_rgba((const Uint32 *)window->surface->pixels, rgba_buffer, pixel_count);
+    /* Convert ARGB to RGBA using persistent buffer */
+    convert_argb_to_rgba((const Uint32 *)window->surface->pixels, window->rgba_buffer, pixel_count);
 
     /* Blit to VOS framebuffer */
-    sys_gfx_blit_rgba(window->x, window->y, window->surface->w, window->surface->h, rgba_buffer);
+    sys_gfx_blit_rgba(window->x, window->y, window->surface->w, window->surface->h, window->rgba_buffer);
 
     /* Flip the double buffer */
     sys_gfx_flip();
-
-    free(rgba_buffer);
 
     return 0;
 }

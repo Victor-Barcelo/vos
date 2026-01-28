@@ -57,16 +57,16 @@ void SDL_DestroySemaphore(SDL_sem *sem) {
 }
 
 int SDL_SemWait(SDL_sem *sem) {
-    if (sem && sem->value > 0) {
+    if (!sem) {
+        return -1;
+    }
+    if (sem->value > 0) {
         sem->value--;
         return 0;  /* Success */
     }
     /* In a real threaded environment, this would block.
-     * Since VOS is single-threaded, we just return success
-     * to avoid deadlock. */
-    if (sem) {
-        sem->value--;
-    }
+     * Since VOS is single-threaded, we return success but don't
+     * decrement below 0 to avoid underflow issues. */
     return 0;
 }
 

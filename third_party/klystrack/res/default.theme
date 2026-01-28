@@ -1,0 +1,6 @@
+# Klystrack default theme
+# This file is a placeholder for theme resources
+background=0x1a1a2e
+text=0xe0e0e0
+cursor=0x4a69bd
+highlight=0x00ff00

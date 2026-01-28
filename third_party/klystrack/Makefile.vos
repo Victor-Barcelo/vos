@@ -1,0 +1,47 @@
+# Makefile.vos - Build klystrack for VOS
+# This builds a simple chiptune tracker using SDL2
+
+CROSS_PREFIX = $(CURDIR)/../../toolchain/opt/cross
+CROSS_TARGET = i686-elf
+CC = $(CROSS_PREFIX)/bin/$(CROSS_TARGET)-gcc
+AR = $(CROSS_PREFIX)/bin/$(CROSS_TARGET)-ar
+LD = $(CROSS_PREFIX)/bin/$(CROSS_TARGET)-ld
+
+NEWLIB_PREFIX = $(CURDIR)/../../toolchain/opt/newlib
+NEWLIB_INC = $(NEWLIB_PREFIX)/$(CROSS_TARGET)/include
+NEWLIB_LIB = $(NEWLIB_PREFIX)/$(CROSS_TARGET)/lib
+
+SDL2_DIR = $(CURDIR)/../../user/sdl2
+SDL2_LIB = $(SDL2_DIR)/libvos-sdl2.a
+SDL2_INC = $(SDL2_DIR)/include
+
+USER_DIR = $(CURDIR)/../../user
+RUNTIME_LIB = $(USER_DIR)/build/libvosposix.a
+
+CFLAGS = -O2 -Wall -Wextra -ffreestanding -fno-stack-protector -fno-pie \
+         -I$(SDL2_INC) -I$(USER_DIR) -I$(NEWLIB_INC) -I./src
+
+LDFLAGS = -nostartfiles -Wl,-T,$(USER_DIR)/linker.ld -Wl,--gc-sections
+
+SRCS = src/klystrack.c
+OBJS = $(SRCS:.c=.o)
+TARGET = bin.vos/klystrack
+
+# Runtime objects needed for startup
+CRT0 = $(USER_DIR)/build/crt0.o
+CRTI = $(USER_DIR)/build/crti.o
+CRTN = $(USER_DIR)/build/crtn.o
+
+.PHONY: all clean
+
+all: $(TARGET)
+
+$(TARGET): $(OBJS) $(SDL2_LIB) $(RUNTIME_LIB)
+	@mkdir -p bin.vos
+	$(CC) $(LDFLAGS) -o $@ $(CRT0) $(CRTI) $(OBJS) $(SDL2_LIB) $(RUNTIME_LIB) -L$(NEWLIB_LIB) -lc -lgcc $(CRTN)
+
+src/%.o: src/%.c
+	$(CC) $(CFLAGS) -c $< -o $@
+
+clean:
+	rm -f $(OBJS) $(TARGET)
